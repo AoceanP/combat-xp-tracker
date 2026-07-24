@@ -230,20 +230,28 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		// Add a "Set goal level" right-click option on skill icons in the stats tab.
 		//
-		// I confirmed WidgetInfo.SKILLS_CONTAINER exists in current mainline RuneLite
+		// CONFIRMED against the RuneLite CI build (plugin-hub PR #14262) and the official
+		// API Javadoc: MenuEntryAdded exposes getActionParam0()/getActionParam1(), not
+		// getParam0()/getParam1() (that was the old, since-removed method naming still
+		// floating around in some outdated third-party examples) and not getActionParam()
+		// (never existed as a no-arg method at all). Fixed to the confirmed-correct names.
+		//
+		// I also confirmed WidgetInfo.SKILLS_CONTAINER exists in current mainline RuneLite
 		// (it wraps InterfaceID.Stats.UNIVERSE), but the whole WidgetInfo enum is marked
 		// @Deprecated in favor of InterfaceID/gameval constants, so this uses the
 		// underlying InterfaceID.Stats.UNIVERSE constant directly instead.
 		//
-		// UNVERIFIED: the child-index-to-skill ORDERING below (skillFromWidgetChildIndex)
-		// is an assumption on my part, not something I confirmed against the actual Stats
-		// interface's child layout — I could not compile or run this against a live client
-		// jar in this environment (repo.runelite.net is outside my sandbox's network
-		// allowlist). Before relying on this, open the in-game Widget Inspector
-		// (Ctrl+Shift+I in RuneLite dev mode) on the skills tab, hover each skill icon, and
-		// read off its actual child index to confirm or correct the ordering below. The
-		// core xptracker/skillcalculator plugins are the best reference if this needs fixing.
-		if (event.getParam1() != InterfaceID.Stats.UNIVERSE)
+		// STILL UNVERIFIED: the child-index-to-skill ORDERING below (skillFromWidgetChildIndex)
+		// is an assumption on my part, not something confirmed against the actual Stats
+		// interface's child layout — this specific line has not triggered a build failure
+		// (a wrong index just returns null and silently skips adding the menu entry, it
+		// doesn't fail to compile), so the CI build passing here would NOT confirm it's
+		// correct. Before relying on the right-click feature actually working, open the
+		// in-game Widget Inspector (Ctrl+Shift+I in RuneLite dev mode) on the skills tab,
+		// hover each skill icon, and read off its actual child index to confirm or correct
+		// the ordering below. The core xptracker/skillcalculator plugins are the best
+		// reference if this needs fixing.
+		if (event.getActionParam1() != InterfaceID.Stats.UNIVERSE)
 		{
 			return;
 		}
@@ -254,7 +262,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 
-		Skill skill = skillFromWidgetChildIndex(event.getActionParam());
+		Skill skill = skillFromWidgetChildIndex(event.getActionParam0());
 		if (skill == null)
 		{
 			return;
