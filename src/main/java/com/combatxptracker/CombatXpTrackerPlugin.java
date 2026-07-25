@@ -25,6 +25,7 @@
 package com.combatxptracker;
 
 import com.google.inject.Provides;
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.util.EnumMap;
 import java.util.Map;
@@ -88,9 +89,11 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private final Map<Skill, SkillProgress> skillProgress = new EnumMap<>(Skill.class);
 	private final HitStats hitStats = new HitStats();
+	private final CombinedDropTracker combinedDropTracker = new CombinedDropTracker();
 
 	private static final String CONFIG_GROUP = "combatxptracker";
 	private static final String GOAL_KEY_PREFIX = "goal.";
+	private static final String COLOR_KEY_PREFIX = "color.";
 	private static final String SET_GOAL_MENU_OPTION = "Set goal level";
 
 	@Provides
@@ -138,6 +141,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		overlayManager.remove(overlay);
 		skillProgress.clear();
 		hitStats.reset();
+		combinedDropTracker.reset();
 	}
 
 	private void initializeCurrentSkillLevels()
@@ -218,6 +222,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 
 		hitStats.recordHit(damage);
+		combinedDropTracker.recordHit(damage, System.currentTimeMillis());
 
 		if (panel != null)
 		{
@@ -241,16 +246,18 @@ public class CombatXpTrackerPlugin extends Plugin
 		// @Deprecated in favor of InterfaceID/gameval constants, so this uses the
 		// underlying InterfaceID.Stats.UNIVERSE constant directly instead.
 		//
-		// STILL UNVERIFIED: the child-index-to-skill ORDERING below (skillFromWidgetChildIndex)
-		// is an assumption on my part, not something confirmed against the actual Stats
-		// interface's child layout — this specific line has not triggered a build failure
-		// (a wrong index just returns null and silently skips adding the menu entry, it
-		// doesn't fail to compile), so the CI build passing here would NOT confirm it's
-		// correct. Before relying on the right-click feature actually working, open the
-		// in-game Widget Inspector (Ctrl+Shift+I in RuneLite dev mode) on the skills tab,
-		// hover each skill icon, and read off its actual child index to confirm or correct
-		// the ordering below. The core xptracker/skillcalculator plugins are the best
-		// reference if this needs fixing.
+		// The child-index-to-skill ORDERING below (skillFromWidgetChildIndex) was
+		// unverified when first written, but v1.0 shipped, was approved, and the user has
+		// confirmed via screenshot that right-clicking a skill produces this menu option
+		// correctly in-game -- so this mapping is now confirmed working in practice, not
+		// just theoretically plausible.
+		//
+		// NOTE ON "Add to canvas": the core (built-in) XP Tracker plugin adds its own
+		// separate "Add to canvas [Skill]" menu option to this same right-click menu. That
+		// text belongs to net.runelite.client.plugins.xptracker, a different plugin
+		// entirely -- this plugin cannot rename or modify another plugin's menu text.
+		// SET_GOAL_MENU_OPTION below is deliberately named distinctly ("Set goal level")
+		// so it doesn't collide with or get confused for the native option.
 		if (event.getActionParam1() != InterfaceID.Stats.UNIVERSE)
 		{
 			return;
@@ -356,6 +363,43 @@ public class CombatXpTrackerPlugin extends Plugin
 		configManager.setConfiguration(CONFIG_GROUP, GOAL_KEY_PREFIX + skill.getName(), String.valueOf(level));
 	}
 
+	/**
+	 * Returns the user's saved color for a skill's row in the panel, or null if they
+	 * haven't set one (in which case the panel falls back to its default styling).
+	 */
+	public Color getSkillColor(Skill skill)
+	{
+		String stored = configManager.getConfiguration(CONFIG_GROUP, COLOR_KEY_PREFIX + skill.getName());
+		if (stored == null)
+		{
+			return null;
+		}
+		try
+		{
+			return new Color(Integer.parseInt(stored), true);
+		}
+		catch (NumberFormatException e)
+		{
+			return null;
+		}
+	}
+
+	public void setSkillColor(Skill skill, Color color)
+	{
+		if (color == null)
+		{
+			configManager.unsetConfiguration(CONFIG_GROUP, COLOR_KEY_PREFIX + skill.getName());
+		}
+		else
+		{
+			configManager.setConfiguration(CONFIG_GROUP, COLOR_KEY_PREFIX + skill.getName(), String.valueOf(color.getRGB()));
+		}
+		if (panel != null)
+		{
+			SwingUtilities.invokeLater(() -> panel.refresh());
+		}
+	}
+
 	public Map<Skill, SkillProgress> getSkillProgress()
 	{
 		return skillProgress;
@@ -366,8 +410,14 @@ public class CombatXpTrackerPlugin extends Plugin
 		return hitStats;
 	}
 
+	public CombinedDropTracker getCombinedDropTracker()
+	{
+		return combinedDropTracker;
+	}
+
 	public void resetHitStats()
 	{
 		hitStats.reset();
+		combinedDropTracker.reset();
 	}
 }

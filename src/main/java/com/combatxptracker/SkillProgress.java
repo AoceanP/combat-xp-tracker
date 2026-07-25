@@ -104,6 +104,20 @@ public class SkillProgress
 		return currentXp;
 	}
 
+	/**
+	 * Timestamp of the most recent recorded XP sample, or -1 if no sample has been
+	 * recorded yet. Used to check whether a recent hit landed close enough in time to
+	 * pair with this skill's latest XP gain for the combined-drop overlay display.
+	 */
+	public long getLastUpdateMillis()
+	{
+		if (samples.isEmpty())
+		{
+			return -1;
+		}
+		return samples.peekLast().timestampMillis;
+	}
+
 	public int getCurrentLevel()
 	{
 		return currentLevel;

@@ -103,6 +103,24 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 				? "Goal reached!"
 				: String.format("%,d xp/hr (%d%%)", progress.getXpPerHour(), Math.round(progress.getProgressToGoal() * 100));
 
+			// If this is a combat skill and a hit landed close enough in time to this
+			// skill's most recent XP gain, append the paired damage. This is a best-effort
+			// timing correlation, not a guaranteed causal link -- see CombinedDropTracker's
+			// class doc for why (RuneLite doesn't expose which hit caused which XP drop).
+			if (config.showCombinedDrop() && CombinedDropTracker.isCombatSkill(skill))
+			{
+				long lastUpdate = progress.getLastUpdateMillis();
+				if (lastUpdate >= 0)
+				{
+					int pairedDamage = plugin.getCombinedDropTracker()
+						.getPairedDamage(lastUpdate, config.combinedDropWindowMillis());
+					if (pairedDamage >= 0)
+					{
+						rightText += " (hit: " + pairedDamage + ")";
+					}
+				}
+			}
+
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(capitalize(skill.getName()) + ":")
 				.right(rightText)

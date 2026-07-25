@@ -185,6 +185,23 @@ public class CombatXpTrackerPanel extends PluginPanel
 		}
 	}
 
+	/**
+	 * Opens a color picker for the given skill's row background, persisted via the plugin.
+	 */
+	public void promptSkillColorDialog(Skill skill)
+	{
+		Color current = plugin.getSkillColor(skill);
+		Color chosen = javax.swing.JColorChooser.showDialog(
+			this,
+			"Choose a color for " + capitalize(skill.getName()),
+			current != null ? current : ColorScheme.DARKER_GRAY_COLOR
+		);
+		if (chosen != null)
+		{
+			plugin.setSkillColor(skill, chosen);
+		}
+	}
+
 	public void refresh()
 	{
 		updateDamageLabels();
@@ -218,6 +235,8 @@ public class CombatXpTrackerPanel extends PluginPanel
 	{
 		private final Skill skill;
 		private final JPanel component;
+		private final JPanel headerRow;
+		private final JPanel nameAndIcon;
 		private final JLabel nameLabel = new JLabel();
 		private final JLabel xpHrLabel = new JLabel();
 		private final JLabel goalLabel = new JLabel();
@@ -234,7 +253,7 @@ public class CombatXpTrackerPanel extends PluginPanel
 				BorderFactory.createEmptyBorder(6, 8, 6, 8)
 			));
 
-			JPanel headerRow = new JPanel(new BorderLayout());
+			headerRow = new JPanel(new BorderLayout());
 			headerRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
 			JLabel iconLabel = new JLabel();
@@ -249,7 +268,7 @@ public class CombatXpTrackerPanel extends PluginPanel
 			nameLabel.setFont(FontManager.getRunescapeBoldFont());
 			nameLabel.setText(capitalize(skill.getName()));
 
-			JPanel nameAndIcon = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+			nameAndIcon = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
 			nameAndIcon.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 			nameAndIcon.add(iconLabel);
 			nameAndIcon.add(nameLabel);
@@ -286,9 +305,42 @@ public class CombatXpTrackerPanel extends PluginPanel
 		private javax.swing.JPopupMenu buildRowPopupMenu()
 		{
 			javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+
 			javax.swing.JMenuItem setGoal = new javax.swing.JMenuItem("Set goal level");
 			setGoal.addActionListener(e -> promptGoalLevelDialog(skill));
 			menu.add(setGoal);
+
+			javax.swing.JMenuItem setColor = new javax.swing.JMenuItem("Set skill color");
+			setColor.addActionListener(e -> promptSkillColorDialog(skill));
+			menu.add(setColor);
+
+			javax.swing.JMenuItem clearColor = new javax.swing.JMenuItem("Clear skill color");
+			clearColor.addActionListener(e -> plugin.setSkillColor(skill, null));
+			menu.add(clearColor);
+
+			menu.addSeparator();
+
+			javax.swing.JMenuItem resetTracker = new javax.swing.JMenuItem("Reset XP tracker");
+			resetTracker.addActionListener(e ->
+			{
+				int choice = JOptionPane.showConfirmDialog(
+					CombatXpTrackerPanel.this,
+					"Reset all tracked damage stats and XP rates? Goal levels and colors are kept.",
+					"Reset XP tracker",
+					javax.swing.JOptionPane.YES_NO_OPTION
+				);
+				if (choice == javax.swing.JOptionPane.YES_OPTION)
+				{
+					plugin.resetHitStats();
+					for (SkillProgress p : plugin.getSkillProgress().values())
+					{
+						p.reset();
+					}
+					refresh();
+				}
+			});
+			menu.add(resetTracker);
+
 			return menu;
 		}
 
@@ -299,6 +351,12 @@ public class CombatXpTrackerPanel extends PluginPanel
 			{
 				return;
 			}
+
+			Color customColor = plugin.getSkillColor(skill);
+			Color rowBackground = customColor != null ? customColor : ColorScheme.DARKER_GRAY_COLOR;
+			component.setBackground(rowBackground);
+			headerRow.setBackground(rowBackground);
+			nameAndIcon.setBackground(rowBackground);
 
 			int level = progress.getCurrentLevel();
 			int goal = progress.getGoalLevel();

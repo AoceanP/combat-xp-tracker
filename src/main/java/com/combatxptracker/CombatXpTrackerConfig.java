@@ -88,4 +88,27 @@ public interface CombatXpTrackerConfig extends Config
 	{
 		return false;
 	}
+
+	@ConfigItem(
+		keyName = "showCombinedDrop",
+		name = "Show damage on XP drops",
+		description = "When an XP gain and a hit land close together, shows the hit damage alongside the XP drop overlay.",
+		position = 5
+	)
+	default boolean showCombinedDrop()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "combinedDropWindowMillis",
+		name = "XP/damage pairing window (ms)",
+		description = "How close together (in milliseconds) an XP gain and a hit need to land to be shown as paired.",
+		position = 6
+	)
+	@Range(min = 100, max = 3000)
+	default int combinedDropWindowMillis()
+	{
+		return 600;
+	}
 }
