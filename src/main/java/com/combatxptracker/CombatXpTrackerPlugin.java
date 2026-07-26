@@ -35,6 +35,8 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.NPC;
 import net.runelite.api.Skill;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.HitsplatApplied;
@@ -90,6 +92,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	private final Map<Skill, SkillProgress> skillProgress = new EnumMap<>(Skill.class);
 	private final HitStats hitStats = new HitStats();
 	private final CombinedDropTracker combinedDropTracker = new CombinedDropTracker();
+	private final SessionSummary sessionSummary = new SessionSummary();
 
 	private static final String CONFIG_GROUP = "combatxptracker";
 	private static final String GOAL_KEY_PREFIX = "goal.";
@@ -142,6 +145,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		skillProgress.clear();
 		hitStats.reset();
 		combinedDropTracker.reset();
+		sessionSummary.reset();
 	}
 
 	private void initializeCurrentSkillLevels()
@@ -191,7 +195,17 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 
 		SkillProgress progress = skillProgress.computeIfAbsent(skill, s -> new SkillProgress());
+		boolean hadBaseline = progress.hasRecordedSample();
+		int previousXp = progress.getCurrentXp();
 		progress.recordXp(event.getXp(), event.getLevel(), System.currentTimeMillis(), config.xpHrIntervalSeconds());
+		if (hadBaseline)
+		{
+			sessionSummary.recordXpGain(skill, event.getXp() - previousXp);
+		}
+		// If !hadBaseline, this is the first sample for this skill (either genuinely new
+		// this session, or the deferred initializeCurrentSkillLevels() hasn't run yet) --
+		// either way, recordXp() above just established the real baseline, so there's
+		// nothing to add to the session total from this specific event.
 
 		if (panel != null)
 		{
@@ -223,6 +237,18 @@ public class CombatXpTrackerPlugin extends Plugin
 
 		hitStats.recordHit(damage);
 		combinedDropTracker.recordHit(damage, System.currentTimeMillis());
+
+		// Determine the monster name for the session summary's "biggest hit" readout, if
+		// the hit landed on a named NPC. Confirmed pattern (Actor instanceof NPC, then
+		// getName()) matches real core plugins (CorpPlugin, IdleNotifierPlugin).
+		// Actor.getName() is @Nullable per its own Javadoc, so this can legitimately be
+		// null (unnamed NPC, or a player target) -- recorded as-is rather than guessed at.
+		String monsterName = null;
+		if (event.getActor() instanceof NPC)
+		{
+			monsterName = event.getActor().getName();
+		}
+		sessionSummary.recordHit(damage, monsterName);
 
 		if (panel != null)
 		{
@@ -258,13 +284,27 @@ public class CombatXpTrackerPlugin extends Plugin
 		// entirely -- this plugin cannot rename or modify another plugin's menu text.
 		// SET_GOAL_MENU_OPTION below is deliberately named distinctly ("Set goal level")
 		// so it doesn't collide with or get confused for the native option.
+		//
+		// BUG FIX (1.1.1): the option-text check previously did an EXACT match against
+		// the literal strings "View guide" and "View hiscores". Those literals never
+		// appear verbatim in-game -- the real text is "View [Skill] guide", e.g. "View
+		// Herblore guide" (confirmed directly from a user screenshot), with the skill name
+		// embedded mid-string. An exact match against a name-free literal always failed,
+		// silently preventing the menu entry from ever being added, for every skill. Fixed
+		// to check whether the option text CONTAINS "guide" or "hiscores"
+		// case-insensitively, which is robust to the embedded skill name.
 		if (event.getActionParam1() != InterfaceID.Stats.UNIVERSE)
 		{
 			return;
 		}
 
 		String option = event.getOption();
-		if (!"View guide".equalsIgnoreCase(option) && !"View hiscores".equalsIgnoreCase(option))
+		if (option == null)
+		{
+			return;
+		}
+		String lowerOption = option.toLowerCase();
+		if (!lowerOption.contains("guide") && !lowerOption.contains("hiscores"))
 		{
 			return;
 		}
@@ -273,6 +313,18 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (skill == null)
 		{
 			return;
+		}
+
+		// Defensive: if this skill's menu happens to have more than one option matching
+		// "guide"/"hiscores" (not observed directly, but plausible for some skill), avoid
+		// adding "Set goal level" twice for the same right-click by checking whether a
+		// pending menu entry with this option already exists on the current menu.
+		for (MenuEntry entry : client.getMenu().getMenuEntries())
+		{
+			if (SET_GOAL_MENU_OPTION.equals(entry.getOption()))
+			{
+				return;
+			}
 		}
 
 		client.createMenuEntry(-1)
@@ -413,6 +465,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	public CombinedDropTracker getCombinedDropTracker()
 	{
 		return combinedDropTracker;
+	}
+
+	public SessionSummary getSessionSummary()
+	{
+		return sessionSummary;
 	}
 
 	public void resetHitStats()

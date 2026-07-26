@@ -76,7 +76,7 @@ public class CombatXpTrackerPanel extends PluginPanel
 
 		container.add(buildDamagePanel());
 		container.add(Box.createRigidArea(new Dimension(0, 8)));
-		container.add(buildResetButtonPanel());
+		container.add(buildActionButtonsPanel());
 		container.add(Box.createRigidArea(new Dimension(0, 10)));
 
 		skillsContainer.setLayout(new BoxLayout(skillsContainer, BoxLayout.Y_AXIS));
@@ -117,21 +117,107 @@ public class CombatXpTrackerPanel extends PluginPanel
 		return panel;
 	}
 
-	private JPanel buildResetButtonPanel()
+	private JPanel buildActionButtonsPanel()
 	{
-		JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+		JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
 		panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-		javax.swing.JButton resetButton = new javax.swing.JButton("Reset hit stats");
+		javax.swing.JButton summaryButton = new javax.swing.JButton("Session summary");
+		summaryButton.setFont(FontManager.getRunescapeSmallFont());
+		summaryButton.setToolTipText("Shows total XP gained, hits landed, and your biggest hit since the tracker was last reset.");
+		summaryButton.addActionListener(e -> showSessionSummaryDialog());
+		panel.add(summaryButton);
+
+		javax.swing.JButton resetButton = new javax.swing.JButton("Reset tracker");
 		resetButton.setFont(FontManager.getRunescapeSmallFont());
+		resetButton.setToolTipText("Clears damage stats and XP rates for all skills. Goal levels and colors are kept.");
 		resetButton.addActionListener(e ->
 		{
-			plugin.resetHitStats();
-			refresh();
+			int choice = JOptionPane.showConfirmDialog(
+				this,
+				"Reset all tracked damage stats and XP rates? Goal levels and colors are kept.",
+				"Reset tracker",
+				JOptionPane.YES_NO_OPTION
+			);
+			if (choice == JOptionPane.YES_OPTION)
+			{
+				plugin.resetHitStats();
+				plugin.getSessionSummary().reset();
+				for (SkillProgress p : plugin.getSkillProgress().values())
+				{
+					p.reset();
+				}
+				refresh();
+			}
 		});
-
 		panel.add(resetButton);
+
 		return panel;
+	}
+
+	/**
+	 * Builds and shows the session summary as a plain dialog: total XP gained per skill,
+	 * total hits landed, and the biggest single hit with its monster name if one was
+	 * determinable. Text is plain and easy to select/copy so the user can paste it
+	 * somewhere (chat, Discord, etc.) as a shareable readout.
+	 */
+	private void showSessionSummaryDialog()
+	{
+		SessionSummary summary = plugin.getSessionSummary();
+
+		StringBuilder sb = new StringBuilder();
+		sb.append("=== Combat & XP Tracker: Session Summary ===\n\n");
+
+		if (summary.getXpGainedThisSession().isEmpty())
+		{
+			sb.append("No XP gained yet this session.\n");
+		}
+		else
+		{
+			sb.append(String.format("Total XP gained: %,d\n\n", summary.getTotalXpGained()));
+			for (Map.Entry<Skill, Integer> entry : summary.getXpGainedThisSession().entrySet())
+			{
+				sb.append(String.format("  %s: %,d xp\n", capitalize(entry.getKey().getName()), entry.getValue()));
+			}
+			sb.append("\n");
+		}
+
+		sb.append(String.format("Total hits landed: %,d\n", summary.getTotalHitsLanded()));
+
+		if (summary.getBiggestHitDamage() >= 0)
+		{
+			String monster = summary.getBiggestHitMonsterName();
+			if (monster != null)
+			{
+				sb.append(String.format("Biggest hit: %d (on %s)\n", summary.getBiggestHitDamage(), monster));
+			}
+			else
+			{
+				sb.append(String.format("Biggest hit: %d (target unknown)\n", summary.getBiggestHitDamage()));
+			}
+		}
+		else
+		{
+			sb.append("Biggest hit: none recorded yet\n");
+		}
+
+		javax.swing.JTextArea textArea = new javax.swing.JTextArea(sb.toString());
+		textArea.setEditable(false);
+		textArea.setFont(FontManager.getRunescapeSmallFont());
+		textArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		textArea.setForeground(Color.WHITE);
+		textArea.setLineWrap(true);
+		textArea.setWrapStyleWord(true);
+
+		JScrollPane scrollPane = new JScrollPane(textArea);
+		scrollPane.setPreferredSize(new Dimension(260, 300));
+
+		JOptionPane.showMessageDialog(
+			this,
+			scrollPane,
+			"Session Summary",
+			JOptionPane.PLAIN_MESSAGE
+		);
 	}
 
 	private void buildSkillRows()
@@ -215,7 +301,7 @@ public class CombatXpTrackerPanel extends PluginPanel
 	{
 		HitStats stats = plugin.getHitStats();
 		avgDamageLabel.setText(String.format("Average damage: %.2f", stats.getAverageDamage()));
-		maxHitLabel.setText("Max hit: " + stats.getMaxHit());
+		maxHitLabel.setText("Biggest hit: " + stats.getMaxHit());
 		hitCountLabel.setText("Hits recorded: " + stats.getHitCount());
 	}
 
@@ -295,53 +381,66 @@ public class CombatXpTrackerPanel extends PluginPanel
 			component.add(Box.createRigidArea(new Dimension(0, 3)));
 			component.add(progressBar);
 
-			// Also allow right-click directly on the panel row as a convenience,
-			// mirroring the in-game skill-tab right-click option.
-			component.setComponentPopupMenu(buildRowPopupMenu());
+			// Popup menu is rebuilt fresh each time it's about to show (via the listener
+			// below), not once at construction, so the dismiss/show label always reflects
+			// current state rather than a stale snapshot from row creation time.
+			javax.swing.JPopupMenu popupMenu = new javax.swing.JPopupMenu();
+			popupMenu.addPopupMenuListener(new javax.swing.event.PopupMenuListener()
+			{
+				@Override
+				public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e)
+				{
+					popupMenu.removeAll();
+					for (java.awt.Component item : buildRowPopupMenuItems())
+					{
+						popupMenu.add(item);
+					}
+				}
+
+				@Override
+				public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {}
+
+				@Override
+				public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {}
+			});
+			component.setComponentPopupMenu(popupMenu);
 
 			refresh();
 		}
 
-		private javax.swing.JPopupMenu buildRowPopupMenu()
+		private java.util.List<java.awt.Component> buildRowPopupMenuItems()
 		{
-			javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+			java.util.List<java.awt.Component> items = new java.util.ArrayList<>();
 
 			javax.swing.JMenuItem setGoal = new javax.swing.JMenuItem("Set goal level");
 			setGoal.addActionListener(e -> promptGoalLevelDialog(skill));
-			menu.add(setGoal);
+			items.add(setGoal);
 
 			javax.swing.JMenuItem setColor = new javax.swing.JMenuItem("Set skill color");
 			setColor.addActionListener(e -> promptSkillColorDialog(skill));
-			menu.add(setColor);
+			items.add(setColor);
 
 			javax.swing.JMenuItem clearColor = new javax.swing.JMenuItem("Clear skill color");
 			clearColor.addActionListener(e -> plugin.setSkillColor(skill, null));
-			menu.add(clearColor);
+			items.add(clearColor);
 
-			menu.addSeparator();
+			items.add(new javax.swing.JPopupMenu.Separator());
 
-			javax.swing.JMenuItem resetTracker = new javax.swing.JMenuItem("Reset XP tracker");
-			resetTracker.addActionListener(e ->
+			SkillProgress progress = plugin.getSkillProgress().get(skill);
+			boolean currentlyDismissed = progress != null && progress.isDismissedFromOverlay();
+			javax.swing.JMenuItem toggleDismiss = new javax.swing.JMenuItem(
+				currentlyDismissed ? "Show on overlay" : "Dismiss from overlay"
+			);
+			toggleDismiss.addActionListener(e ->
 			{
-				int choice = JOptionPane.showConfirmDialog(
-					CombatXpTrackerPanel.this,
-					"Reset all tracked damage stats and XP rates? Goal levels and colors are kept.",
-					"Reset XP tracker",
-					javax.swing.JOptionPane.YES_NO_OPTION
-				);
-				if (choice == javax.swing.JOptionPane.YES_OPTION)
+				if (progress != null)
 				{
-					plugin.resetHitStats();
-					for (SkillProgress p : plugin.getSkillProgress().values())
-					{
-						p.reset();
-					}
-					refresh();
+					progress.setDismissedFromOverlay(!currentlyDismissed);
 				}
 			});
-			menu.add(resetTracker);
+			items.add(toggleDismiss);
 
-			return menu;
+			return items;
 		}
 
 		void refresh()

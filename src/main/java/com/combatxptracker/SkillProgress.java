@@ -40,6 +40,7 @@ public class SkillProgress
 	private int currentXp = 0;
 	private int currentLevel = 1;
 	private int goalLevel = 99;
+	private boolean dismissedFromOverlay = false;
 
 	private static class XpSample
 	{
@@ -55,6 +56,14 @@ public class SkillProgress
 
 	public void recordXp(int newXp, int newLevel, long nowMillis, int windowSeconds)
 	{
+		// If the player resumes training a skill they'd previously dismissed from the
+		// overlay (e.g. pushing past an earlier milestone toward 99), un-dismiss it
+		// automatically rather than leaving it silently hidden from someone actively
+		// training it again.
+		if (dismissedFromOverlay && newXp > currentXp)
+		{
+			dismissedFromOverlay = false;
+		}
 		this.currentXp = newXp;
 		this.currentLevel = newLevel;
 		samples.addLast(new XpSample(nowMillis, newXp));
@@ -105,6 +114,20 @@ public class SkillProgress
 	}
 
 	/**
+	 * Whether at least one real XP sample has been recorded for this skill yet. Used to
+	 * distinguish "this skill legitimately has 0 XP" from "no real baseline has been
+	 * recorded yet" (the field's zero-default before the first recordXp() call), which
+	 * matters for computing accurate session-XP-gain deltas -- without this check, a
+	 * StatChanged event firing before the deferred initializeCurrentSkillLevels() seeds a
+	 * real baseline would compute a massive fake "gain" equal to the player's entire
+	 * pre-existing XP total in that skill.
+	 */
+	public boolean hasRecordedSample()
+	{
+		return !samples.isEmpty();
+	}
+
+	/**
 	 * Timestamp of the most recent recorded XP sample, or -1 if no sample has been
 	 * recorded yet. Used to check whether a recent hit landed close enough in time to
 	 * pair with this skill's latest XP gain for the combined-drop overlay display.
@@ -131,6 +154,16 @@ public class SkillProgress
 	public void setGoalLevel(int goalLevel)
 	{
 		this.goalLevel = Math.max(currentLevel, Math.min(99, goalLevel));
+	}
+
+	public boolean isDismissedFromOverlay()
+	{
+		return dismissedFromOverlay;
+	}
+
+	public void setDismissedFromOverlay(boolean dismissed)
+	{
+		this.dismissedFromOverlay = dismissed;
 	}
 
 	/**

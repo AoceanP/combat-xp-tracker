@@ -78,7 +78,7 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			.right(String.format("%.2f", hitStats.getAverageDamage()))
 			.build());
 		panelComponent.getChildren().add(LineComponent.builder()
-			.left("Max hit:")
+			.left("Biggest hit:")
 			.right(String.valueOf(hitStats.getMaxHit()))
 			.build());
 
@@ -92,14 +92,15 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			}
 
 			SkillProgress progress = plugin.getSkillProgress().get(skill);
-			if (progress == null || progress.getXpPerHour() <= 0)
+			if (progress == null || progress.getXpPerHour() <= 0 || progress.isDismissedFromOverlay())
 			{
 				continue;
 			}
 
 			int level = progress.getCurrentLevel();
 			int goal = progress.getGoalLevel();
-			String rightText = level >= goal
+			boolean goalReached = level >= goal;
+			String rightText = goalReached
 				? "Goal reached!"
 				: String.format("%,d xp/hr (%d%%)", progress.getXpPerHour(), Math.round(progress.getProgressToGoal() * 100));
 
@@ -124,6 +125,7 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(capitalize(skill.getName()) + ":")
 				.right(rightText)
+				.rightColor(goalReached ? Color.GREEN : Color.WHITE)
 				.build());
 		}
 
