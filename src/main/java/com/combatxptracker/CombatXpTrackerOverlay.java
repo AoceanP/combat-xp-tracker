@@ -92,7 +92,11 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			}
 
 			SkillProgress progress = plugin.getSkillProgress().get(skill);
-			if (progress == null || progress.getXpPerHour() <= 0 || progress.isDismissedFromOverlay())
+
+			// Only goal-tracked skills appear. Previously this filtered on xp/hr > 0,
+			// which meant every skill you'd trained at all showed up -- and when the
+			// login-baseline bug gave every skill a bogus rate, that was all 23 at once.
+			if (progress == null || !progress.isGoalSet() || progress.isDismissedFromOverlay())
 			{
 				continue;
 			}

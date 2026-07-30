@@ -38,7 +38,6 @@ import javax.swing.ImageIcon;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.SwingConstants;
 import net.runelite.api.Skill;
@@ -60,6 +59,15 @@ public class CombatXpTrackerPanel extends PluginPanel
 	private final Map<Skill, SkillRow> skillRows = new EnumMap<>(Skill.class);
 	private final JPanel skillsContainer = new JPanel();
 
+	// Shown when no skills have goals set. Without this a fresh install looks broken --
+	// tracking is opt-in now, so the list is legitimately empty until the first goal.
+	private final JLabel emptyStateLabel = new JLabel(
+		"<html><div style='text-align:center;padding:8px;'>"
+			+ "No skills tracked yet.<br><br>"
+			+ "Right-click a skill in your in-game stats tab and choose "
+			+ "<b>Set goal level</b> to start tracking it."
+			+ "</div></html>");
+
 	public CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config, SkillIconManager skillIconManager)
 	{
 		super(false);
@@ -79,8 +87,14 @@ public class CombatXpTrackerPanel extends PluginPanel
 		container.add(buildActionButtonsPanel());
 		container.add(Box.createRigidArea(new Dimension(0, 10)));
 
+		emptyStateLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		emptyStateLabel.setFont(FontManager.getRunescapeSmallFont());
+		emptyStateLabel.setHorizontalAlignment(SwingConstants.CENTER);
+		emptyStateLabel.setAlignmentX(CENTER_ALIGNMENT);
+
 		skillsContainer.setLayout(new BoxLayout(skillsContainer, BoxLayout.Y_AXIS));
 		skillsContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		skillsContainer.add(emptyStateLabel);
 		buildSkillRows();
 		container.add(skillsContainer);
 
@@ -231,7 +245,9 @@ public class CombatXpTrackerPanel extends PluginPanel
 			SkillRow row = new SkillRow(skill);
 			skillRows.put(skill, row);
 			skillsContainer.add(row.component);
-			skillsContainer.add(Box.createRigidArea(new Dimension(0, 4)));
+			// Note: no separate spacer component here. Spacing lives in the row's own
+			// border, so that hiding an untracked row hides its gap along with it --
+			// separate spacers would leave stacked blank gaps behind.
 		}
 	}
 
@@ -242,7 +258,10 @@ public class CombatXpTrackerPanel extends PluginPanel
 	public void promptGoalLevelDialog(Skill skill)
 	{
 		SkillProgress progress = plugin.getSkillProgress().get(skill);
-		int currentGoal = progress != null ? progress.getGoalLevel() : config.defaultGoalLevel();
+		// Pre-fill with the existing goal if there is one, otherwise 99 as the common
+		// case. (The old global "default goal level" setting was removed -- a single
+		// number applied to every skill wasn't meaningful when goals are per-skill.)
+		int currentGoal = (progress != null && progress.isGoalSet()) ? progress.getGoalLevel() : 99;
 
 		String input = JOptionPane.showInputDialog(
 			this,
@@ -291,10 +310,27 @@ public class CombatXpTrackerPanel extends PluginPanel
 	public void refresh()
 	{
 		updateDamageLabels();
+
+		int visibleCount = 0;
 		for (Map.Entry<Skill, SkillRow> entry : skillRows.entrySet())
 		{
-			entry.getValue().refresh();
+			SkillProgress progress = plugin.getSkillProgress().get(entry.getKey());
+			boolean tracked = progress != null && progress.isGoalSet();
+
+			// Tracking is opt-in: only skills with a goal appear. This is what keeps the
+			// panel to the two or three skills you care about instead of all 23.
+			entry.getValue().component.setVisible(tracked);
+			if (tracked)
+			{
+				visibleCount++;
+				entry.getValue().refresh();
+			}
 		}
+
+		emptyStateLabel.setVisible(visibleCount == 0);
+
+		skillsContainer.revalidate();
+		skillsContainer.repaint();
 	}
 
 	private void updateDamageLabels()
@@ -326,7 +362,8 @@ public class CombatXpTrackerPanel extends PluginPanel
 		private final JLabel nameLabel = new JLabel();
 		private final JLabel xpHrLabel = new JLabel();
 		private final JLabel goalLabel = new JLabel();
-		private final JProgressBar progressBar = new JProgressBar(0, 100);
+		private final AnimatedProgressBar progressBar = new AnimatedProgressBar();
+		private boolean hasRenderedOnce = false;
 
 		SkillRow(Skill skill)
 		{
@@ -334,9 +371,14 @@ public class CombatXpTrackerPanel extends PluginPanel
 			this.component = new JPanel();
 			component.setLayout(new BoxLayout(component, BoxLayout.Y_AXIS));
 			component.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			// Outer empty border supplies the gap between rows (replacing the separate
+			// spacer components, which would have stayed visible when a row is hidden).
 			component.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createLineBorder(ColorScheme.DARK_GRAY_COLOR),
-				BorderFactory.createEmptyBorder(6, 8, 6, 8)
+				BorderFactory.createEmptyBorder(0, 0, 4, 0),
+				BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(ColorScheme.DARK_GRAY_COLOR),
+					BorderFactory.createEmptyBorder(6, 8, 6, 8)
+				)
 			));
 
 			headerRow = new JPanel(new BorderLayout());
@@ -426,6 +468,11 @@ public class CombatXpTrackerPanel extends PluginPanel
 
 			items.add(new javax.swing.JPopupMenu.Separator());
 
+			javax.swing.JMenuItem stopTracking = new javax.swing.JMenuItem("Stop tracking this skill");
+			stopTracking.setToolTipText("Removes this skill from the panel, overlay, and infoboxes. Set a goal again to bring it back.");
+			stopTracking.addActionListener(e -> plugin.clearGoal(skill));
+			items.add(stopTracking);
+
 			SkillProgress progress = plugin.getSkillProgress().get(skill);
 			boolean currentlyDismissed = progress != null && progress.isDismissedFromOverlay();
 			javax.swing.JMenuItem toggleDismiss = new javax.swing.JMenuItem(
@@ -466,7 +513,18 @@ public class CombatXpTrackerPanel extends PluginPanel
 			xpHrLabel.setText(xpPerHour > 0 ? String.format("%,d xp/hr", xpPerHour) : "No recent activity");
 
 			int percent = (int) Math.round(progressFraction * 100);
-			progressBar.setValue(percent);
+			// First render jumps straight to the real value -- easing up from zero when the
+			// panel first opens would suggest progress that isn't happening. After that,
+			// changes animate.
+			if (hasRenderedOnce)
+			{
+				progressBar.setAnimatedValue(percent);
+			}
+			else
+			{
+				progressBar.setValueImmediate(percent);
+				hasRenderedOnce = true;
+			}
 
 			if (level >= goal)
 			{

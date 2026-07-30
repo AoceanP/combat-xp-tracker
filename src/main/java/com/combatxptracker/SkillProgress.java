@@ -42,6 +42,11 @@ public class SkillProgress
 	private int goalLevel = 99;
 	private boolean dismissedFromOverlay = false;
 
+	// Tracking is opt-in: a skill only appears in the panel/overlay once the player has
+	// explicitly right-clicked it and set a goal. Without this, every skill the player
+	// has ever trained shows up at once, which is unreadable (23 rows of noise).
+	private boolean goalSet = false;
+
 	private static class XpSample
 	{
 		final long timestampMillis;
@@ -68,6 +73,24 @@ public class SkillProgress
 		this.currentLevel = newLevel;
 		samples.addLast(new XpSample(nowMillis, newXp));
 		pruneOlderThan(nowMillis - (windowSeconds * 1000L));
+	}
+
+	/**
+	 * Discards all accumulated samples and re-seeds from a known-good XP value.
+	 *
+	 * This exists because of a real bug: at the login screen, client.getSkillExperience()
+	 * returns 0 for every skill. If that zero got stored as a baseline, the first real
+	 * StatChanged event after login would look like the player gained their entire
+	 * lifetime XP in the few seconds since startup, producing nonsense rates like
+	 * "295,554,650 xp/hr". Calling this on GameState.LOGGED_IN throws away any such
+	 * bogus baseline and starts clean from the real value.
+	 */
+	public void resetBaseline(int realXp, int realLevel, long nowMillis)
+	{
+		samples.clear();
+		this.currentXp = realXp;
+		this.currentLevel = realLevel;
+		samples.addLast(new XpSample(nowMillis, realXp));
 	}
 
 	private void pruneOlderThan(long cutoffMillis)
@@ -154,6 +177,33 @@ public class SkillProgress
 	public void setGoalLevel(int goalLevel)
 	{
 		this.goalLevel = Math.max(currentLevel, Math.min(99, goalLevel));
+		this.goalSet = true;
+	}
+
+	/**
+	 * Whether the player has explicitly set a goal for this skill. Only skills where this
+	 * is true appear in the panel and overlay -- tracking is opt-in, so the display shows
+	 * the two or three skills you actually care about rather than all 23 at once.
+	 */
+	public boolean isGoalSet()
+	{
+		return goalSet;
+	}
+
+	/**
+	 * Restores a goal loaded from saved config without re-triggering the level clamp
+	 * against a not-yet-known current level.
+	 */
+	public void restoreSavedGoal(int savedGoalLevel)
+	{
+		this.goalLevel = Math.max(2, Math.min(99, savedGoalLevel));
+		this.goalSet = true;
+	}
+
+	public void clearGoal()
+	{
+		this.goalSet = false;
+		this.goalLevel = 99;
 	}
 
 	public boolean isDismissedFromOverlay()

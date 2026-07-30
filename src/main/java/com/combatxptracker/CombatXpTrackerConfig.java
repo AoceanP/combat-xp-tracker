@@ -67,24 +67,34 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "defaultGoalLevel",
-		name = "Default goal level",
-		description = "The default target level assigned to a skill before you set a custom one.",
+		keyName = "showOverlay",
+		name = "Show on-screen overlay",
+		description = "Displays average damage, biggest hit, and your goal-tracked skills' XP/hr on screen, in addition to the sidebar panel.",
 		position = 3
 	)
-	@Range(min = 2, max = 99)
-	default int defaultGoalLevel()
+	default boolean showOverlay()
 	{
-		return 99;
+		return false;
 	}
 
 	@ConfigItem(
-		keyName = "showOverlay",
-		name = "Show on-screen overlay",
-		description = "Displays average damage, max hit, and active skills' XP/hr on screen, in addition to the sidebar panel.",
+		keyName = "showInfobox",
+		name = "Show goal infobox",
+		description = "Shows an infobox near the minimap for the skill you're actively training, with its progress toward your goal.",
 		position = 4
 	)
-	default boolean showOverlay()
+	default boolean showInfobox()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "debugMenuLogging",
+		name = "Debug: log right-click IDs",
+		description = "TEMPORARY DIAGNOSTIC. When enabled, right-clicking in the stats tab prints the raw widget IDs to the client log, so the 'Set goal level' menu entry can be fixed. Leave off unless asked.",
+		position = 90
+	)
+	default boolean debugMenuLogging()
 	{
 		return false;
 	}
