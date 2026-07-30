@@ -47,23 +47,24 @@ public class AnimatedProgressBar extends JProgressBar
 	public AnimatedProgressBar()
 	{
 		super(0, 100);
-
-		animationTimer = new Timer(FRAME_DELAY_MS, e ->
-		{
-			double distance = targetValue - displayedValue;
-
-			if (Math.abs(distance) < SNAP_THRESHOLD)
-			{
-				displayedValue = targetValue;
-				super.setValue(targetValue);
-				animationTimer.stop();
-				return;
-			}
-
-			displayedValue += distance * EASING;
-			super.setValue((int) Math.round(displayedValue));
-		});
+		animationTimer = new Timer(FRAME_DELAY_MS, this::onAnimationTick);
 		animationTimer.setRepeats(true);
+	}
+
+	private void onAnimationTick(java.awt.event.ActionEvent e)
+	{
+		double distance = targetValue - displayedValue;
+
+		if (Math.abs(distance) < SNAP_THRESHOLD)
+		{
+			displayedValue = targetValue;
+			super.setValue(targetValue);
+			animationTimer.stop();
+			return;
+		}
+
+		displayedValue += distance * EASING;
+		super.setValue((int) Math.round(displayedValue));
 	}
 
 	/**
