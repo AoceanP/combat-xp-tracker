@@ -27,25 +27,47 @@ package com.combatxptracker;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
+import java.awt.GridLayout;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
-import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
+import javax.swing.JButton;
+import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
+import javax.swing.JList;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
-import javax.swing.SwingConstants;
+import javax.swing.JTextArea;
+import javax.swing.border.EmptyBorder;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
 import net.runelite.api.Skill;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.ui.components.ProgressBar;
 
+/**
+ * Sidebar panel.
+ *
+ * The layout deliberately mirrors RuneLite's own XpInfoBox: each row is a JPanel using
+ * BorderLayout with its content added to BorderLayout.NORTH. That matters -- an earlier
+ * version used BoxLayout.Y_AXIS throughout, which distributes leftover vertical space
+ * *into* its children, stretching every row and producing large empty gaps between the
+ * level text and the progress bar. BorderLayout.NORTH pins content to its natural
+ * height and lets the surplus fall into an empty CENTER instead.
+ */
 public class CombatXpTrackerPanel extends PluginPanel
 {
 	private final CombatXpTrackerPlugin plugin;
@@ -53,20 +75,18 @@ public class CombatXpTrackerPanel extends PluginPanel
 	private final SkillIconManager skillIconManager;
 
 	private final JLabel avgDamageLabel = new JLabel();
-	private final JLabel maxHitLabel = new JLabel();
+	private final JLabel biggestHitLabel = new JLabel();
 	private final JLabel hitCountLabel = new JLabel();
 	private final JLabel meleeMaxHitLabel = new JLabel();
 
 	private final Map<Skill, SkillRow> skillRows = new EnumMap<>(Skill.class);
 	private final JPanel skillsContainer = new JPanel();
 
-	// Shown when no skills have goals set. Without this a fresh install looks broken --
-	// tracking is opt-in now, so the list is legitimately empty until the first goal.
 	private final JLabel emptyStateLabel = new JLabel(
-		"<html><div style='text-align:center;padding:8px;'>"
+		"<html><div style='text-align:center;padding:6px;'>"
 			+ "No skills tracked yet.<br><br>"
-			+ "Right-click a skill in your in-game stats tab and choose "
-			+ "<b>Set goal level</b> to start tracking it."
+			+ "Use <b>Set skill goal</b> above, or right-click a skill "
+			+ "in your in-game stats tab."
 			+ "</div></html>");
 
 	public CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config, SkillIconManager skillIconManager)
@@ -78,243 +98,138 @@ public class CombatXpTrackerPanel extends PluginPanel
 
 		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		setBorder(new EmptyBorder(8, 8, 8, 8));
 
-		JPanel container = new JPanel();
-		container.setLayout(new BoxLayout(container, BoxLayout.Y_AXIS));
-		container.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		// Everything lives in NORTH of this wrapper so the content keeps its natural
+		// height rather than being stretched to fill the sidebar.
+		JPanel northWrapper = new JPanel(new BorderLayout());
+		northWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-		container.add(buildDamagePanel());
-		container.add(Box.createRigidArea(new Dimension(0, 8)));
-		container.add(buildActionButtonsPanel());
-		container.add(Box.createRigidArea(new Dimension(0, 10)));
-
-		emptyStateLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		emptyStateLabel.setFont(FontManager.getRunescapeSmallFont());
-		emptyStateLabel.setHorizontalAlignment(SwingConstants.CENTER);
-		emptyStateLabel.setAlignmentX(CENTER_ALIGNMENT);
+		JPanel header = new JPanel(new BorderLayout());
+		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		header.add(buildDamagePanel(), BorderLayout.NORTH);
+		header.add(buildActionButtonsPanel(), BorderLayout.CENTER);
 
 		skillsContainer.setLayout(new BoxLayout(skillsContainer, BoxLayout.Y_AXIS));
 		skillsContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		skillsContainer.add(emptyStateLabel);
-		buildSkillRows();
-		container.add(skillsContainer);
 
-		JScrollPane scrollPane = new JScrollPane(container);
+		emptyStateLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		emptyStateLabel.setFont(FontManager.getRunescapeSmallFont());
+		skillsContainer.add(emptyStateLabel);
+
+		buildSkillRows();
+
+		northWrapper.add(header, BorderLayout.NORTH);
+		northWrapper.add(skillsContainer, BorderLayout.CENTER);
+
+		JPanel scrollContent = new JPanel(new BorderLayout());
+		scrollContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		scrollContent.add(northWrapper, BorderLayout.NORTH);
+
+		JScrollPane scrollPane = new JScrollPane(scrollContent);
+		scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		scrollPane.setBorder(BorderFactory.createEmptyBorder());
 		scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+		scrollPane.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
 
 		add(scrollPane, BorderLayout.CENTER);
+
+		refresh();
 	}
 
+	/**
+	 * Damage stats block: average, biggest observed hit, hit count, and (optionally) the
+	 * calculated melee max hit.
+	 */
 	private JPanel buildDamagePanel()
 	{
-		JPanel panel = new JPanel();
-		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		panel.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createLineBorder(ColorScheme.DARK_GRAY_COLOR),
-			BorderFactory.createEmptyBorder(8, 10, 8, 10)
-		));
+		JPanel wrapper = new JPanel(new BorderLayout());
+		wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		wrapper.setBorder(new EmptyBorder(8, 10, 8, 10));
+
+		int rows = config.showMeleeMaxHit() ? 4 : 3;
+		JPanel stats = new JPanel(new GridLayout(rows, 1, 0, 3));
+		stats.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
 		avgDamageLabel.setForeground(Color.WHITE);
 		avgDamageLabel.setFont(FontManager.getRunescapeSmallFont());
-		avgDamageLabel.setAlignmentX(LEFT_ALIGNMENT);
 
-		maxHitLabel.setForeground(Color.WHITE);
-		maxHitLabel.setFont(FontManager.getRunescapeSmallFont());
-		maxHitLabel.setAlignmentX(LEFT_ALIGNMENT);
+		biggestHitLabel.setForeground(Color.WHITE);
+		biggestHitLabel.setFont(FontManager.getRunescapeSmallFont());
 
 		hitCountLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		hitCountLabel.setFont(FontManager.getRunescapeSmallFont());
-		hitCountLabel.setAlignmentX(LEFT_ALIGNMENT);
 
 		meleeMaxHitLabel.setForeground(ColorScheme.BRAND_ORANGE);
 		meleeMaxHitLabel.setFont(FontManager.getRunescapeSmallFont());
-		meleeMaxHitLabel.setAlignmentX(LEFT_ALIGNMENT);
 		meleeMaxHitLabel.setToolTipText("Estimated from equipped weapon, boosted Strength, and active prayer. "
-			+ "Doesn't yet account for special attacks, Dharok's, Salve amulet, Slayer helm, or several other bonuses.");
+			+ "Doesn't account for special attacks, Dharok's, Salve amulet, Slayer helm, or armour strength bonus.");
 
-		panel.add(avgDamageLabel);
-		panel.add(Box.createRigidArea(new Dimension(0, 4)));
-		panel.add(maxHitLabel);
-		panel.add(Box.createRigidArea(new Dimension(0, 4)));
-		panel.add(hitCountLabel);
+		stats.add(avgDamageLabel);
+		stats.add(biggestHitLabel);
+		stats.add(hitCountLabel);
 		if (config.showMeleeMaxHit())
 		{
-			panel.add(Box.createRigidArea(new Dimension(0, 8)));
-			panel.add(meleeMaxHitLabel);
+			stats.add(meleeMaxHitLabel);
 		}
 
+		wrapper.add(stats, BorderLayout.NORTH);
 		updateDamageLabels();
-
-		return panel;
+		return wrapper;
 	}
 
 	private JPanel buildActionButtonsPanel()
 	{
-		JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
-		panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		JPanel wrapper = new JPanel(new BorderLayout());
+		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		wrapper.setBorder(new EmptyBorder(8, 0, 8, 0));
 
-		javax.swing.JButton setGoalButton = new javax.swing.JButton("Set skill goal");
+		JPanel buttons = new JPanel(new GridLayout(3, 1, 0, 4));
+		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+		JButton setGoalButton = new JButton("Set skill goal");
 		setGoalButton.setFont(FontManager.getRunescapeSmallFont());
-		setGoalButton.setToolTipText("Choose a skill and level without needing to right-click it in-game.");
+		setGoalButton.setFocusPainted(false);
+		setGoalButton.setToolTipText("Choose a skill and target level without right-clicking in-game.");
 		setGoalButton.addActionListener(e -> promptSkillPickerThenGoalDialog());
-		panel.add(setGoalButton);
+		buttons.add(setGoalButton);
 
-		javax.swing.JButton summaryButton = new javax.swing.JButton("Session summary");
+		JButton summaryButton = new JButton("Session summary");
 		summaryButton.setFont(FontManager.getRunescapeSmallFont());
-		summaryButton.setToolTipText("Shows total XP gained, hits landed, and your biggest hit since the tracker was last reset.");
+		summaryButton.setFocusPainted(false);
+		summaryButton.setToolTipText("Total XP gained, hits landed, and biggest hit since the last reset.");
 		summaryButton.addActionListener(e -> showSessionSummaryDialog());
-		panel.add(summaryButton);
+		buttons.add(summaryButton);
 
-		javax.swing.JButton resetButton = new javax.swing.JButton("Reset tracker");
+		JButton resetButton = new JButton("Reset tracker");
 		resetButton.setFont(FontManager.getRunescapeSmallFont());
-		resetButton.setToolTipText("Clears damage stats and XP rates for all skills. Goal levels and colors are kept.");
-		resetButton.addActionListener(e ->
-		{
-			int choice = JOptionPane.showConfirmDialog(
-				this,
-				"Reset all tracked damage stats and XP rates? Goal levels and colors are kept.",
-				"Reset tracker",
-				JOptionPane.YES_NO_OPTION
-			);
-			if (choice == JOptionPane.YES_OPTION)
-			{
-				plugin.resetHitStats();
-				plugin.getSessionSummary().reset();
-				for (SkillProgress p : plugin.getSkillProgress().values())
-				{
-					p.reset();
-				}
-				refresh();
-			}
-		});
-		panel.add(resetButton);
+		resetButton.setFocusPainted(false);
+		resetButton.setToolTipText("Clears damage stats and XP rates. Goals and colors are kept.");
+		resetButton.addActionListener(e -> confirmAndReset());
+		buttons.add(resetButton);
 
-		return panel;
+		wrapper.add(buttons, BorderLayout.NORTH);
+		return wrapper;
 	}
 
-	/**
-	 * Lets the player choose a skill and set a goal level without right-clicking it in
-	 * the in-game stats tab -- useful for setting up goals before starting a session, or
-	 * for a skill whose icon isn't currently visible.
-	 *
-	 * Shows a skill picker first, then hands off to promptGoalLevelDialog(Skill) for the
-	 * actual level input, so both entry points (this button and the right-click menu)
-	 * share the exact same validation, saving, and refresh behavior rather than
-	 * duplicating that logic.
-	 */
-	private void promptSkillPickerThenGoalDialog()
+	private void confirmAndReset()
 	{
-		Skill[] pickableSkills = java.util.Arrays.stream(Skill.values())
-			.filter(s -> s != Skill.OVERALL)
-			.toArray(Skill[]::new);
-
-		JComboBox<Skill> skillCombo = new JComboBox<>(pickableSkills);
-		skillCombo.setRenderer(new javax.swing.DefaultListCellRenderer()
-		{
-			@Override
-			public java.awt.Component getListCellRendererComponent(
-				javax.swing.JList<?> list, Object value, int index,
-				boolean isSelected, boolean cellHasFocus)
-			{
-				super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-				if (value instanceof Skill)
-				{
-					Skill skill = (Skill) value;
-					SkillProgress progress = plugin.getSkillProgress().get(skill);
-					boolean alreadyTracked = progress != null && progress.isGoalSet();
-					// Show which skills already have a goal set, so picking from the list
-					// makes it clear whether this will create a new goal or edit one.
-					setText(capitalize(skill.getName()) + (alreadyTracked ? "  (goal set)" : ""));
-				}
-				return this;
-			}
-		});
-
 		int choice = JOptionPane.showConfirmDialog(
 			this,
-			skillCombo,
-			"Choose a skill",
-			JOptionPane.OK_CANCEL_OPTION,
-			JOptionPane.PLAIN_MESSAGE
-		);
+			"Reset all tracked damage stats and XP rates? Goal levels and colors are kept.",
+			"Reset tracker",
+			JOptionPane.YES_NO_OPTION);
 
-		if (choice != JOptionPane.OK_OPTION)
+		if (choice == JOptionPane.YES_OPTION)
 		{
-			return;
-		}
-
-		Skill selected = (Skill) skillCombo.getSelectedItem();
-		if (selected != null)
-		{
-			promptGoalLevelDialog(selected);
-		}
-	}
-
-	/**
-	 * Builds and shows the session summary as a plain dialog: total XP gained per skill,
-	 * total hits landed, and the biggest single hit with its monster name if one was
-	 * determinable. Text is plain and easy to select/copy so the user can paste it
-	 * somewhere (chat, Discord, etc.) as a shareable readout.
-	 */
-	private void showSessionSummaryDialog()
-	{
-		SessionSummary summary = plugin.getSessionSummary();
-
-		StringBuilder sb = new StringBuilder();
-		sb.append("=== Combat & XP Tracker: Session Summary ===\n\n");
-
-		if (summary.getXpGainedThisSession().isEmpty())
-		{
-			sb.append("No XP gained yet this session.\n");
-		}
-		else
-		{
-			sb.append(String.format("Total XP gained: %,d\n\n", summary.getTotalXpGained()));
-			for (Map.Entry<Skill, Integer> entry : summary.getXpGainedThisSession().entrySet())
+			plugin.resetHitStats();
+			plugin.getSessionSummary().reset();
+			for (SkillProgress p : plugin.getSkillProgress().values())
 			{
-				sb.append(String.format("  %s: %,d xp\n", capitalize(entry.getKey().getName()), entry.getValue()));
+				p.reset();
 			}
-			sb.append("\n");
+			refresh();
 		}
-
-		sb.append(String.format("Total hits landed: %,d\n", summary.getTotalHitsLanded()));
-
-		if (summary.getBiggestHitDamage() >= 0)
-		{
-			String monster = summary.getBiggestHitMonsterName();
-			if (monster != null)
-			{
-				sb.append(String.format("Biggest hit: %d (on %s)\n", summary.getBiggestHitDamage(), monster));
-			}
-			else
-			{
-				sb.append(String.format("Biggest hit: %d (target unknown)\n", summary.getBiggestHitDamage()));
-			}
-		}
-		else
-		{
-			sb.append("Biggest hit: none recorded yet\n");
-		}
-
-		javax.swing.JTextArea textArea = new javax.swing.JTextArea(sb.toString());
-		textArea.setEditable(false);
-		textArea.setFont(FontManager.getRunescapeSmallFont());
-		textArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		textArea.setForeground(Color.WHITE);
-		textArea.setLineWrap(true);
-		textArea.setWrapStyleWord(true);
-
-		JScrollPane scrollPane = new JScrollPane(textArea);
-		scrollPane.setPreferredSize(new Dimension(260, 300));
-
-		JOptionPane.showMessageDialog(
-			this,
-			scrollPane,
-			"Session Summary",
-			JOptionPane.PLAIN_MESSAGE
-		);
 	}
 
 	private void buildSkillRows()
@@ -325,33 +240,61 @@ public class CombatXpTrackerPanel extends PluginPanel
 			{
 				continue;
 			}
-			SkillRow row = new SkillRow(skill);
-			skillRows.put(skill, row);
-			// Deliberately NOT added to skillsContainer here. Rows are added/removed from
-			// the container dynamically in refresh() based on tracking state, rather than
-			// added once and toggled with setVisible(false) -- an invisible component can
-			// still reserve its layout space in BoxLayout even after revalidate(), which
-			// was producing large empty gaps where untracked rows used to sit.
+			skillRows.put(skill, new SkillRow(skill));
 		}
 	}
 
 	/**
-	 * Prompts the user for a goal level via a simple input dialog, since the
-	 * right-click menu can't render its own text field.
+	 * Skill picker, so a goal can be set without needing the in-game stats tab.
 	 */
+	private void promptSkillPickerThenGoalDialog()
+	{
+		Skill[] pickable = Arrays.stream(Skill.values())
+			.filter(s -> s != Skill.OVERALL)
+			.toArray(Skill[]::new);
+
+		JComboBox<Skill> skillCombo = new JComboBox<>(pickable);
+		skillCombo.setRenderer(new DefaultListCellRenderer()
+		{
+			@Override
+			public java.awt.Component getListCellRendererComponent(
+				JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus)
+			{
+				super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+				if (value instanceof Skill)
+				{
+					Skill s = (Skill) value;
+					SkillProgress progress = plugin.getSkillProgress().get(s);
+					boolean tracked = progress != null && progress.isGoalSet();
+					setText(capitalize(s.getName()) + (tracked ? "  (tracked)" : ""));
+				}
+				return this;
+			}
+		});
+
+		int choice = JOptionPane.showConfirmDialog(
+			this, skillCombo, "Choose a skill",
+			JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+
+		if (choice == JOptionPane.OK_OPTION)
+		{
+			Skill selected = (Skill) skillCombo.getSelectedItem();
+			if (selected != null)
+			{
+				promptGoalLevelDialog(selected);
+			}
+		}
+	}
+
 	public void promptGoalLevelDialog(Skill skill)
 	{
 		SkillProgress progress = plugin.getSkillProgress().get(skill);
-		// Pre-fill with the existing goal if there is one, otherwise 99 as the common
-		// case. (The old global "default goal level" setting was removed -- a single
-		// number applied to every skill wasn't meaningful when goals are per-skill.)
 		int currentGoal = (progress != null && progress.isGoalSet()) ? progress.getGoalLevel() : 99;
 
 		String input = JOptionPane.showInputDialog(
 			this,
-			"Set goal level for " + capitalize(skill.getName()) + " (2-99):",
-			currentGoal
-		);
+			"Goal level for " + capitalize(skill.getName()) + " (2-99):",
+			currentGoal);
 
 		if (input == null || input.trim().isEmpty())
 		{
@@ -374,29 +317,74 @@ public class CombatXpTrackerPanel extends PluginPanel
 		}
 	}
 
-	/**
-	 * Opens a color picker for the given skill's row background, persisted via the plugin.
-	 */
 	public void promptSkillColorDialog(Skill skill)
 	{
 		Color current = plugin.getSkillColor(skill);
-		Color chosen = javax.swing.JColorChooser.showDialog(
+		Color chosen = JColorChooser.showDialog(
 			this,
-			"Choose a color for " + capitalize(skill.getName()),
-			current != null ? current : ColorScheme.DARKER_GRAY_COLOR
-		);
+			"Color for " + capitalize(skill.getName()),
+			current != null ? current : ColorScheme.BRAND_ORANGE);
+
 		if (chosen != null)
 		{
 			plugin.setSkillColor(skill, chosen);
 		}
 	}
 
+	private void showSessionSummaryDialog()
+	{
+		SessionSummary summary = plugin.getSessionSummary();
+
+		StringBuilder sb = new StringBuilder();
+		sb.append("=== Session Summary ===\n\n");
+
+		if (summary.getXpGainedThisSession().isEmpty())
+		{
+			sb.append("No XP gained yet this session.\n\n");
+		}
+		else
+		{
+			sb.append(String.format("Total XP gained: %,d\n\n", summary.getTotalXpGained()));
+			for (Map.Entry<Skill, Integer> entry : summary.getXpGainedThisSession().entrySet())
+			{
+				sb.append(String.format("  %s: %,d xp\n", capitalize(entry.getKey().getName()), entry.getValue()));
+			}
+			sb.append("\n");
+		}
+
+		sb.append(String.format("Total hits landed: %,d\n", summary.getTotalHitsLanded()));
+
+		if (summary.getBiggestHitDamage() >= 0)
+		{
+			String monster = summary.getBiggestHitMonsterName();
+			sb.append(String.format("Biggest hit: %d%s\n",
+				summary.getBiggestHitDamage(),
+				monster != null ? " (on " + monster + ")" : " (target unknown)"));
+		}
+		else
+		{
+			sb.append("Biggest hit: none recorded yet\n");
+		}
+
+		JTextArea textArea = new JTextArea(sb.toString());
+		textArea.setEditable(false);
+		textArea.setFont(FontManager.getRunescapeSmallFont());
+		textArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		textArea.setForeground(Color.WHITE);
+
+		JScrollPane scroll = new JScrollPane(textArea);
+		scroll.setPreferredSize(new Dimension(250, 280));
+
+		JOptionPane.showMessageDialog(this, scroll, "Session Summary", JOptionPane.PLAIN_MESSAGE);
+	}
+
 	public void refresh()
 	{
 		updateDamageLabels();
 
-		int visibleCount = 0;
-		int insertIndex = 0;
+		int visible = 0;
+		int insertIndex = 1; // index 0 is the empty-state label
+
 		for (Skill skill : Skill.values())
 		{
 			if (skill == Skill.OVERALL)
@@ -412,33 +400,27 @@ public class CombatXpTrackerPanel extends PluginPanel
 
 			SkillProgress progress = plugin.getSkillProgress().get(skill);
 			boolean tracked = progress != null && progress.isGoalSet();
-			boolean currentlyInContainer = row.component.getParent() == skillsContainer;
+			boolean inContainer = row.getParent() == skillsContainer;
 
-			// Tracking is opt-in: only skills with a goal appear. Rows are physically
-			// added/removed here rather than shown/hidden with setVisible(), since an
-			// invisible BoxLayout child can still reserve its layout space even after
-			// revalidate() -- that was producing large empty gaps in the panel.
-			//
-			// Inserted at insertIndex rather than appended: JPanel.add(component) with no
-			// index always appends to the end, so a row re-added after being untracked
-			// and re-tracked would otherwise land at the bottom instead of in Skill order.
+			// Rows are added/removed rather than shown/hidden: an invisible BoxLayout child
+			// can still reserve its layout space, which left blank gaps behind.
 			if (tracked)
 			{
-				if (!currentlyInContainer)
+				if (!inContainer)
 				{
-					skillsContainer.add(row.component, insertIndex);
+					skillsContainer.add(row, insertIndex);
 				}
 				insertIndex++;
-				visibleCount++;
-				row.refresh();
+				visible++;
+				row.update();
 			}
-			else if (currentlyInContainer)
+			else if (inContainer)
 			{
-				skillsContainer.remove(row.component);
+				skillsContainer.remove(row);
 			}
 		}
 
-		emptyStateLabel.setVisible(visibleCount == 0);
+		emptyStateLabel.setVisible(visible == 0);
 
 		skillsContainer.revalidate();
 		skillsContainer.repaint();
@@ -448,15 +430,13 @@ public class CombatXpTrackerPanel extends PluginPanel
 	{
 		HitStats stats = plugin.getHitStats();
 		avgDamageLabel.setText(String.format("Average damage: %.2f", stats.getAverageDamage()));
-		maxHitLabel.setText("Biggest hit: " + stats.getMaxHit());
+		biggestHitLabel.setText("Biggest hit: " + stats.getMaxHit());
 		hitCountLabel.setText("Hits recorded: " + stats.getHitCount());
 
 		if (config.showMeleeMaxHit())
 		{
-			int meleeMaxHit = plugin.getMeleeMaxHit();
-			meleeMaxHitLabel.setText(meleeMaxHit >= 0
-				? "Max Hit: " + meleeMaxHit
-				: "Max Hit: no weapon equipped");
+			int maxHit = plugin.getMeleeMaxHit();
+			meleeMaxHitLabel.setText(maxHit >= 0 ? "Max hit: " + maxHit : "Max hit: no weapon");
 		}
 	}
 
@@ -470,38 +450,40 @@ public class CombatXpTrackerPanel extends PluginPanel
 	}
 
 	/**
-	 * A single skill's row in the panel: name, level, goal, XP/hr, and a progress bar.
+	 * A single tracked skill.
+	 *
+	 * Structure mirrors RuneLite's XpInfoBox:
+	 *   this (BorderLayout)
+	 *     └─ NORTH: container (BorderLayout)
+	 *          ├─ WEST:   skill icon
+	 *          ├─ CENTER: stats grid (name / rate / level→goal / eta)
+	 *          └─ SOUTH:  progress bar
+	 *
+	 * Adding to NORTH is what stops the row being stretched vertically.
 	 */
-	private class SkillRow
+	private class SkillRow extends JPanel
 	{
 		private final Skill skill;
-		private final JPanel component;
-		private final JPanel headerRow;
-		private final JPanel nameAndIcon;
+
+		private final JPanel container = new JPanel(new BorderLayout());
+		private final JPanel statsPanel = new JPanel();
+		private final ProgressBar progressBar = new ProgressBar();
+
 		private final JLabel nameLabel = new JLabel();
-		private final JLabel xpHrLabel = new JLabel();
+		private final JLabel rateLabel = new JLabel();
 		private final JLabel goalLabel = new JLabel();
-		private final AnimatedProgressBar progressBar = new AnimatedProgressBar();
-		private boolean hasRenderedOnce = false;
+		private final JLabel etaLabel = new JLabel();
 
 		SkillRow(Skill skill)
 		{
 			this.skill = skill;
-			this.component = new JPanel();
-			component.setLayout(new BoxLayout(component, BoxLayout.Y_AXIS));
-			component.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			// Outer empty border supplies the gap between rows (replacing the separate
-			// spacer components, which would have stayed visible when a row is hidden).
-			component.setBorder(BorderFactory.createCompoundBorder(
-				BorderFactory.createEmptyBorder(0, 0, 4, 0),
-				BorderFactory.createCompoundBorder(
-					BorderFactory.createLineBorder(ColorScheme.DARK_GRAY_COLOR),
-					BorderFactory.createEmptyBorder(6, 8, 6, 8)
-				)
-			));
 
-			headerRow = new JPanel(new BorderLayout());
-			headerRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			setLayout(new BorderLayout());
+			setBorder(new EmptyBorder(0, 0, 5, 0));
+			setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+			container.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			container.setBorder(new EmptyBorder(6, 6, 6, 6));
 
 			JLabel iconLabel = new JLabel();
 			java.awt.image.BufferedImage icon = skillIconManager.getSkillImage(skill, true);
@@ -509,107 +491,109 @@ public class CombatXpTrackerPanel extends PluginPanel
 			{
 				iconLabel.setIcon(new ImageIcon(icon));
 			}
-			iconLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 6));
+			iconLabel.setBorder(new EmptyBorder(0, 0, 0, 6));
+			iconLabel.setVerticalAlignment(JLabel.TOP);
 
+			// 2x2 grid: name / level-goal on the first row, rate / eta on the second.
+			// Plain GridLayout is safe here (rather than stretching cells) because the
+			// whole row sits in BorderLayout.NORTH and keeps its natural height.
+			statsPanel.setLayout(new GridLayout(2, 2, 0, 2));
+			statsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+			nameLabel.setFont(FontManager.getRunescapeSmallFont());
 			nameLabel.setForeground(Color.WHITE);
-			nameLabel.setFont(FontManager.getRunescapeBoldFont());
-			nameLabel.setText(capitalize(skill.getName()));
 
-			nameAndIcon = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-			nameAndIcon.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			nameAndIcon.add(iconLabel);
-			nameAndIcon.add(nameLabel);
-
-			goalLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			goalLabel.setFont(FontManager.getRunescapeSmallFont());
-			goalLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+			goalLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			goalLabel.setHorizontalAlignment(JLabel.RIGHT);
 
-			headerRow.add(nameAndIcon, BorderLayout.WEST);
-			headerRow.add(goalLabel, BorderLayout.EAST);
+			rateLabel.setFont(FontManager.getRunescapeSmallFont());
+			rateLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 
-			xpHrLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			xpHrLabel.setFont(FontManager.getRunescapeSmallFont());
+			etaLabel.setFont(FontManager.getRunescapeSmallFont());
+			etaLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			etaLabel.setHorizontalAlignment(JLabel.RIGHT);
 
-			progressBar.setStringPainted(true);
+			statsPanel.add(nameLabel);
+			statsPanel.add(goalLabel);
+			statsPanel.add(rateLabel);
+			statsPanel.add(etaLabel);
+
+			progressBar.setBackground(ColorScheme.PROGRESS_INPROGRESS_COLOR.darker());
 			progressBar.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
-			progressBar.setBackground(ColorScheme.DARK_GRAY_COLOR);
-			progressBar.setFont(FontManager.getRunescapeSmallFont());
+			progressBar.setMaximumValue(100);
 			progressBar.setPreferredSize(new Dimension(0, 16));
 
-			component.add(headerRow);
-			component.add(Box.createRigidArea(new Dimension(0, 3)));
-			component.add(xpHrLabel);
-			component.add(Box.createRigidArea(new Dimension(0, 3)));
-			component.add(progressBar);
+			container.add(iconLabel, BorderLayout.WEST);
+			container.add(statsPanel, BorderLayout.CENTER);
+			container.add(progressBar, BorderLayout.SOUTH);
 
-			// Popup menu is rebuilt fresh each time it's about to show (via the listener
-			// below), not once at construction, so the dismiss/show label always reflects
-			// current state rather than a stale snapshot from row creation time.
-			javax.swing.JPopupMenu popupMenu = new javax.swing.JPopupMenu();
-			popupMenu.addPopupMenuListener(new javax.swing.event.PopupMenuListener()
+			// Rebuilt on each open so the dismiss/show label matches current state.
+			JPopupMenu popup = new JPopupMenu();
+			popup.addPopupMenuListener(new PopupMenuListener()
 			{
 				@Override
-				public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e)
+				public void popupMenuWillBecomeVisible(PopupMenuEvent e)
 				{
-					popupMenu.removeAll();
-					for (java.awt.Component item : buildRowPopupMenuItems())
+					popup.removeAll();
+					for (JMenuItem item : buildMenuItems())
 					{
-						popupMenu.add(item);
+						popup.add(item);
 					}
 				}
 
 				@Override
-				public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {}
+				public void popupMenuWillBecomeInvisible(PopupMenuEvent e)
+				{
+				}
 
 				@Override
-				public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {}
+				public void popupMenuCanceled(PopupMenuEvent e)
+				{
+				}
 			});
-			component.setComponentPopupMenu(popupMenu);
+			container.setComponentPopupMenu(popup);
+			progressBar.setComponentPopupMenu(popup);
 
-			refresh();
+			add(container, BorderLayout.NORTH);
 		}
 
-		private java.util.List<java.awt.Component> buildRowPopupMenuItems()
+		private List<JMenuItem> buildMenuItems()
 		{
-			java.util.List<java.awt.Component> items = new java.util.ArrayList<>();
+			List<JMenuItem> items = new ArrayList<>();
 
-			javax.swing.JMenuItem setGoal = new javax.swing.JMenuItem("Set goal level");
+			JMenuItem setGoal = new JMenuItem("Set goal level");
 			setGoal.addActionListener(e -> promptGoalLevelDialog(skill));
 			items.add(setGoal);
 
-			javax.swing.JMenuItem setColor = new javax.swing.JMenuItem("Set skill color");
+			JMenuItem setColor = new JMenuItem("Set colour");
 			setColor.addActionListener(e -> promptSkillColorDialog(skill));
 			items.add(setColor);
 
-			javax.swing.JMenuItem clearColor = new javax.swing.JMenuItem("Clear skill color");
+			JMenuItem clearColor = new JMenuItem("Clear colour");
 			clearColor.addActionListener(e -> plugin.setSkillColor(skill, null));
 			items.add(clearColor);
 
-			items.add(new javax.swing.JPopupMenu.Separator());
-
-			javax.swing.JMenuItem stopTracking = new javax.swing.JMenuItem("Stop tracking this skill");
-			stopTracking.setToolTipText("Removes this skill from the panel, overlay, and infoboxes. Set a goal again to bring it back.");
-			stopTracking.addActionListener(e -> plugin.clearGoal(skill));
-			items.add(stopTracking);
-
 			SkillProgress progress = plugin.getSkillProgress().get(skill);
-			boolean currentlyDismissed = progress != null && progress.isDismissedFromOverlay();
-			javax.swing.JMenuItem toggleDismiss = new javax.swing.JMenuItem(
-				currentlyDismissed ? "Show on overlay" : "Dismiss from overlay"
-			);
-			toggleDismiss.addActionListener(e ->
+			boolean dismissed = progress != null && progress.isDismissedFromOverlay();
+			JMenuItem toggleOverlay = new JMenuItem(dismissed ? "Show on overlay" : "Hide from overlay");
+			toggleOverlay.addActionListener(e ->
 			{
 				if (progress != null)
 				{
-					progress.setDismissedFromOverlay(!currentlyDismissed);
+					progress.setDismissedFromOverlay(!dismissed);
 				}
 			});
-			items.add(toggleDismiss);
+			items.add(toggleOverlay);
+
+			JMenuItem stopTracking = new JMenuItem("Stop tracking");
+			stopTracking.addActionListener(e -> plugin.clearGoal(skill));
+			items.add(stopTracking);
 
 			return items;
 		}
 
-		void refresh()
+		void update()
 		{
 			SkillProgress progress = plugin.getSkillProgress().get(skill);
 			if (progress == null)
@@ -617,46 +601,43 @@ public class CombatXpTrackerPanel extends PluginPanel
 				return;
 			}
 
-			Color customColor = plugin.getSkillColor(skill);
-			Color rowBackground = customColor != null ? customColor : ColorScheme.DARKER_GRAY_COLOR;
-			component.setBackground(rowBackground);
-			headerRow.setBackground(rowBackground);
-			nameAndIcon.setBackground(rowBackground);
+			Color custom = plugin.getSkillColor(skill);
+			Color background = custom != null ? custom : ColorScheme.DARKER_GRAY_COLOR;
+			container.setBackground(background);
+			statsPanel.setBackground(background);
 
 			int level = progress.getCurrentLevel();
 			int goal = progress.getGoalLevel();
-			int xpPerHour = progress.getXpPerHour();
-			double progressFraction = progress.getProgressToGoal();
+			boolean reached = level >= goal;
 
-			goalLabel.setText("Lvl " + level + " \u2192 " + goal);
-			xpHrLabel.setText(xpPerHour > 0 ? String.format("%,d xp/hr", xpPerHour) : "No recent activity");
+			nameLabel.setText(capitalize(skill.getName()));
+			goalLabel.setText(level + " \u2192 " + goal);
 
-			int percent = (int) Math.round(progressFraction * 100);
-			// First render jumps straight to the real value -- easing up from zero when the
-			// panel first opens would suggest progress that isn't happening. After that,
-			// changes animate.
-			if (hasRenderedOnce)
-			{
-				progressBar.setAnimatedValue(percent);
-			}
-			else
-			{
-				progressBar.setValueImmediate(percent);
-				hasRenderedOnce = true;
-			}
+			int rate = progress.getXpPerHour();
+			rateLabel.setText(rate > 0 ? String.format("%,d xp/hr", rate) : "idle");
 
-			if (level >= goal)
+			if (reached)
 			{
-				progressBar.setString("Goal reached!");
+				etaLabel.setText("done");
+				progressBar.setValue(100);
+				progressBar.setCenterLabel("Goal reached");
 				progressBar.setForeground(ColorScheme.PROGRESS_COMPLETE_COLOR);
+				progressBar.setBackground(ColorScheme.PROGRESS_COMPLETE_COLOR.darker());
 			}
 			else
 			{
-				double etaHours = progress.getEstimatedHoursToGoal();
-				String etaText = etaHours > 0 ? String.format(" (~%.1fh)", etaHours) : "";
-				progressBar.setString(percent + "%" + etaText);
+				double hours = progress.getEstimatedHoursToGoal();
+				etaLabel.setText(hours > 0 ? String.format("%.1fh left", hours) : "");
+
+				int percent = (int) Math.round(progress.getProgressToGoal() * 100);
+				progressBar.setValue(percent);
+				progressBar.setCenterLabel(percent + "%");
 				progressBar.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
+				progressBar.setBackground(ColorScheme.PROGRESS_INPROGRESS_COLOR.darker());
 			}
+
+			progressBar.setLeftLabel(String.valueOf(level));
+			progressBar.setRightLabel(String.valueOf(goal));
 		}
 	}
 }
