@@ -28,13 +28,13 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.GridLayout;
 import java.util.EnumMap;
 import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -55,6 +55,7 @@ public class CombatXpTrackerPanel extends PluginPanel
 	private final JLabel avgDamageLabel = new JLabel();
 	private final JLabel maxHitLabel = new JLabel();
 	private final JLabel hitCountLabel = new JLabel();
+	private final JLabel meleeMaxHitLabel = new JLabel();
 
 	private final Map<Skill, SkillRow> skillRows = new EnumMap<>(Skill.class);
 	private final JPanel skillsContainer = new JPanel();
@@ -108,7 +109,7 @@ public class CombatXpTrackerPanel extends PluginPanel
 	private JPanel buildDamagePanel()
 	{
 		JPanel panel = new JPanel();
-		panel.setLayout(new GridLayout(3, 1, 0, 4));
+		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		panel.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createLineBorder(ColorScheme.DARK_GRAY_COLOR),
@@ -117,14 +118,32 @@ public class CombatXpTrackerPanel extends PluginPanel
 
 		avgDamageLabel.setForeground(Color.WHITE);
 		avgDamageLabel.setFont(FontManager.getRunescapeSmallFont());
+		avgDamageLabel.setAlignmentX(LEFT_ALIGNMENT);
+
 		maxHitLabel.setForeground(Color.WHITE);
 		maxHitLabel.setFont(FontManager.getRunescapeSmallFont());
+		maxHitLabel.setAlignmentX(LEFT_ALIGNMENT);
+
 		hitCountLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		hitCountLabel.setFont(FontManager.getRunescapeSmallFont());
+		hitCountLabel.setAlignmentX(LEFT_ALIGNMENT);
+
+		meleeMaxHitLabel.setForeground(ColorScheme.BRAND_ORANGE);
+		meleeMaxHitLabel.setFont(FontManager.getRunescapeSmallFont());
+		meleeMaxHitLabel.setAlignmentX(LEFT_ALIGNMENT);
+		meleeMaxHitLabel.setToolTipText("Estimated from equipped weapon, boosted Strength, and active prayer. "
+			+ "Doesn't yet account for special attacks, Dharok's, Salve amulet, Slayer helm, or several other bonuses.");
 
 		panel.add(avgDamageLabel);
+		panel.add(Box.createRigidArea(new Dimension(0, 4)));
 		panel.add(maxHitLabel);
+		panel.add(Box.createRigidArea(new Dimension(0, 4)));
 		panel.add(hitCountLabel);
+		if (config.showMeleeMaxHit())
+		{
+			panel.add(Box.createRigidArea(new Dimension(0, 8)));
+			panel.add(meleeMaxHitLabel);
+		}
 
 		updateDamageLabels();
 
@@ -135,6 +154,12 @@ public class CombatXpTrackerPanel extends PluginPanel
 	{
 		JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
 		panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+		javax.swing.JButton setGoalButton = new javax.swing.JButton("Set skill goal");
+		setGoalButton.setFont(FontManager.getRunescapeSmallFont());
+		setGoalButton.setToolTipText("Choose a skill and level without needing to right-click it in-game.");
+		setGoalButton.addActionListener(e -> promptSkillPickerThenGoalDialog());
+		panel.add(setGoalButton);
 
 		javax.swing.JButton summaryButton = new javax.swing.JButton("Session summary");
 		summaryButton.setFont(FontManager.getRunescapeSmallFont());
@@ -167,6 +192,64 @@ public class CombatXpTrackerPanel extends PluginPanel
 		panel.add(resetButton);
 
 		return panel;
+	}
+
+	/**
+	 * Lets the player choose a skill and set a goal level without right-clicking it in
+	 * the in-game stats tab -- useful for setting up goals before starting a session, or
+	 * for a skill whose icon isn't currently visible.
+	 *
+	 * Shows a skill picker first, then hands off to promptGoalLevelDialog(Skill) for the
+	 * actual level input, so both entry points (this button and the right-click menu)
+	 * share the exact same validation, saving, and refresh behavior rather than
+	 * duplicating that logic.
+	 */
+	private void promptSkillPickerThenGoalDialog()
+	{
+		Skill[] pickableSkills = java.util.Arrays.stream(Skill.values())
+			.filter(s -> s != Skill.OVERALL)
+			.toArray(Skill[]::new);
+
+		JComboBox<Skill> skillCombo = new JComboBox<>(pickableSkills);
+		skillCombo.setRenderer(new javax.swing.DefaultListCellRenderer()
+		{
+			@Override
+			public java.awt.Component getListCellRendererComponent(
+				javax.swing.JList<?> list, Object value, int index,
+				boolean isSelected, boolean cellHasFocus)
+			{
+				super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+				if (value instanceof Skill)
+				{
+					Skill skill = (Skill) value;
+					SkillProgress progress = plugin.getSkillProgress().get(skill);
+					boolean alreadyTracked = progress != null && progress.isGoalSet();
+					// Show which skills already have a goal set, so picking from the list
+					// makes it clear whether this will create a new goal or edit one.
+					setText(capitalize(skill.getName()) + (alreadyTracked ? "  (goal set)" : ""));
+				}
+				return this;
+			}
+		});
+
+		int choice = JOptionPane.showConfirmDialog(
+			this,
+			skillCombo,
+			"Choose a skill",
+			JOptionPane.OK_CANCEL_OPTION,
+			JOptionPane.PLAIN_MESSAGE
+		);
+
+		if (choice != JOptionPane.OK_OPTION)
+		{
+			return;
+		}
+
+		Skill selected = (Skill) skillCombo.getSelectedItem();
+		if (selected != null)
+		{
+			promptGoalLevelDialog(selected);
+		}
 	}
 
 	/**
@@ -244,10 +327,11 @@ public class CombatXpTrackerPanel extends PluginPanel
 			}
 			SkillRow row = new SkillRow(skill);
 			skillRows.put(skill, row);
-			skillsContainer.add(row.component);
-			// Note: no separate spacer component here. Spacing lives in the row's own
-			// border, so that hiding an untracked row hides its gap along with it --
-			// separate spacers would leave stacked blank gaps behind.
+			// Deliberately NOT added to skillsContainer here. Rows are added/removed from
+			// the container dynamically in refresh() based on tracking state, rather than
+			// added once and toggled with setVisible(false) -- an invisible component can
+			// still reserve its layout space in BoxLayout even after revalidate(), which
+			// was producing large empty gaps where untracked rows used to sit.
 		}
 	}
 
@@ -312,18 +396,45 @@ public class CombatXpTrackerPanel extends PluginPanel
 		updateDamageLabels();
 
 		int visibleCount = 0;
-		for (Map.Entry<Skill, SkillRow> entry : skillRows.entrySet())
+		int insertIndex = 0;
+		for (Skill skill : Skill.values())
 		{
-			SkillProgress progress = plugin.getSkillProgress().get(entry.getKey());
-			boolean tracked = progress != null && progress.isGoalSet();
+			if (skill == Skill.OVERALL)
+			{
+				continue;
+			}
 
-			// Tracking is opt-in: only skills with a goal appear. This is what keeps the
-			// panel to the two or three skills you care about instead of all 23.
-			entry.getValue().component.setVisible(tracked);
+			SkillRow row = skillRows.get(skill);
+			if (row == null)
+			{
+				continue;
+			}
+
+			SkillProgress progress = plugin.getSkillProgress().get(skill);
+			boolean tracked = progress != null && progress.isGoalSet();
+			boolean currentlyInContainer = row.component.getParent() == skillsContainer;
+
+			// Tracking is opt-in: only skills with a goal appear. Rows are physically
+			// added/removed here rather than shown/hidden with setVisible(), since an
+			// invisible BoxLayout child can still reserve its layout space even after
+			// revalidate() -- that was producing large empty gaps in the panel.
+			//
+			// Inserted at insertIndex rather than appended: JPanel.add(component) with no
+			// index always appends to the end, so a row re-added after being untracked
+			// and re-tracked would otherwise land at the bottom instead of in Skill order.
 			if (tracked)
 			{
+				if (!currentlyInContainer)
+				{
+					skillsContainer.add(row.component, insertIndex);
+				}
+				insertIndex++;
 				visibleCount++;
-				entry.getValue().refresh();
+				row.refresh();
+			}
+			else if (currentlyInContainer)
+			{
+				skillsContainer.remove(row.component);
 			}
 		}
 
@@ -339,6 +450,14 @@ public class CombatXpTrackerPanel extends PluginPanel
 		avgDamageLabel.setText(String.format("Average damage: %.2f", stats.getAverageDamage()));
 		maxHitLabel.setText("Biggest hit: " + stats.getMaxHit());
 		hitCountLabel.setText("Hits recorded: " + stats.getHitCount());
+
+		if (config.showMeleeMaxHit())
+		{
+			int meleeMaxHit = plugin.getMeleeMaxHit();
+			meleeMaxHitLabel.setText(meleeMaxHit >= 0
+				? "Max Hit: " + meleeMaxHit
+				: "Max Hit: no weapon equipped");
+		}
 	}
 
 	private static String capitalize(String s)

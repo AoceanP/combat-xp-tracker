@@ -92,6 +92,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Inject
 	private CombatXpTrackerOverlay overlay;
 
+	@Inject
+	private MeleeMaxHitCalculator meleeMaxHitCalculator;
+
 	// One infobox per goal-tracked skill, so they can be added/removed individually as
 	// goals are set and cleared.
 	private final Map<Skill, GoalInfoBox> infoBoxes = new EnumMap<>(Skill.class);
@@ -630,6 +633,21 @@ public class CombatXpTrackerPlugin extends Plugin
 	public CombinedDropTracker getCombinedDropTracker()
 	{
 		return combinedDropTracker;
+	}
+
+	/**
+	 * @return the calculated melee max hit for the player's current equipment, boosted
+	 * Strength, and active prayer, or -1 if it couldn't be determined (e.g. no weapon
+	 * equipped). See MeleeMaxHitCalculator's class doc for exactly what is and isn't
+	 * accounted for -- this does not yet cover special attacks, Dharok's, Salve/Slayer
+	 * helm conditionals, or several other real bonuses.
+	 */
+	public int getMeleeMaxHit()
+	{
+		MeleeMaxHitCalculator.StyleBonus style = config.assumeAggressiveStyle()
+			? MeleeMaxHitCalculator.StyleBonus.AGGRESSIVE
+			: MeleeMaxHitCalculator.StyleBonus.ACCURATE_OR_DEFENSIVE;
+		return meleeMaxHitCalculator.calculate(style, config.assumeVoidMelee());
 	}
 
 	public SessionSummary getSessionSummary()

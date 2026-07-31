@@ -100,6 +100,40 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showMeleeMaxHit",
+		name = "Show melee max hit",
+		description = "Displays your calculated max melee hit based on equipped weapon, Strength level, and active prayer. "
+			+ "Does NOT yet account for weapon special attacks, Dharok's, Salve amulet, Slayer helm, or several other bonuses -- treat it as an estimate, not an exact figure.",
+		position = 7
+	)
+	default boolean showMeleeMaxHit()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "assumeAggressiveStyle",
+		name = "Assume aggressive attack style",
+		description = "The calculator can't currently detect your selected combat style, so this assumes Aggressive (+3 Strength) when checked, or Accurate/Defensive (+0) when unchecked.",
+		position = 8
+	)
+	default boolean assumeAggressiveStyle()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "assumeVoidMelee",
+		name = "Wearing void melee armour",
+		description = "The calculator can't currently detect your worn armour set, so check this if you're wearing a full void melee set (adds the 10% multiplier).",
+		position = 9
+	)
+	default boolean assumeVoidMelee()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "showCombinedDrop",
 		name = "Show damage on XP drops",
 		description = "When an XP gain and a hit land close together, shows the hit damage alongside the XP drop overlay.",

@@ -82,6 +82,15 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			.right(String.valueOf(hitStats.getMaxHit()))
 			.build());
 
+		if (config.showMeleeMaxHit())
+		{
+			int meleeMaxHit = plugin.getMeleeMaxHit();
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("Max Hit:")
+				.right(meleeMaxHit >= 0 ? String.valueOf(meleeMaxHit) : "-")
+				.build());
+		}
+
 		// Only show skills the player has actually gained XP in recently, so the overlay
 		// doesn't list all 23 skills at all times and crowd the screen.
 		for (Skill skill : Skill.values())
