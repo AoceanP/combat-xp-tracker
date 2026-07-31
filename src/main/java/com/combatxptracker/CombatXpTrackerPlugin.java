@@ -43,7 +43,6 @@ import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.StatChanged;
-import net.runelite.api.gameval.InterfaceID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.events.ConfigChanged;
@@ -422,87 +421,74 @@ public class CombatXpTrackerPlugin extends Plugin
 		requestPanelRefresh();
 	}
 
+	// Matches the skill name embedded in the native stats-tab menu options, e.g.
+	// "View <col=ff981f>Attack</col> guide" or "View <col=ff981f>Attack</col> hiscores".
+	// Confirmed against RuneLite's own XpTrackerPlugin source, which reads the skill name
+	// out of this exact text rather than trying to identify the skill from widget IDs --
+	// this is why two earlier attempts at this feature, both keyed off widget child
+	// indices, never worked: the skill was never coming from the widget at all.
+	private static final java.util.regex.Pattern SKILL_MENU_OPTION_PATTERN =
+		java.util.regex.Pattern.compile("^View\\s+(.+?)\\s+(guide|hiscores)$", java.util.regex.Pattern.CASE_INSENSITIVE);
+	private static final java.util.regex.Pattern TAG_STRIP_PATTERN = java.util.regex.Pattern.compile("<[^>]*>");
+
 	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
 		// Add a "Set goal level" right-click option on skill icons in the stats tab.
 		//
-		// CONFIRMED against the RuneLite CI build (plugin-hub PR #14262) and the official
-		// API Javadoc: MenuEntryAdded exposes getActionParam0()/getActionParam1(), not
-		// getParam0()/getParam1() (that was the old, since-removed method naming still
-		// floating around in some outdated third-party examples) and not getActionParam()
-		// (never existed as a no-arg method at all). Fixed to the confirmed-correct names.
-		//
-		// I also confirmed WidgetInfo.SKILLS_CONTAINER exists in current mainline RuneLite
-		// (it wraps InterfaceID.Stats.UNIVERSE), but the whole WidgetInfo enum is marked
-		// @Deprecated in favor of InterfaceID/gameval constants, so this uses the
-		// underlying InterfaceID.Stats.UNIVERSE constant directly instead.
-		//
-		// CORRECTION: an earlier version of this comment claimed the child-index-to-skill
-		// mapping was "confirmed working in practice" based on a user screenshot. That was
-		// wrong -- the screenshot actually showed the menu WITHOUT this entry, meaning the
-		// feature had never worked. Two attempted fixes (option-text matching, then a
-		// contains() check) both failed. The diagnostic logging below exists to establish
-		// the real widget IDs instead of guessing a third time.
-		//
-		// NOTE ON "Add to canvas": the core (built-in) XP Tracker plugin adds its own
-		// separate "Add to canvas [Skill]" option to this same menu. That text belongs to
-		// net.runelite.client.plugins.xptracker, a different plugin entirely -- this
-		// plugin cannot rename or modify another plugin's menu text.
-		final int actionParam0 = event.getActionParam0();
-		final int actionParam1 = event.getActionParam1();
-
-		if (config.debugMenuLogging())
-		{
-			log.info("[CombatXpTracker] menu option='{}' target='{}' actionParam0={} actionParam1={} "
-					+ "group(param1>>16)={} child(param1&0xFFFF)={} InterfaceID.Stats.UNIVERSE={}",
-				event.getOption(), event.getTarget(), actionParam0, actionParam1,
-				actionParam1 >>> 16, actionParam1 & 0xFFFF, InterfaceID.Stats.UNIVERSE);
-		}
-
-		// Accept a match whether InterfaceID.Stats.UNIVERSE is a bare interface/group ID
-		// or a packed component ID (group << 16 | child). Comparing only the raw values
-		// fails silently if the two are in different forms, which is the most likely
-		// reason this never fired.
-		final int paramGroup = actionParam1 >>> 16;
-		final int statsGroup = InterfaceID.Stats.UNIVERSE >>> 16;
-		final boolean inStatsTab =
-			actionParam1 == InterfaceID.Stats.UNIVERSE
-				|| paramGroup == InterfaceID.Stats.UNIVERSE
-				|| paramGroup == statsGroup;
-
-		if (!inStatsTab)
+		// FIXED: two earlier attempts (exact-match on "View guide", then a contains()
+		// check) both failed because they were built on top of skillFromWidgetChildIndex(),
+		// a hand-built child-index-to-skill lookup table that was never actually
+		// verified against a live client. Checking RuneLite's own XpTrackerPlugin source
+		// showed it doesn't use widget IDs to identify the skill at all -- it reads the
+		// skill's name directly out of the menu option text ("View <col=...>Attack</col>
+		// guide"), which is confirmed correct because it's the technique RuneLite's own
+		// shipping plugin actually uses for this exact problem. Rebuilt on that basis,
+		// with an independent regex and tag-stripping implementation.
+		String option = event.getOption();
+		if (option == null)
 		{
 			return;
 		}
 
-		// Deliberately NOT matching on option text. Two previous attempts keyed off the
-		// menu strings ("View guide", then contains("guide")) and both failed silently.
-		// Being in the stats tab and resolving to a real skill is sufficient, and the
-		// dedupe below stops us adding the entry once per native menu option.
-		Skill skill = skillFromWidgetChildIndex(actionParam0);
-		if (skill == null)
+		String withoutTags = TAG_STRIP_PATTERN.matcher(option).replaceAll("");
+		java.util.regex.Matcher matcher = SKILL_MENU_OPTION_PATTERN.matcher(withoutTags.trim());
+		if (!matcher.matches())
 		{
+			return;
+		}
+
+		Skill skill;
+		try
+		{
+			skill = Skill.valueOf(matcher.group(1).trim().toUpperCase());
+		}
+		catch (IllegalArgumentException e)
+		{
+			// The matched text wasn't a real skill name -- shouldn't normally happen given
+			// the pattern, but fail closed rather than risk a bad enum lookup.
 			if (config.debugMenuLogging())
 			{
-				log.info("[CombatXpTracker] in stats tab but child index {} did not map to a skill", actionParam0);
+				log.info("[CombatXpTracker] option '{}' matched skill pattern but '{}' isn't a known skill",
+					option, matcher.group(1));
 			}
 			return;
 		}
 
-		// MenuEntryAdded fires once per existing native option, so without this we'd add
-		// "Set goal level" several times for a single right-click.
+		if (config.debugMenuLogging())
+		{
+			log.info("[CombatXpTracker] option='{}' -> stripped='{}' -> resolved skill={}",
+				option, withoutTags, skill);
+		}
+
+		// MenuEntryAdded fires once per existing native option ("guide" and "hiscores"
+		// both match), so without this we'd add "Set goal level" twice per right-click.
 		for (MenuEntry entry : client.getMenu().getMenuEntries())
 		{
 			if (SET_GOAL_MENU_OPTION.equals(entry.getOption()))
 			{
 				return;
 			}
-		}
-
-		if (config.debugMenuLogging())
-		{
-			log.info("[CombatXpTracker] adding 'Set goal level' for {}", skill.getName());
 		}
 
 		client.createMenuEntry(-1)
@@ -524,31 +510,6 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 		// Handled via the onClick consumer set in onMenuEntryAdded; nothing further needed here.
-	}
-
-	private Skill skillFromWidgetChildIndex(int childIndex)
-	{
-		// This ordering follows the skills tab's conventional 3-column visual layout
-		// (Attack/Hitpoints/Mining, Strength/Agility/Smithing, ...) as it's appeared in
-		// OSRS for years. It is NOT confirmed against any RuneLite source constant — I
-		// could not verify it against a live client in this environment. Use the Widget
-		// Inspector to confirm before relying on this row-to-skill mapping.
-		Skill[] orderedSkills = {
-			Skill.ATTACK, Skill.HITPOINTS, Skill.MINING,
-			Skill.STRENGTH, Skill.AGILITY, Skill.SMITHING,
-			Skill.DEFENCE, Skill.HERBLORE, Skill.FISHING,
-			Skill.RANGED, Skill.THIEVING, Skill.COOKING,
-			Skill.PRAYER, Skill.CRAFTING, Skill.FIREMAKING,
-			Skill.MAGIC, Skill.FLETCHING, Skill.WOODCUTTING,
-			Skill.RUNECRAFT, Skill.SLAYER, Skill.FARMING,
-			Skill.CONSTRUCTION, Skill.HUNTER
-		};
-
-		if (childIndex < 0 || childIndex >= orderedSkills.length)
-		{
-			return null;
-		}
-		return orderedSkills[childIndex];
 	}
 
 	/**
