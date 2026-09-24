@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,7 +43,7 @@ public class CombinedDropTracker
 	private long lastHitTimestampMillis = -1;
 	private int lastHitDamage = -1;
 
-	public void recordHit(int damage, long nowMillis)
+	public synchronized void recordHit(int damage, long nowMillis)
 	{
 		lastHitTimestampMillis = nowMillis;
 		lastHitDamage = damage;
@@ -54,7 +54,7 @@ public class CombinedDropTracker
 	 * or -1 if no hit is close enough in time to pair with (i.e. this was a pure skilling
 	 * XP drop, like Woodcutting, with no associated combat damage).
 	 */
-	public int getPairedDamage(long nowMillis, int windowMillis)
+	public synchronized int getPairedDamage(long nowMillis, int windowMillis)
 	{
 		if (lastHitTimestampMillis < 0)
 		{
@@ -90,7 +90,7 @@ public class CombinedDropTracker
 		}
 	}
 
-	public void reset()
+	public synchronized void reset()
 	{
 		lastHitTimestampMillis = -1;
 		lastHitDamage = -1;

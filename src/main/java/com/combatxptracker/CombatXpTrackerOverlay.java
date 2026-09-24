@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,6 +27,8 @@ package com.combatxptracker;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.util.Locale;
+import java.util.Map;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -37,13 +39,16 @@ import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
 
 /**
- * On-screen overlay mirroring the sidebar panel's key numbers (average damage, max hit,
- * and each tracked skill's XP/hr + progress to goal) so the info stays visible without
- * needing the panel open, matching the pattern the core XP Tracker plugin uses for its
- * optional canvas overlays.
+ * Optional on-screen overlay with the panel's key numbers: average and biggest hit, max
+ * hit, and each goal's XP/hr and progress.
+ *
+ * Runs every frame, so it only reads values the plugin has already worked out on the
+ * client thread. The max hit is recalculated once per tick, not here.
  */
 public class CombatXpTrackerOverlay extends OverlayPanel
 {
+	private static final Color GOAL_REACHED = new Color(96, 220, 140);
+
 	private final Client client;
 	private final CombatXpTrackerPlugin plugin;
 	private final CombatXpTrackerConfig config;
@@ -66,91 +71,75 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			return null;
 		}
 
-		panelComponent.setPreferredSize(new Dimension(200, 0));
+		panelComponent.setPreferredSize(new Dimension(190, 0));
 		panelComponent.getChildren().add(TitleComponent.builder()
 			.text("Combat & XP Tracker")
-			.color(Color.ORANGE)
+			.color(config.goalBarColor())
 			.build());
 
 		HitStats hitStats = plugin.getHitStats();
 		panelComponent.getChildren().add(LineComponent.builder()
-			.left("Avg damage:")
-			.right(String.format("%.2f", hitStats.getAverageDamage()))
+			.left("Avg hit:")
+			.right(String.format(Locale.US, "%.1f", hitStats.getAverageDamage()))
 			.build());
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left("Biggest hit:")
 			.right(String.valueOf(hitStats.getMaxHit()))
 			.build());
 
-		if (config.showMeleeMaxHit())
+		MeleeMaxHitCalculator.Result maxHit = plugin.getMaxHitResult();
+		if (config.showMeleeMaxHit() && maxHit != null)
 		{
-			int meleeMaxHit = plugin.getMeleeMaxHit();
+			String right = String.valueOf(maxHit.getMaxHit());
+			if (maxHit.isTargetOnTask() && maxHit.getOnTaskMaxHit() >= 0)
+			{
+				right = maxHit.getOnTaskMaxHit() + " (task)";
+			}
 			panelComponent.getChildren().add(LineComponent.builder()
-				.left("Max Hit:")
-				.right(meleeMaxHit >= 0 ? String.valueOf(meleeMaxHit) : "-")
+				.left("Melee max:")
+				.right(right)
+				.rightColor(CombatStyle.MELEE.getColor())
 				.build());
 		}
 
-		// Only show skills the player has actually gained XP in recently, so the overlay
-		// doesn't list all 23 skills at all times and crowd the screen.
-		for (Skill skill : Skill.values())
+		for (Map.Entry<Skill, SkillProgress> entry : plugin.getSkillProgress().entrySet())
 		{
-			if (skill == Skill.OVERALL)
+			Skill skill = entry.getKey();
+			SkillProgress progress = entry.getValue();
+			if (!progress.isGoalSet() || progress.isDismissedFromOverlay())
 			{
 				continue;
 			}
 
-			SkillProgress progress = plugin.getSkillProgress().get(skill);
-
-			// Only goal-tracked skills appear. Previously this filtered on xp/hr > 0,
-			// which meant every skill you'd trained at all showed up -- and when the
-			// login-baseline bug gave every skill a bogus rate, that was all 23 at once.
-			if (progress == null || !progress.isGoalSet() || progress.isDismissedFromOverlay())
-			{
-				continue;
-			}
-
-			int level = progress.getCurrentLevel();
-			int goal = progress.getGoalLevel();
-			boolean goalReached = level >= goal;
-			String rightText = goalReached
+			boolean reached = progress.isGoalReached();
+			String right = reached
 				? "Goal reached!"
-				: String.format("%,d xp/hr (%d%%)", progress.getXpPerHour(), Math.round(progress.getProgressToGoal() * 100));
+				: String.format(Locale.US, "%s/hr (%d%%)",
+					Formatting.compactXp(progress.getXpPerHour()),
+					(int) Math.floor(progress.getProgressToGoal() * 100));
 
-			// If this is a combat skill and a hit landed close enough in time to this
-			// skill's most recent XP gain, append the paired damage. This is a best-effort
-			// timing correlation, not a guaranteed causal link -- see CombinedDropTracker's
-			// class doc for why (RuneLite doesn't expose which hit caused which XP drop).
-			if (config.showCombinedDrop() && CombinedDropTracker.isCombatSkill(skill))
+			// Best-effort pairing of this skill's latest XP drop with a hit that landed at
+			// about the same time. The game doesn't say which hit caused which drop.
+			if (!reached && config.showCombinedDrop() && CombinedDropTracker.isCombatSkill(skill))
 			{
 				long lastUpdate = progress.getLastUpdateMillis();
 				if (lastUpdate >= 0)
 				{
-					int pairedDamage = plugin.getCombinedDropTracker()
-						.getPairedDamage(lastUpdate, config.combinedDropWindowMillis());
-					if (pairedDamage >= 0)
+					int paired = plugin.getCombinedDropTracker().getPairedDamage(lastUpdate, config.combinedDropWindowMillis());
+					if (paired >= 0)
 					{
-						rightText += " (hit: " + pairedDamage + ")";
+						right += " hit " + paired;
 					}
 				}
 			}
 
 			panelComponent.getChildren().add(LineComponent.builder()
-				.left(capitalize(skill.getName()) + ":")
-				.right(rightText)
-				.rightColor(goalReached ? Color.GREEN : Color.WHITE)
+				.left(Formatting.capitalize(skill.getName()) + ":")
+				.right(right)
+				.rightColor(reached ? GOAL_REACHED : Color.WHITE)
 				.build());
 		}
 
 		return super.render(graphics);
-	}
-
-	private static String capitalize(String s)
-	{
-		if (s == null || s.isEmpty())
-		{
-			return s;
-		}
-		return s.substring(0, 1).toUpperCase() + s.substring(1).toLowerCase();
 	}
 }

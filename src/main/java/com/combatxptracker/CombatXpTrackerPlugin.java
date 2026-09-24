@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,11 +27,17 @@ package com.combatxptracker;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.MenuAction;
@@ -39,14 +45,17 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Skill;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.MenuEntryAdded;
-import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
-import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.NpcLootReceived;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.ItemStack;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -55,16 +64,37 @@ import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.ImageUtil;
-import lombok.extern.slf4j.Slf4j;
+import net.runelite.client.util.Text;
 
-@Slf4j
 @PluginDescriptor(
 	name = "Combat & XP Tracker",
-	description = "Tracks average damage, biggest hit, and XP/hr for the skills you set goals on",
-	tags = {"combat", "damage", "dps", "xp", "experience", "tracker", "goals"}
+	description = "Skill goals with XP/hr, damage and max hit tracking, and per-monster hits and drops",
+	tags = {"combat", "damage", "dps", "xp", "experience", "tracker", "goals", "loot", "max hit", "slayer"}
 )
 public class CombatXpTrackerPlugin extends Plugin
 {
+	private static final String GOAL_KEY_PREFIX = "goal.";
+	private static final String GOAL_START_KEY_PREFIX = "goalstart.";
+	private static final String COLOR_KEY_PREFIX = "color.";
+	private static final String SET_GOAL_MENU_OPTION = "Set goal";
+
+	/**
+	 * The largest XP gain accepted from one StatChanged event. Anything bigger means the
+	 * previous value was a bad baseline (e.g. a 0 from before login), not a real gain.
+	 */
+	private static final int MAX_PLAUSIBLE_XP_DELTA = 200_000;
+
+	/**
+	 * How many ticks an XP drop's combat style is trusted for when labelling hits. Long
+	 * enough to cover a slow ranged or magic projectile landing after the XP drop.
+	 */
+	private static final int XP_STYLE_MEMORY_TICKS = 10;
+
+	// Skill name embedded in the stats tab's own menu options, e.g.
+	// "View <col=ff981f>Attack</col> guide". The core XP Tracker reads it the same way.
+	private static final Pattern SKILL_MENU_OPTION_PATTERN =
+		Pattern.compile("^View\\s+(.+?)\\s+(guide|hiscores)$", Pattern.CASE_INSENSITIVE);
+
 	@Inject
 	private Client client;
 
@@ -81,6 +111,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	private SkillIconManager skillIconManager;
 
 	@Inject
+	private ItemManager itemManager;
+
+	@Inject
 	private ConfigManager configManager;
 
 	@Inject
@@ -95,29 +128,24 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Inject
 	private MeleeMaxHitCalculator meleeMaxHitCalculator;
 
-	// One infobox per goal-tracked skill, so they can be added/removed individually as
-	// goals are set and cleared.
+	private final Map<Skill, SkillProgress> skillProgress = new EnumMap<>(Skill.class);
 	private final Map<Skill, GoalInfoBox> infoBoxes = new EnumMap<>(Skill.class);
-
-	// Panel refreshes are throttled: hitsplats and XP drops both fire many times per
-	// second in combat, and rebuilding every skill row on each one made the whole panel
-	// visibly flicker. We coalesce those into at most one refresh per interval.
-	private static final long PANEL_REFRESH_INTERVAL_MS = 600;
-	private long lastPanelRefreshMillis = 0;
-	private boolean panelRefreshPending = false;
+	private final HitStats hitStats = new HitStats();
+	private final CombinedDropTracker combinedDropTracker = new CombinedDropTracker();
+	private final MonsterTracker monsterTracker = new MonsterTracker();
 
 	private CombatXpTrackerPanel panel;
 	private NavigationButton navButton;
 
-	private final Map<Skill, SkillProgress> skillProgress = new EnumMap<>(Skill.class);
-	private final HitStats hitStats = new HitStats();
-	private final CombinedDropTracker combinedDropTracker = new CombinedDropTracker();
-	private final SessionSummary sessionSummary = new SessionSummary();
+	// Client-thread only.
+	private boolean panelDirty;
+	private CombatStyle.AttackStyle attackStyle;
+	private CombatStyle lastXpStyle;
+	private int lastXpStyleTick;
+	private String maxHitKey;
 
-	private static final String CONFIG_GROUP = "combatxptracker";
-	private static final String GOAL_KEY_PREFIX = "goal.";
-	private static final String COLOR_KEY_PREFIX = "color.";
-	private static final String SET_GOAL_MENU_OPTION = "Set goal level";
+	// Written on the client thread, read by the panel and overlay.
+	private volatile MeleeMaxHitCalculator.Result maxHitResult;
 
 	@Provides
 	CombatXpTrackerConfig provideConfig(ConfigManager configManager)
@@ -128,30 +156,20 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
-		// Create a SkillProgress for every skill, but only mark as goal-tracked the ones
-		// with a previously saved goal. Deliberately NOT seeding XP here: at the login
-		// screen client.getSkillExperience() returns 0 for everything, and storing that
-		// zero as a baseline is what produced rates like "295,554,650 xp/hr". Real
-		// baselines are established in onGameStateChanged when we reach LOGGED_IN.
 		for (Skill skill : Skill.values())
 		{
-			if (skill == Skill.OVERALL)
-			{
-				continue;
-			}
 			SkillProgress progress = new SkillProgress();
-			Integer savedGoal = loadSavedGoalLevel(skill);
-			if (savedGoal != null)
+			Goal goal = Goal.deserialize(configManager.getConfiguration(CombatXpTrackerConfig.GROUP, GOAL_KEY_PREFIX + skill.getName()));
+			if (goal != null)
 			{
-				progress.restoreSavedGoal(savedGoal);
+				progress.setGoal(goal, loadGoalStart(skill));
 			}
 			skillProgress.put(skill, progress);
 		}
 
-		panel = new CombatXpTrackerPanel(this, config, skillIconManager);
+		panel = new CombatXpTrackerPanel(this, config, skillIconManager, itemManager);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/com/combatxptracker/icon.png");
-
 		navButton = NavigationButton.builder()
 			.tooltip("Combat & XP Tracker")
 			.icon(icon)
@@ -161,14 +179,12 @@ public class CombatXpTrackerPlugin extends Plugin
 
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
-
 		syncInfoBoxes();
 
-		// If the plugin is toggled on while already logged in, GameStateChanged won't
-		// fire, so baseline immediately in that case.
+		// Turned on while already logged in: GameStateChanged won't fire, so baseline now.
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
-			clientThread.invokeLater(this::rebaselineAllSkills);
+			clientThread.invokeLater(this::onLoggedIn);
 		}
 	}
 
@@ -181,40 +197,299 @@ public class CombatXpTrackerPlugin extends Plugin
 		skillProgress.clear();
 		hitStats.reset();
 		combinedDropTracker.reset();
-		sessionSummary.reset();
+		monsterTracker.reset();
+		maxHitResult = null;
+		maxHitKey = null;
+		attackStyle = null;
+		lastXpStyle = null;
+		panelDirty = false;
+		panel = null;
+		navButton = null;
 	}
 
-	/**
-	 * Throws away any accumulated XP samples and re-seeds every skill from the real,
-	 * logged-in values. Called on login so a stale or zeroed baseline can never leak into
-	 * the rate calculation.
-	 */
-	private void rebaselineAllSkills()
+	// ---- Events ------------------------------------------------------------------
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		GameState state = event.getGameState();
+		if (state == GameState.LOGGED_IN)
+		{
+			// Deferred so the client's skill values are populated first.
+			clientThread.invokeLater(this::onLoggedIn);
+		}
+		else if (state == GameState.LOGIN_SCREEN)
+		{
+			// Drop samples so offline time never counts as training time.
+			for (SkillProgress progress : skillProgress.values())
+			{
+				progress.reset();
+			}
+			if (config.resetHitsOnLogout())
+			{
+				hitStats.reset();
+				combinedDropTracker.reset();
+				monsterTracker.reset();
+			}
+			refreshPanelNow();
+		}
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!CombatXpTrackerConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+		if ("showInfobox".equals(event.getKey()))
+		{
+			syncInfoBoxes();
+		}
+		refreshPanelNow();
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick tick)
+	{
+		refreshCombatState();
+		// Panel updates are batched to at most one per tick. Hitsplats and XP drops can
+		// fire several times a tick in combat, and refreshing on each made the panel flicker.
+		if (panelDirty)
+		{
+			panelDirty = false;
+			refreshPanelNow();
+		}
+	}
+
+	@Subscribe
+	public void onStatChanged(StatChanged event)
+	{
+		Skill skill = event.getSkill();
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+
+		SkillProgress progress = skillProgress.get(skill);
+		if (progress == null)
+		{
+			return;
+		}
+
+		boolean hadBaseline = progress.hasRecordedSample();
+		int xp = event.getXp();
+		int delta = xp - progress.getCurrentXp();
+
+		if (hadBaseline && delta > MAX_PLAUSIBLE_XP_DELTA)
+		{
+			// Implausible jump: treat as a baseline correction, not a gain.
+			progress.resetBaseline(xp, System.currentTimeMillis());
+			panelDirty = true;
+			return;
+		}
+
+		progress.recordXp(xp, System.currentTimeMillis(), config.xpHrIntervalSeconds());
+		ensureGoalStart(skill, progress);
+
+		if (hadBaseline && delta > 0)
+		{
+			CombatStyle style = CombatStyle.fromXpSkill(skill);
+			if (style != null)
+			{
+				lastXpStyle = style;
+				lastXpStyleTick = client.getTickCount();
+			}
+		}
+
+		panelDirty = true;
+	}
+
+	@Subscribe
+	public void onHitsplatApplied(HitsplatApplied event)
+	{
+		// Only damage the local player dealt. isMine() covers every "_ME" hitsplat,
+		// including blocked 0s, whether the target is an NPC or a player.
+		Hitsplat hitsplat = event.getHitsplat();
+		if (!hitsplat.isMine())
+		{
+			return;
+		}
+
+		int damage = hitsplat.getAmount();
+		if (damage == 0 && !config.showZeroHits())
+		{
+			return;
+		}
+
+		long now = System.currentTimeMillis();
+		hitStats.recordHit(damage);
+		combinedDropTracker.recordHit(damage, now);
+
+		Actor target = event.getActor();
+		if (target instanceof NPC)
+		{
+			monsterTracker.recordHit(cleanName(target.getName()), damage, resolveHitStyle(), now);
+		}
+
+		panelDirty = true;
+	}
+
+	@Subscribe
+	public void onNpcLootReceived(NpcLootReceived event)
+	{
+		NPC npc = event.getNpc();
+		String name = npc == null ? null : cleanName(npc.getName());
+		if (name == null)
+		{
+			return;
+		}
+
+		List<MonsterTracker.Drop> drops = new ArrayList<>();
+		if (config.trackMonsterLoot())
+		{
+			for (ItemStack stack : event.getItems())
+			{
+				// Canonicalize so noted drops are priced and stacked as the normal item.
+				int id = itemManager.canonicalize(stack.getId());
+				String itemName = itemManager.getItemComposition(id).getName();
+				drops.add(new MonsterTracker.Drop(id, itemName, stack.getQuantity(), itemManager.getItemPrice(id)));
+			}
+		}
+		monsterTracker.recordKill(name, drops, System.currentTimeMillis());
+		panelDirty = true;
+	}
+
+	@Subscribe
+	public void onMenuEntryAdded(MenuEntryAdded event)
+	{
+		// Adds "Set goal" to a skill's right-click menu in the stats tab. It only opens
+		// this plugin's dialog; nothing is sent to the game server.
+		String option = event.getOption();
+		if (option == null)
+		{
+			return;
+		}
+
+		Matcher matcher = SKILL_MENU_OPTION_PATTERN.matcher(Text.removeTags(option).trim());
+		if (!matcher.matches())
+		{
+			return;
+		}
+
+		Skill skill;
+		try
+		{
+			skill = Skill.valueOf(matcher.group(1).trim().toUpperCase());
+		}
+		catch (IllegalArgumentException e)
+		{
+			return;
+		}
+
+		// "guide" and "hiscores" both match, so only add the entry once.
+		for (MenuEntry entry : client.getMenu().getMenuEntries())
+		{
+			if (SET_GOAL_MENU_OPTION.equals(entry.getOption()))
+			{
+				return;
+			}
+		}
+
+		client.getMenu().createMenuEntry(-1)
+			.setOption(SET_GOAL_MENU_OPTION)
+			.setTarget(event.getTarget())
+			.setType(MenuAction.RUNELITE)
+			.onClick(e -> SwingUtilities.invokeLater(() ->
+			{
+				CombatXpTrackerPanel p = panel;
+				if (p != null)
+				{
+					p.promptGoalDialog(skill);
+				}
+			}));
+	}
+
+	// ---- Client-thread helpers -------------------------------------------------
+
+	private void onLoggedIn()
 	{
 		long now = System.currentTimeMillis();
-		for (Skill skill : Skill.values())
+		for (Map.Entry<Skill, SkillProgress> entry : skillProgress.entrySet())
 		{
-			if (skill == Skill.OVERALL)
-			{
-				continue;
-			}
-			SkillProgress progress = skillProgress.get(skill);
-			if (progress == null)
-			{
-				continue;
-			}
-			progress.resetBaseline(
-				client.getSkillExperience(skill),
-				client.getRealSkillLevel(skill),
-				now);
+			SkillProgress progress = entry.getValue();
+			progress.resetBaseline(client.getSkillExperience(entry.getKey()), now);
+			ensureGoalStart(entry.getKey(), progress);
 		}
-		requestPanelRefresh();
+		refreshCombatState();
+		refreshPanelNow();
 	}
 
 	/**
-	 * Adds an infobox for every goal-tracked skill and removes them for skills that are
-	 * no longer tracked, so the set on screen always matches the set of active goals.
+	 * Goals saved by 1.3.x have no start XP. Give them one the first time real XP is
+	 * known: the start of the current level, so the bar isn't empty right after updating.
 	 */
+	private void ensureGoalStart(Skill skill, SkillProgress progress)
+	{
+		if (!progress.isGoalSet() || progress.getGoalStartXp() >= 0 || !progress.isXpKnown())
+		{
+			return;
+		}
+		int xp = progress.getCurrentXp();
+		int start = Math.min(xp, Experience.getXpForLevel(Experience.getLevelForXp(xp)));
+		progress.setGoalStartXp(start);
+		saveGoalStart(skill, start);
+	}
+
+	private void refreshCombatState()
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+
+		attackStyle = meleeMaxHitCalculator.readAttackStyle();
+		if (!config.showMeleeMaxHit())
+		{
+			return;
+		}
+
+		// Recalculated once per tick rather than per frame in the overlay. Gear, prayers,
+		// boosts, style and task can all change between ticks, but not within one.
+		MeleeMaxHitCalculator.Result result = meleeMaxHitCalculator.calculate(
+			attackStyle, meleeMaxHitCalculator.readSlayerTaskName());
+		String key = result == null ? null : result.toString();
+		if (key != null && !key.equals(maxHitKey))
+		{
+			maxHitKey = key;
+			maxHitResult = result;
+			panelDirty = true;
+		}
+	}
+
+	/**
+	 * The style a hit came from: the latest combat XP drop if it was recent (this catches
+	 * spells cast manually while holding a melee weapon), otherwise the selected style.
+	 */
+	private CombatStyle resolveHitStyle()
+	{
+		if (lastXpStyle != null && client.getTickCount() - lastXpStyleTick <= XP_STYLE_MEMORY_TICKS)
+		{
+			return lastXpStyle;
+		}
+		return attackStyle != null ? attackStyle.getStyle() : null;
+	}
+
+	private static String cleanName(String name)
+	{
+		if (name == null)
+		{
+			return null;
+		}
+		String cleaned = Text.removeTags(name).replace(' ', ' ').trim();
+		return cleaned.isEmpty() ? null : cleaned;
+	}
+
 	private void syncInfoBoxes()
 	{
 		if (!config.showInfobox())
@@ -228,11 +503,9 @@ public class CombatXpTrackerPlugin extends Plugin
 			Skill skill = entry.getKey();
 			boolean shouldShow = entry.getValue().isGoalSet();
 			boolean isShowing = infoBoxes.containsKey(skill);
-
 			if (shouldShow && !isShowing)
 			{
-				BufferedImage skillImage = skillIconManager.getSkillImage(skill, true);
-				GoalInfoBox box = new GoalInfoBox(skillImage, this, skill);
+				GoalInfoBox box = new GoalInfoBox(skillIconManager.getSkillImage(skill, true), this, skill);
 				infoBoxes.put(skill, box);
 				infoBoxManager.addInfoBox(box);
 			}
@@ -252,324 +525,88 @@ public class CombatXpTrackerPlugin extends Plugin
 		infoBoxes.clear();
 	}
 
-	/**
-	 * Requests a panel refresh, coalescing rapid-fire requests into at most one per
-	 * PANEL_REFRESH_INTERVAL_MS. In combat, hitsplat and XP events can each fire several
-	 * times per second; refreshing on every one of them rebuilt all the skill rows
-	 * constantly and made the panel visibly flicker.
-	 */
-	private void requestPanelRefresh()
+	private void refreshPanelNow()
 	{
-		if (panel == null)
+		CombatXpTrackerPanel p = panel;
+		if (p != null)
 		{
-			return;
-		}
-
-		long now = System.currentTimeMillis();
-		if (now - lastPanelRefreshMillis >= PANEL_REFRESH_INTERVAL_MS)
-		{
-			lastPanelRefreshMillis = now;
-			panelRefreshPending = false;
-			SwingUtilities.invokeLater(panel::refresh);
-			return;
-		}
-
-		// Too soon: schedule one trailing refresh so the final state isn't lost, but
-		// don't stack up more than one pending.
-		if (!panelRefreshPending)
-		{
-			panelRefreshPending = true;
-			long delay = PANEL_REFRESH_INTERVAL_MS - (now - lastPanelRefreshMillis);
-			javax.swing.Timer trailing = new javax.swing.Timer((int) delay, e ->
-			{
-				lastPanelRefreshMillis = System.currentTimeMillis();
-				panelRefreshPending = false;
-				panel.refresh();
-			});
-			trailing.setRepeats(false);
-			trailing.start();
+			SwingUtilities.invokeLater(p::refresh);
 		}
 	}
+
+	// ---- Called from the panel (Swing thread) -----------------------------------
 
 	/**
-	 * The largest XP gain we'll accept from a single StatChanged event. The biggest
-	 * legitimate single drop in OSRS is far below this; anything larger means we were
-	 * comparing against a bad baseline (typically a zero captured before login) rather
-	 * than seeing a real gain, so it's discarded instead of poisoning the rate and the
-	 * session total.
+	 * Sets a goal. Its progress bar starts from the player's XP right now.
 	 */
-	private static final int MAX_PLAUSIBLE_XP_DELTA = 200_000;
-
-	@Subscribe
-	public void onConfigChanged(ConfigChanged event)
+	public void setGoal(Skill skill, Goal goal)
 	{
-		if (!CONFIG_GROUP.equals(event.getGroup()))
+		clientThread.invokeLater(() ->
 		{
-			return;
-		}
-		if ("showInfobox".equals(event.getKey()))
-		{
-			syncInfoBoxes();
-		}
-		requestPanelRefresh();
-	}
-
-	@Subscribe
-	public void onGameStateChanged(GameStateChanged event)
-	{
-		GameState state = event.getGameState();
-
-		if (state == GameState.LOGGED_IN)
-		{
-			// Re-seed every skill from real values. This is the fix for XP/hr showing
-			// hundreds of millions: without it, the zero baseline captured before login
-			// gets compared against the player's full lifetime XP.
-			clientThread.invokeLater(this::rebaselineAllSkills);
-		}
-		else if (state == GameState.LOGIN_SCREEN)
-		{
-			// Drop stale samples so a logout->login cycle can't span the gap and count
-			// the offline time as training time.
-			for (SkillProgress progress : skillProgress.values())
-			{
-				progress.reset();
-			}
-
-			if (config.resetHitsOnLogout())
-			{
-				hitStats.reset();
-				combinedDropTracker.reset();
-			}
-			requestPanelRefresh();
-		}
-	}
-
-	@Subscribe
-	public void onStatChanged(StatChanged event)
-	{
-		Skill skill = event.getSkill();
-		if (skill == Skill.OVERALL)
-		{
-			return;
-		}
-
-		// Ignore XP events that arrive before we're properly logged in -- their values
-		// aren't trustworthy and they're what corrupted the baseline previously.
-		if (client.getGameState() != GameState.LOGGED_IN)
-		{
-			return;
-		}
-
-		SkillProgress progress = skillProgress.computeIfAbsent(skill, s -> new SkillProgress());
-		boolean hadBaseline = progress.hasRecordedSample();
-		int previousXp = progress.getCurrentXp();
-		int delta = event.getXp() - previousXp;
-
-		if (hadBaseline && delta > MAX_PLAUSIBLE_XP_DELTA)
-		{
-			// Implausible jump: treat it as a baseline correction, not a gain. Reset the
-			// baseline to this value so subsequent rates are computed from solid ground.
-			progress.resetBaseline(event.getXp(), event.getLevel(), System.currentTimeMillis());
-			requestPanelRefresh();
-			return;
-		}
-
-		progress.recordXp(event.getXp(), event.getLevel(), System.currentTimeMillis(), config.xpHrIntervalSeconds());
-
-		if (hadBaseline && delta > 0)
-		{
-			sessionSummary.recordXpGain(skill, delta);
-		}
-
-		requestPanelRefresh();
-	}
-
-	@Subscribe
-	public void onHitsplatApplied(HitsplatApplied event)
-	{
-		// Damage the local player DEALS lands on the target (an NPC in almost all PvM
-		// cases, or another Player in PvP) and is tagged with a "_ME" hitsplat type.
-		// Damage the local player TAKES lands directly on the player actor instead.
-		// We only want damage dealt BY the player, and we want it whether the target
-		// is an NPC or a Player, so we key off Hitsplat.isMine() rather than the actor's type.
-		// isMine() correctly includes BLOCK_ME (a blocked/0-damage hit is still "my" hit)
-		// alongside all DAMAGE_ME/DAMAGE_MAX_ME color variants.
-		Hitsplat hitsplat = event.getHitsplat();
-		if (!hitsplat.isMine())
-		{
-			return;
-		}
-
-		int damage = hitsplat.getAmount();
-		if (damage == 0 && !config.showZeroHits())
-		{
-			return;
-		}
-
-		hitStats.recordHit(damage);
-		combinedDropTracker.recordHit(damage, System.currentTimeMillis());
-
-		// Determine the monster name for the session summary's "biggest hit" readout, if
-		// the hit landed on a named NPC. Confirmed pattern (Actor instanceof NPC, then
-		// getName()) matches real core plugins (CorpPlugin, IdleNotifierPlugin).
-		// Actor.getName() is @Nullable per its own Javadoc, so this can legitimately be
-		// null (unnamed NPC, or a player target) -- recorded as-is rather than guessed at.
-		String monsterName = null;
-		if (event.getActor() instanceof NPC)
-		{
-			monsterName = event.getActor().getName();
-		}
-		sessionSummary.recordHit(damage, monsterName);
-
-		requestPanelRefresh();
-	}
-
-	// Matches the skill name embedded in the native stats-tab menu options, e.g.
-	// "View <col=ff981f>Attack</col> guide" or "View <col=ff981f>Attack</col> hiscores".
-	// Confirmed against RuneLite's own XpTrackerPlugin source, which reads the skill name
-	// out of this exact text rather than trying to identify the skill from widget IDs --
-	// this is why two earlier attempts at this feature, both keyed off widget child
-	// indices, never worked: the skill was never coming from the widget at all.
-	private static final java.util.regex.Pattern SKILL_MENU_OPTION_PATTERN =
-		java.util.regex.Pattern.compile("^View\\s+(.+?)\\s+(guide|hiscores)$", java.util.regex.Pattern.CASE_INSENSITIVE);
-	private static final java.util.regex.Pattern TAG_STRIP_PATTERN = java.util.regex.Pattern.compile("<[^>]*>");
-
-	@Subscribe
-	public void onMenuEntryAdded(MenuEntryAdded event)
-	{
-		// Add a "Set goal level" right-click option on skill icons in the stats tab.
-		//
-		// FIXED: two earlier attempts (exact-match on "View guide", then a contains()
-		// check) both failed because they were built on top of skillFromWidgetChildIndex(),
-		// a hand-built child-index-to-skill lookup table that was never actually
-		// verified against a live client. Checking RuneLite's own XpTrackerPlugin source
-		// showed it doesn't use widget IDs to identify the skill at all -- it reads the
-		// skill's name directly out of the menu option text ("View <col=...>Attack</col>
-		// guide"), which is confirmed correct because it's the technique RuneLite's own
-		// shipping plugin actually uses for this exact problem. Rebuilt on that basis,
-		// with an independent regex and tag-stripping implementation.
-		String option = event.getOption();
-		if (option == null)
-		{
-			return;
-		}
-
-		String withoutTags = TAG_STRIP_PATTERN.matcher(option).replaceAll("");
-		java.util.regex.Matcher matcher = SKILL_MENU_OPTION_PATTERN.matcher(withoutTags.trim());
-		if (!matcher.matches())
-		{
-			return;
-		}
-
-		Skill skill;
-		try
-		{
-			skill = Skill.valueOf(matcher.group(1).trim().toUpperCase());
-		}
-		catch (IllegalArgumentException e)
-		{
-			// The matched text wasn't a real skill name -- shouldn't normally happen given
-			// the pattern, but fail closed rather than risk a bad enum lookup.
-			if (config.debugMenuLogging())
-			{
-				log.info("[CombatXpTracker] option '{}' matched skill pattern but '{}' isn't a known skill",
-					option, matcher.group(1));
-			}
-			return;
-		}
-
-		if (config.debugMenuLogging())
-		{
-			log.info("[CombatXpTracker] option='{}' -> stripped='{}' -> resolved skill={}",
-				option, withoutTags, skill);
-		}
-
-		// MenuEntryAdded fires once per existing native option ("guide" and "hiscores"
-		// both match), so without this we'd add "Set goal level" twice per right-click.
-		for (MenuEntry entry : client.getMenu().getMenuEntries())
-		{
-			if (SET_GOAL_MENU_OPTION.equals(entry.getOption()))
+			SkillProgress progress = skillProgress.get(skill);
+			if (progress == null)
 			{
 				return;
 			}
-		}
-
-		client.createMenuEntry(-1)
-			.setOption(SET_GOAL_MENU_OPTION)
-			.setTarget(event.getTarget())
-			.setType(MenuAction.RUNELITE)
-			.onClick(e -> promptSetGoalLevel(skill));
+			int start = progress.isXpKnown() ? progress.getCurrentXp() : -1;
+			progress.setGoal(goal, start);
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, GOAL_KEY_PREFIX + skill.getName(), goal.serialize());
+			if (start >= 0)
+			{
+				saveGoalStart(skill, start);
+			}
+			else
+			{
+				configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, GOAL_START_KEY_PREFIX + skill.getName());
+			}
+			syncInfoBoxes();
+			refreshPanelNow();
+		});
 	}
 
-	@Subscribe
-	public void onMenuOptionClicked(MenuOptionClicked event)
-	{
-		if (event.getMenuAction() != MenuAction.RUNELITE)
-		{
-			return;
-		}
-		if (!SET_GOAL_MENU_OPTION.equals(event.getMenuOption()))
-		{
-			return;
-		}
-		// Handled via the onClick consumer set in onMenuEntryAdded; nothing further needed here.
-	}
-
-	/**
-	 * Opens a lightweight prompt for the user to type a goal level for the given skill.
-	 * The actual input dialog lives in the panel/UI layer since it needs Swing access.
-	 */
-	private void promptSetGoalLevel(Skill skill)
-	{
-		SwingUtilities.invokeLater(() -> panel.promptGoalLevelDialog(skill));
-	}
-
-	public void setGoalLevel(Skill skill, int level)
-	{
-		SkillProgress progress = skillProgress.computeIfAbsent(skill, s -> new SkillProgress());
-		progress.setGoalLevel(level);
-		saveGoalLevel(skill, level);
-
-		// A newly goal-tracked skill starts from now, not from whatever stale samples
-		// happen to be sitting in the deque.
-		if (client.getGameState() == GameState.LOGGED_IN)
-		{
-			clientThread.invokeLater(() -> progress.resetBaseline(
-				client.getSkillExperience(skill),
-				client.getRealSkillLevel(skill),
-				System.currentTimeMillis()));
-		}
-
-		syncInfoBoxes();
-		requestPanelRefresh();
-	}
-
-	/**
-	 * Stops tracking a skill: removes its goal, its saved config entry, and its infobox.
-	 */
 	public void clearGoal(Skill skill)
 	{
-		SkillProgress progress = skillProgress.get(skill);
-		if (progress != null)
+		clientThread.invokeLater(() ->
 		{
-			progress.clearGoal();
-		}
-		configManager.unsetConfiguration(CONFIG_GROUP, GOAL_KEY_PREFIX + skill.getName());
-		syncInfoBoxes();
-		requestPanelRefresh();
+			SkillProgress progress = skillProgress.get(skill);
+			if (progress != null)
+			{
+				progress.clearGoal();
+			}
+			configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, GOAL_KEY_PREFIX + skill.getName());
+			configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, GOAL_START_KEY_PREFIX + skill.getName());
+			syncInfoBoxes();
+			refreshPanelNow();
+		});
 	}
 
 	/**
-	 * @return the saved goal level for this skill, or null if the player has never set
-	 * one. Null is meaningful here: it's what keeps an untouched skill out of the panel
-	 * and overlay entirely, rather than silently defaulting everything to 99.
+	 * Clears damage stats, monsters and XP rates. Goals and colours are kept.
 	 */
-	private Integer loadSavedGoalLevel(Skill skill)
+	public void resetTracker()
 	{
-		String stored = configManager.getConfiguration(CONFIG_GROUP, GOAL_KEY_PREFIX + skill.getName());
+		hitStats.reset();
+		combinedDropTracker.reset();
+		monsterTracker.reset();
+		for (SkillProgress progress : skillProgress.values())
+		{
+			progress.resetSession();
+		}
+		refreshPanelNow();
+	}
+
+	public void removeMonster(String name)
+	{
+		monsterTracker.remove(name);
+		refreshPanelNow();
+	}
+
+	private int loadGoalStart(Skill skill)
+	{
+		String stored = configManager.getConfiguration(CombatXpTrackerConfig.GROUP, GOAL_START_KEY_PREFIX + skill.getName());
 		if (stored == null)
 		{
-			return null;
+			return -1;
 		}
 		try
 		{
@@ -577,22 +614,21 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		catch (NumberFormatException e)
 		{
-			return null;
+			return -1;
 		}
 	}
 
-	private void saveGoalLevel(Skill skill, int level)
+	private void saveGoalStart(Skill skill, int startXp)
 	{
-		configManager.setConfiguration(CONFIG_GROUP, GOAL_KEY_PREFIX + skill.getName(), String.valueOf(level));
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, GOAL_START_KEY_PREFIX + skill.getName(), String.valueOf(startXp));
 	}
 
 	/**
-	 * Returns the user's saved color for a skill's row in the panel, or null if they
-	 * haven't set one (in which case the panel falls back to its default styling).
+	 * @return the player's chosen bar colour for this skill, or null for the default
 	 */
 	public Color getSkillColor(Skill skill)
 	{
-		String stored = configManager.getConfiguration(CONFIG_GROUP, COLOR_KEY_PREFIX + skill.getName());
+		String stored = configManager.getConfiguration(CombatXpTrackerConfig.GROUP, COLOR_KEY_PREFIX + skill.getName());
 		if (stored == null)
 		{
 			return null;
@@ -611,14 +647,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		if (color == null)
 		{
-			configManager.unsetConfiguration(CONFIG_GROUP, COLOR_KEY_PREFIX + skill.getName());
+			configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, COLOR_KEY_PREFIX + skill.getName());
 		}
 		else
 		{
-			configManager.setConfiguration(CONFIG_GROUP, COLOR_KEY_PREFIX + skill.getName(), String.valueOf(color.getRGB()));
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, COLOR_KEY_PREFIX + skill.getName(), String.valueOf(color.getRGB()));
 		}
-		requestPanelRefresh();
+		refreshPanelNow();
 	}
+
+	// ---- Read access for the panel, overlay and infoboxes --------------------------
 
 	public Map<Skill, SkillProgress> getSkillProgress()
 	{
@@ -635,29 +673,16 @@ public class CombatXpTrackerPlugin extends Plugin
 		return combinedDropTracker;
 	}
 
+	public MonsterTracker getMonsterTracker()
+	{
+		return monsterTracker;
+	}
+
 	/**
-	 * @return the calculated melee max hit for the player's current equipment, boosted
-	 * Strength, and active prayer, or -1 if it couldn't be determined (e.g. no weapon
-	 * equipped). See MeleeMaxHitCalculator's class doc for exactly what is and isn't
-	 * accounted for -- this does not yet cover special attacks, Dharok's, Salve/Slayer
-	 * helm conditionals, or several other real bonuses.
+	 * @return the latest max hit, or null before the first calculation
 	 */
-	public int getMeleeMaxHit()
+	public MeleeMaxHitCalculator.Result getMaxHitResult()
 	{
-		MeleeMaxHitCalculator.StyleBonus style = config.assumeAggressiveStyle()
-			? MeleeMaxHitCalculator.StyleBonus.AGGRESSIVE
-			: MeleeMaxHitCalculator.StyleBonus.ACCURATE_OR_DEFENSIVE;
-		return meleeMaxHitCalculator.calculate(style, config.assumeVoidMelee());
-	}
-
-	public SessionSummary getSessionSummary()
-	{
-		return sessionSummary;
-	}
-
-	public void resetHitStats()
-	{
-		hitStats.reset();
-		combinedDropTracker.reset();
+		return maxHitResult;
 	}
 }

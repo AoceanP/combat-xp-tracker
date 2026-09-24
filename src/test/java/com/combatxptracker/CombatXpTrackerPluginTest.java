@@ -24,48 +24,17 @@
  */
 package com.combatxptracker;
 
+import net.runelite.client.RuneLite;
+import net.runelite.client.externalplugins.ExternalPluginManager;
+
 /**
- * Tracks average damage and max hit across hitsplats applied by the local player.
+ * Launches a RuneLite dev client with this plugin loaded. Run with ./gradlew run.
  */
-public class HitStats
+public class CombatXpTrackerPluginTest
 {
-	private long totalDamage = 0;
-	private int hitCount = 0;
-	private int maxHit = 0;
-
-	public synchronized void recordHit(int damage)
+	public static void main(String[] args) throws Exception
 	{
-		totalDamage += damage;
-		hitCount++;
-		if (damage > maxHit)
-		{
-			maxHit = damage;
-		}
-	}
-
-	public synchronized double getAverageDamage()
-	{
-		if (hitCount == 0)
-		{
-			return 0.0;
-		}
-		return totalDamage / (double) hitCount;
-	}
-
-	public synchronized int getMaxHit()
-	{
-		return maxHit;
-	}
-
-	public synchronized int getHitCount()
-	{
-		return hitCount;
-	}
-
-	public synchronized void reset()
-	{
-		totalDamage = 0;
-		hitCount = 0;
-		maxHit = 0;
+		ExternalPluginManager.loadBuiltin(CombatXpTrackerPlugin.class);
+		RuneLite.main(args);
 	}
 }

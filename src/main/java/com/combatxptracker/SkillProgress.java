@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,25 +29,20 @@ import java.util.Deque;
 import net.runelite.api.Experience;
 
 /**
- * Tracks XP-over-time for a single skill so we can compute a rolling XP/hr rate,
- * plus the player's chosen goal level and progress toward it.
+ * XP-over-time for one skill (for a rolling XP/hr), plus the player's goal and how far
+ * along it they are.
+ *
+ * Written on the client thread, read from the Swing thread by the sidebar, so every
+ * method is synchronized. The old version wasn't, and the panel could read the sample
+ * deque while the client thread was pruning it.
+ *
+ * Goal progress is measured from the XP the player had when the goal was set
+ * ({@link #getGoalStartXp()}), not from the start of their current level. Measuring
+ * from the current level made the bar jump back to ~0% on every level-up.
  */
 public class SkillProgress
 {
-	// Timestamped XP snapshots, oldest first. Pruned to the configured averaging window.
-	private final Deque<XpSample> samples = new ArrayDeque<>();
-
-	private int currentXp = 0;
-	private int currentLevel = 1;
-	private int goalLevel = 99;
-	private boolean dismissedFromOverlay = false;
-
-	// Tracking is opt-in: a skill only appears in the panel/overlay once the player has
-	// explicitly right-clicked it and set a goal. Without this, every skill the player
-	// has ever trained shows up at once, which is unreadable (23 rows of noise).
-	private boolean goalSet = false;
-
-	private static class XpSample
+	private static final class XpSample
 	{
 		final long timestampMillis;
 		final int xp;
@@ -59,209 +54,245 @@ public class SkillProgress
 		}
 	}
 
-	public void recordXp(int newXp, int newLevel, long nowMillis, int windowSeconds)
+	// Timestamped XP snapshots, oldest first, pruned to the configured averaging window.
+	private final Deque<XpSample> samples = new ArrayDeque<>();
+	private int currentXp;
+	private boolean xpKnown;
+
+	private Goal goal;
+	// -1 until known. Goals saved by 1.3.x have no start and get one on first login.
+	private int goalStartXp = -1;
+	private boolean dismissedFromOverlay;
+
+	// XP when this session began, -1 until the first real baseline after login.
+	private int sessionStartXp = -1;
+
+	public synchronized void recordXp(int newXp, long nowMillis, int windowSeconds)
 	{
-		// If the player resumes training a skill they'd previously dismissed from the
-		// overlay (e.g. pushing past an earlier milestone toward 99), un-dismiss it
-		// automatically rather than leaving it silently hidden from someone actively
-		// training it again.
+		// Resuming a dismissed skill puts it back on the overlay.
 		if (dismissedFromOverlay && newXp > currentXp)
 		{
 			dismissedFromOverlay = false;
 		}
-		this.currentXp = newXp;
-		this.currentLevel = newLevel;
+		currentXp = newXp;
+		xpKnown = true;
+		if (sessionStartXp < 0)
+		{
+			sessionStartXp = newXp;
+		}
 		samples.addLast(new XpSample(nowMillis, newXp));
-		pruneOlderThan(nowMillis - (windowSeconds * 1000L));
+		pruneOlderThan(nowMillis - windowSeconds * 1000L);
 	}
 
 	/**
-	 * Discards all accumulated samples and re-seeds from a known-good XP value.
-	 *
-	 * This exists because of a real bug: at the login screen, client.getSkillExperience()
-	 * returns 0 for every skill. If that zero got stored as a baseline, the first real
-	 * StatChanged event after login would look like the player gained their entire
-	 * lifetime XP in the few seconds since startup, producing nonsense rates like
-	 * "295,554,650 xp/hr". Calling this on GameState.LOGGED_IN throws away any such
-	 * bogus baseline and starts clean from the real value.
+	 * Throws away samples and re-seeds from a known-good XP value. Called on login: at the
+	 * login screen the client reports 0 XP for every skill, and using that as a baseline
+	 * produced rates in the hundreds of millions.
 	 */
-	public void resetBaseline(int realXp, int realLevel, long nowMillis)
+	public synchronized void resetBaseline(int realXp, long nowMillis)
 	{
 		samples.clear();
-		this.currentXp = realXp;
-		this.currentLevel = realLevel;
+		currentXp = realXp;
+		xpKnown = true;
+		if (sessionStartXp < 0)
+		{
+			sessionStartXp = realXp;
+		}
 		samples.addLast(new XpSample(nowMillis, realXp));
 	}
 
 	private void pruneOlderThan(long cutoffMillis)
 	{
-		while (!samples.isEmpty() && samples.peekFirst().timestampMillis < cutoffMillis)
+		// Always keep one sample as the baseline.
+		while (samples.size() > 1 && samples.peekFirst().timestampMillis < cutoffMillis)
 		{
-			// Keep at least one sample so we don't lose our baseline entirely
-			if (samples.size() <= 1)
-			{
-				break;
-			}
 			samples.pollFirst();
 		}
 	}
 
 	/**
-	 * Rolling XP/hr based on samples within the current window.
-	 * Returns 0 if we don't have at least two samples spanning a meaningful amount of time.
+	 * Rolling XP/hr over the samples in the current window, or 0 without two samples
+	 * spanning some time.
 	 */
-	public int getXpPerHour()
+	public synchronized int getXpPerHour()
 	{
 		if (samples.size() < 2)
 		{
 			return 0;
 		}
-
 		XpSample first = samples.peekFirst();
 		XpSample last = samples.peekLast();
-
 		long elapsedMillis = last.timestampMillis - first.timestampMillis;
 		if (elapsedMillis <= 0)
 		{
 			return 0;
 		}
-
-		int xpGained = last.xp - first.xp;
-		double hoursElapsed = elapsedMillis / 3_600_000.0;
-		return (int) Math.round(xpGained / hoursElapsed);
+		double hours = elapsedMillis / 3_600_000.0;
+		return (int) Math.round((last.xp - first.xp) / hours);
 	}
 
-	public int getCurrentXp()
+	public synchronized int getCurrentXp()
 	{
 		return currentXp;
 	}
 
 	/**
-	 * Whether at least one real XP sample has been recorded for this skill yet. Used to
-	 * distinguish "this skill legitimately has 0 XP" from "no real baseline has been
-	 * recorded yet" (the field's zero-default before the first recordXp() call), which
-	 * matters for computing accurate session-XP-gain deltas -- without this check, a
-	 * StatChanged event firing before the deferred initializeCurrentSkillLevels() seeds a
-	 * real baseline would compute a massive fake "gain" equal to the player's entire
-	 * pre-existing XP total in that skill.
+	 * Whether the current XP is a real value from the client rather than the default 0.
 	 */
-	public boolean hasRecordedSample()
+	public synchronized boolean isXpKnown()
+	{
+		return xpKnown;
+	}
+
+	public synchronized boolean hasRecordedSample()
 	{
 		return !samples.isEmpty();
 	}
 
 	/**
-	 * Timestamp of the most recent recorded XP sample, or -1 if no sample has been
-	 * recorded yet. Used to check whether a recent hit landed close enough in time to
-	 * pair with this skill's latest XP gain for the combined-drop overlay display.
+	 * Timestamp of the newest sample, or -1. Used to pair XP drops with hits.
 	 */
-	public long getLastUpdateMillis()
+	public synchronized long getLastUpdateMillis()
 	{
-		if (samples.isEmpty())
+		return samples.isEmpty() ? -1 : samples.peekLast().timestampMillis;
+	}
+
+	/**
+	 * Current level including virtual levels past 99 (up to 126), since goals can go
+	 * that high.
+	 */
+	public synchronized int getCurrentLevel()
+	{
+		return Experience.getLevelForXp(currentXp);
+	}
+
+	// ---- Goal ------------------------------------------------------------------
+
+	public synchronized Goal getGoal()
+	{
+		return goal;
+	}
+
+	public synchronized boolean isGoalSet()
+	{
+		return goal != null;
+	}
+
+	/**
+	 * @param startXp the XP the progress bar starts from, normally the player's XP right
+	 *                now; -1 if not known yet (it's filled in on login)
+	 */
+	public synchronized void setGoal(Goal goal, int startXp)
+	{
+		this.goal = goal;
+		this.goalStartXp = startXp;
+	}
+
+	public synchronized void clearGoal()
+	{
+		goal = null;
+		goalStartXp = -1;
+	}
+
+	public synchronized int getGoalStartXp()
+	{
+		return goalStartXp;
+	}
+
+	public synchronized void setGoalStartXp(int goalStartXp)
+	{
+		this.goalStartXp = goalStartXp;
+	}
+
+	public synchronized boolean isGoalReached()
+	{
+		return goal != null && xpKnown && currentXp >= goal.getTargetXp();
+	}
+
+	/**
+	 * Fraction 0.0-1.0 of the way from the goal's start XP to its target XP.
+	 */
+	public synchronized double getProgressToGoal()
+	{
+		return progress(currentXp, goalStartXp, goal == null ? -1 : goal.getTargetXp());
+	}
+
+	/**
+	 * The progress maths on its own so it can be unit tested directly.
+	 *
+	 * @param startXp the XP the goal was set at, or -1 to fall back to the start of the
+	 *                current level
+	 * @param targetXp the goal's XP, or -1 for no goal
+	 */
+	static double progress(int currentXp, int startXp, int targetXp)
+	{
+		if (targetXp < 0)
 		{
-			return -1;
+			return 0.0;
 		}
-		return samples.peekLast().timestampMillis;
-	}
-
-	public int getCurrentLevel()
-	{
-		return currentLevel;
-	}
-
-	public int getGoalLevel()
-	{
-		return goalLevel;
-	}
-
-	public void setGoalLevel(int goalLevel)
-	{
-		this.goalLevel = Math.max(currentLevel, Math.min(99, goalLevel));
-		this.goalSet = true;
-	}
-
-	/**
-	 * Whether the player has explicitly set a goal for this skill. Only skills where this
-	 * is true appear in the panel and overlay -- tracking is opt-in, so the display shows
-	 * the two or three skills you actually care about rather than all 23 at once.
-	 */
-	public boolean isGoalSet()
-	{
-		return goalSet;
-	}
-
-	/**
-	 * Restores a goal loaded from saved config without re-triggering the level clamp
-	 * against a not-yet-known current level.
-	 */
-	public void restoreSavedGoal(int savedGoalLevel)
-	{
-		this.goalLevel = Math.max(2, Math.min(99, savedGoalLevel));
-		this.goalSet = true;
-	}
-
-	public void clearGoal()
-	{
-		this.goalSet = false;
-		this.goalLevel = 99;
-	}
-
-	public boolean isDismissedFromOverlay()
-	{
-		return dismissedFromOverlay;
-	}
-
-	public void setDismissedFromOverlay(boolean dismissed)
-	{
-		this.dismissedFromOverlay = dismissed;
-	}
-
-	/**
-	 * Progress from current level toward the goal level, as a fraction 0.0-1.0,
-	 * measured in XP terms (not just level count) so it reflects real grind remaining.
-	 */
-	public double getProgressToGoal()
-	{
-		if (goalLevel <= currentLevel)
+		if (currentXp >= targetXp)
 		{
 			return 1.0;
 		}
-
-		int xpAtCurrentLevel = Experience.getXpForLevel(currentLevel);
-		int xpAtGoalLevel = goalLevel >= 99 ? Experience.getXpForLevel(99) : Experience.getXpForLevel(goalLevel);
-
-		int span = xpAtGoalLevel - xpAtCurrentLevel;
+		int start = startXp >= 0 ? startXp : Experience.getXpForLevel(Experience.getLevelForXp(currentXp));
+		long span = (long) targetXp - start;
 		if (span <= 0)
 		{
 			return 1.0;
 		}
-
-		double progressed = currentXp - xpAtCurrentLevel;
-		return Math.max(0.0, Math.min(1.0, progressed / span));
+		double done = (double) currentXp - start;
+		return Math.max(0.0, Math.min(1.0, done / span));
 	}
 
-	public int getXpRemainingToGoal()
+	public synchronized int getXpRemainingToGoal()
 	{
-		int xpAtGoal = goalLevel >= 99 ? Experience.getXpForLevel(99) : Experience.getXpForLevel(goalLevel);
-		return Math.max(0, xpAtGoal - currentXp);
+		return goal == null ? 0 : Math.max(0, goal.getTargetXp() - currentXp);
 	}
 
 	/**
-	 * Estimated hours remaining to hit the goal level at the current XP/hr rate.
-	 * Returns -1 if the rate is 0 (can't estimate).
+	 * Hours left at the current XP/hr, or -1 when there's no rate to estimate from.
 	 */
-	public double getEstimatedHoursToGoal()
+	public synchronized double getEstimatedHoursToGoal()
 	{
 		int rate = getXpPerHour();
-		if (rate <= 0)
+		if (rate <= 0 || goal == null)
 		{
 			return -1;
 		}
 		return getXpRemainingToGoal() / (double) rate;
 	}
 
-	public void reset()
+	// ---- Overlay / session -----------------------------------------------------
+
+	public synchronized boolean isDismissedFromOverlay()
+	{
+		return dismissedFromOverlay;
+	}
+
+	public synchronized void setDismissedFromOverlay(boolean dismissed)
+	{
+		dismissedFromOverlay = dismissed;
+	}
+
+	public synchronized int getSessionXpGained()
+	{
+		return sessionStartXp < 0 ? 0 : Math.max(0, currentXp - sessionStartXp);
+	}
+
+	/**
+	 * Clears samples. Used on logout so offline time never counts as training time.
+	 */
+	public synchronized void reset()
 	{
 		samples.clear();
+	}
+
+	/**
+	 * "Reset tracker": clears rates and starts the session count from now.
+	 */
+	public synchronized void resetSession()
+	{
+		samples.clear();
+		sessionStartXp = xpKnown ? currentXp : -1;
 	}
 }

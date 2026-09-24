@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,619 +25,597 @@
 package com.combatxptracker;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.awt.Rectangle;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
-import javax.swing.BoxLayout;
 import javax.swing.DefaultListCellRenderer;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
-import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JList;
-import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
-import javax.swing.border.EmptyBorder;
-import javax.swing.event.PopupMenuEvent;
-import javax.swing.event.PopupMenuListener;
+import javax.swing.JTextField;
+import javax.swing.ScrollPaneConstants;
+import javax.swing.Scrollable;
+import javax.swing.SwingConstants;
+import net.runelite.api.Experience;
 import net.runelite.api.Skill;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
-import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
-import net.runelite.client.ui.components.ProgressBar;
+import net.runelite.client.ui.components.materialtabs.MaterialTab;
+import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
+import net.runelite.client.util.QuantityFormatter;
 
 /**
- * Sidebar panel.
+ * The sidebar:
  *
- * The layout deliberately mirrors RuneLite's own XpInfoBox: each row is a JPanel using
- * BorderLayout with its content added to BorderLayout.NORTH. That matters -- an earlier
- * version used BoxLayout.Y_AXIS throughout, which distributes leftover vertical space
- * *into* its children, stretching every row and producing large empty gaps between the
- * level text and the progress bar. BorderLayout.NORTH pins content to its natural
- * height and lets the surplus fall into an empty CENTER instead.
+ * <pre>
+ * Combat &amp; XP Tracker                 [Reset]
+ * +-------------------------------------------+
+ * | 18.3 Avg hit          |  45 Biggest hit   |
+ * | 245 Hits              |  52 Melee max     |
+ * | Aggressive, Piety, +132 str               |
+ * | On task (Abyssal demons)             60   |
+ * +-------------------------------------------+
+ * [   Goals   ][  Monsters  ]
+ * ...goal cards / monster cards...
+ * </pre>
+ *
+ * Every method runs on the Swing thread. Data comes from the plugin's synchronized
+ * trackers; nothing here touches the game client directly.
  */
-public class CombatXpTrackerPanel extends PluginPanel
+class CombatXpTrackerPanel extends PluginPanel
 {
 	private final CombatXpTrackerPlugin plugin;
 	private final CombatXpTrackerConfig config;
 	private final SkillIconManager skillIconManager;
+	private final ItemManager itemManager;
 
-	private final JLabel avgDamageLabel = new JLabel();
-	private final JLabel biggestHitLabel = new JLabel();
-	private final JLabel hitCountLabel = new JLabel();
-	private final JLabel meleeMaxHitLabel = new JLabel();
+	// Combat card
+	private final JLabel avgValue = tileValue();
+	private final JLabel biggestValue = tileValue();
+	private final JLabel hitsValue = tileValue();
+	private final JLabel fourthValue = tileValue();
+	private final JLabel fourthCaption = Theme.label("", Theme.MUTED);
+	private final JPanel maxHitDetails = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
 
-	private final Map<Skill, SkillRow> skillRows = new EnumMap<>(Skill.class);
-	private final JPanel skillsContainer = new JPanel();
+	// Goals tab
+	private final JPanel goalsList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
+	private final JPanel goalsEmpty;
+	private final JLabel sessionLabel = Theme.label("", Theme.MUTED);
+	private final Map<Skill, GoalCard> goalCards = new EnumMap<>(Skill.class);
+	private List<Skill> shownGoals = new ArrayList<>();
 
-	private final JLabel emptyStateLabel = new JLabel(
-		"<html><div style='text-align:center;padding:6px;'>"
-			+ "No skills tracked yet.<br><br>"
-			+ "Use <b>Set skill goal</b> above, or right-click a skill "
-			+ "in your in-game stats tab."
-			+ "</div></html>");
+	// Monsters tab
+	private final JPanel monstersList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
+	private final JPanel monstersEmpty;
+	private final JLabel killsValue = tileValue();
+	private final JLabel lootValue = tileValue();
+	private final JLabel monsterCountValue = tileValue();
+	private final Map<String, MonsterCard> monsterCards = new HashMap<>();
+	private int monsterRevision = -1;
 
-	public CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config, SkillIconManager skillIconManager)
+	CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config,
+		SkillIconManager skillIconManager, ItemManager itemManager)
 	{
 		super(false);
 		this.plugin = plugin;
 		this.config = config;
 		this.skillIconManager = skillIconManager;
+		this.itemManager = itemManager;
 
 		setLayout(new BorderLayout());
-		setBackground(ColorScheme.DARK_GRAY_COLOR);
-		setBorder(new EmptyBorder(8, 8, 8, 8));
+		setBackground(Theme.BACKGROUND);
 
-		// Everything lives in NORTH of this wrapper so the content keeps its natural
-		// height rather than being stretched to fill the sidebar.
-		JPanel northWrapper = new JPanel(new BorderLayout());
-		northWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		goalsEmpty = emptyState("No goals yet",
+			"Click <b>Add goal</b>, or right-click a skill in your stats tab and pick <b>Set goal</b>. "
+				+ "Goals can be a level up to 126 or an XP amount up to 200M.");
+		monstersEmpty = emptyState("No monsters yet",
+			"Attack something. Hits, your biggest hit per combat style, and every drop "
+				+ "with its GE value show up here.");
 
-		JPanel header = new JPanel(new BorderLayout());
-		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		header.add(buildDamagePanel(), BorderLayout.NORTH);
-		header.add(buildActionButtonsPanel(), BorderLayout.CENTER);
+		JPanel stack = new JPanel(new DynamicGridLayout(0, 1, 0, 8));
+		stack.setBackground(Theme.BACKGROUND);
+		stack.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+		stack.add(buildHeader());
+		stack.add(buildCombatCard());
+		stack.add(buildTabs());
 
-		skillsContainer.setLayout(new BoxLayout(skillsContainer, BoxLayout.Y_AXIS));
-		skillsContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		JPanel north = new WidthTrackingPanel();
+		north.setBackground(Theme.BACKGROUND);
+		north.add(stack, BorderLayout.NORTH);
 
-		emptyStateLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		emptyStateLabel.setFont(FontManager.getRunescapeSmallFont());
-		skillsContainer.add(emptyStateLabel);
-
-		buildSkillRows();
-
-		northWrapper.add(header, BorderLayout.NORTH);
-		northWrapper.add(skillsContainer, BorderLayout.CENTER);
-
-		JPanel scrollContent = new JPanel(new BorderLayout());
-		scrollContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		scrollContent.add(northWrapper, BorderLayout.NORTH);
-
-		JScrollPane scrollPane = new JScrollPane(scrollContent);
-		scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		scrollPane.setBorder(BorderFactory.createEmptyBorder());
-		scrollPane.getVerticalScrollBar().setUnitIncrement(16);
-		scrollPane.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
-
-		add(scrollPane, BorderLayout.CENTER);
+		JScrollPane scroll = new JScrollPane(north);
+		scroll.setBorder(BorderFactory.createEmptyBorder());
+		scroll.setBackground(Theme.BACKGROUND);
+		scroll.getViewport().setBackground(Theme.BACKGROUND);
+		scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+		scroll.getVerticalScrollBar().setUnitIncrement(16);
+		scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
+		add(scroll, BorderLayout.CENTER);
 
 		refresh();
 	}
 
-	/**
-	 * Damage stats block: average, biggest observed hit, hit count, and (optionally) the
-	 * calculated melee max hit.
-	 */
-	private JPanel buildDamagePanel()
+	// ---- Construction ------------------------------------------------------------
+
+	private JPanel buildHeader()
 	{
+		JPanel header = new JPanel(new BorderLayout(8, 0));
+		header.setOpaque(false);
+
+		JLabel title = Theme.boldLabel("Combat & XP Tracker", Theme.TEXT);
+		header.add(title, BorderLayout.CENTER);
+
+		JLabel reset = Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset);
+		header.add(reset, BorderLayout.EAST);
+		return header;
+	}
+
+	private JPanel buildCombatCard()
+	{
+		JPanel tiles = new JPanel(new GridLayout(2, 2, 4, 4));
+		tiles.setOpaque(false);
+		tiles.add(tile(avgValue, Theme.label("Avg hit", Theme.MUTED)));
+		tiles.add(tile(biggestValue, Theme.label("Biggest hit", Theme.MUTED)));
+		tiles.add(tile(hitsValue, Theme.label("Hits", Theme.MUTED)));
+		tiles.add(tile(fourthValue, fourthCaption));
+
+		maxHitDetails.setOpaque(false);
+
+		JPanel card = new JPanel(new BorderLayout(0, 6));
+		card.setBackground(Theme.CARD);
+		card.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+		card.add(tiles, BorderLayout.NORTH);
+		card.add(maxHitDetails, BorderLayout.CENTER);
+		return card;
+	}
+
+	private JPanel buildTabs()
+	{
+		JPanel display = new JPanel(new BorderLayout());
+		display.setOpaque(false);
+
+		MaterialTabGroup tabGroup = new MaterialTabGroup(display);
+		tabGroup.setLayout(new GridLayout(1, 2, 4, 0));
+		tabGroup.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
+		tabGroup.setOpaque(false);
+
+		MaterialTab goalsTab = new MaterialTab("Goals", tabGroup, buildGoalsView());
+		MaterialTab monstersTab = new MaterialTab("Monsters", tabGroup, buildMonstersView());
+		tabGroup.addTab(goalsTab);
+		tabGroup.addTab(monstersTab);
+		tabGroup.select(goalsTab);
+
 		JPanel wrapper = new JPanel(new BorderLayout());
-		wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		wrapper.setBorder(new EmptyBorder(8, 10, 8, 10));
+		wrapper.setOpaque(false);
+		wrapper.add(tabGroup, BorderLayout.NORTH);
+		wrapper.add(display, BorderLayout.CENTER);
+		return wrapper;
+	}
 
-		int rows = config.showMeleeMaxHit() ? 4 : 3;
-		JPanel stats = new JPanel(new GridLayout(rows, 1, 0, 3));
-		stats.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+	private JPanel buildGoalsView()
+	{
+		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+		view.setOpaque(false);
 
-		avgDamageLabel.setForeground(Color.WHITE);
-		avgDamageLabel.setFont(FontManager.getRunescapeSmallFont());
+		view.add(Theme.flatButton("+ Add goal", "Pick a skill and a level or XP target",
+			() -> promptGoalDialog(null)));
 
-		biggestHitLabel.setForeground(Color.WHITE);
-		biggestHitLabel.setFont(FontManager.getRunescapeSmallFont());
+		goalsList.setOpaque(false);
+		view.add(collapsible(goalsEmpty));
+		view.add(goalsList);
 
-		hitCountLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		hitCountLabel.setFont(FontManager.getRunescapeSmallFont());
+		sessionLabel.setHorizontalAlignment(SwingConstants.CENTER);
+		view.add(sessionLabel);
+		return view;
+	}
 
-		meleeMaxHitLabel.setForeground(ColorScheme.BRAND_ORANGE);
-		meleeMaxHitLabel.setFont(FontManager.getRunescapeSmallFont());
-		meleeMaxHitLabel.setToolTipText("Estimated from equipped weapon, boosted Strength, and active prayer. "
-			+ "Doesn't account for special attacks, Dharok's, Salve amulet, Slayer helm, or armour strength bonus.");
+	private JPanel buildMonstersView()
+	{
+		JPanel summary = new JPanel(new GridLayout(1, 3, 4, 0));
+		summary.setOpaque(false);
+		summary.add(tile(killsValue, Theme.label("Kills", Theme.MUTED)));
+		summary.add(tile(lootValue, Theme.label("Loot", Theme.MUTED)));
+		summary.add(tile(monsterCountValue, Theme.label("Monsters", Theme.MUTED)));
+		lootValue.setForeground(Theme.GOLD);
 
-		stats.add(avgDamageLabel);
-		stats.add(biggestHitLabel);
-		stats.add(hitCountLabel);
-		if (config.showMeleeMaxHit())
+		monstersList.setOpaque(false);
+
+		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+		view.setOpaque(false);
+		view.add(summary);
+		view.add(collapsible(monstersEmpty));
+		view.add(monstersList);
+		return view;
+	}
+
+	private static JLabel tileValue()
+	{
+		JLabel value = new JLabel("-");
+		value.setFont(FontManager.getRunescapeBoldFont());
+		value.setForeground(Theme.TEXT);
+		return value;
+	}
+
+	private static JPanel tile(JLabel value, JLabel caption)
+	{
+		JPanel tile = new JPanel(new BorderLayout());
+		tile.setBackground(Theme.HEADER);
+		tile.setBorder(BorderFactory.createEmptyBorder(5, 7, 5, 7));
+		tile.add(value, BorderLayout.NORTH);
+		tile.add(caption, BorderLayout.SOUTH);
+		return tile;
+	}
+
+	/**
+	 * Wraps a component so hiding it also removes its space. DynamicGridLayout keeps a
+	 * row for invisible children; BorderLayout gives an empty holder zero height.
+	 */
+	private static JPanel collapsible(JPanel child)
+	{
+		JPanel holder = new JPanel(new BorderLayout());
+		holder.setOpaque(false);
+		holder.add(child, BorderLayout.CENTER);
+		return holder;
+	}
+
+	/**
+	 * The scroll view. Tracking the viewport width makes content wrap and truncate to
+	 * the sidebar instead of growing sideways and being clipped.
+	 */
+	private static final class WidthTrackingPanel extends JPanel implements Scrollable
+	{
+		WidthTrackingPanel()
 		{
-			stats.add(meleeMaxHitLabel);
+			super(new BorderLayout());
 		}
 
-		wrapper.add(stats, BorderLayout.NORTH);
-		updateDamageLabels();
-		return wrapper;
+		@Override
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		@Override
+		public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
+		{
+			return 16;
+		}
+
+		@Override
+		public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+		{
+			return 64;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportWidth()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
 	}
 
-	private JPanel buildActionButtonsPanel()
+	private static JPanel emptyState(String title, String body)
 	{
-		JPanel wrapper = new JPanel(new BorderLayout());
-		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		wrapper.setBorder(new EmptyBorder(8, 0, 8, 0));
+		// Fixed wrap width: HTML labels otherwise report their whole text as one line.
+		JLabel label = new JLabel("<html><div style='text-align:center;width:150px'><b>" + title + "</b><br><br>" + body + "</div></html>");
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setForeground(Theme.MUTED);
+		label.setHorizontalAlignment(SwingConstants.CENTER);
 
-		JPanel buttons = new JPanel(new GridLayout(3, 1, 0, 4));
-		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
-
-		JButton setGoalButton = new JButton("Set skill goal");
-		setGoalButton.setFont(FontManager.getRunescapeSmallFont());
-		setGoalButton.setFocusPainted(false);
-		setGoalButton.setToolTipText("Choose a skill and target level without right-clicking in-game.");
-		setGoalButton.addActionListener(e -> promptSkillPickerThenGoalDialog());
-		buttons.add(setGoalButton);
-
-		JButton summaryButton = new JButton("Session summary");
-		summaryButton.setFont(FontManager.getRunescapeSmallFont());
-		summaryButton.setFocusPainted(false);
-		summaryButton.setToolTipText("Total XP gained, hits landed, and biggest hit since the last reset.");
-		summaryButton.addActionListener(e -> showSessionSummaryDialog());
-		buttons.add(summaryButton);
-
-		JButton resetButton = new JButton("Reset tracker");
-		resetButton.setFont(FontManager.getRunescapeSmallFont());
-		resetButton.setFocusPainted(false);
-		resetButton.setToolTipText("Clears damage stats and XP rates. Goals and colors are kept.");
-		resetButton.addActionListener(e -> confirmAndReset());
-		buttons.add(resetButton);
-
-		wrapper.add(buttons, BorderLayout.NORTH);
-		return wrapper;
+		JPanel panel = new JPanel(new BorderLayout());
+		panel.setBackground(Theme.CARD);
+		panel.setBorder(BorderFactory.createEmptyBorder(14, 10, 14, 10));
+		panel.add(label, BorderLayout.CENTER);
+		return panel;
 	}
 
-	private void confirmAndReset()
-	{
-		int choice = JOptionPane.showConfirmDialog(
-			this,
-			"Reset all tracked damage stats and XP rates? Goal levels and colors are kept.",
-			"Reset tracker",
-			JOptionPane.YES_NO_OPTION);
+	// ---- Refresh --------------------------------------------------------------
 
+	void refresh()
+	{
+		updateCombatCard();
+		updateGoals();
+		updateMonsters();
+		revalidate();
+		repaint();
+	}
+
+	private void updateCombatCard()
+	{
+		HitStats hits = plugin.getHitStats();
+		int count = hits.getHitCount();
+		avgValue.setText(count > 0 ? String.format(java.util.Locale.US, "%.1f", hits.getAverageDamage()) : "-");
+		biggestValue.setText(count > 0 ? String.valueOf(hits.getMaxHit()) : "-");
+		hitsValue.setText(Formatting.withCommas(count));
+
+		maxHitDetails.removeAll();
+		MeleeMaxHitCalculator.Result max = plugin.getMaxHitResult();
+		if (!config.showMeleeMaxHit())
+		{
+			fourthCaption.setText("Session XP");
+			fourthValue.setText(Formatting.compactXp(totalSessionXp()));
+			fourthValue.setForeground(Theme.TEXT);
+			fourthValue.setToolTipText(null);
+			return;
+		}
+
+		fourthCaption.setText("Melee max");
+		fourthValue.setForeground(CombatStyle.MELEE.getColor());
+		if (max == null)
+		{
+			fourthValue.setText("-");
+			fourthValue.setToolTipText("Log in to calculate");
+			return;
+		}
+
+		fourthValue.setText(String.valueOf(max.getMaxHit()));
+		fourthValue.setToolTipText("<html>Melee max hit from worn gear, boosted Strength, prayer and attack style."
+			+ "<br>Special attacks and weapon passives aren't included.</html>");
+
+		StringBuilder setup = new StringBuilder();
+		setup.append(max.isMeleeStyle() ? max.getAttackStyleName() : "Not on a melee style");
+		if (max.getPrayer() != MeleeMaxHit.StrengthPrayer.NONE)
+		{
+			setup.append(", ").append(max.getPrayer().getDisplayName());
+		}
+		setup.append(", +").append(max.getStrengthBonus()).append(" str");
+		if (max.isVoidMelee())
+		{
+			setup.append(", Void");
+		}
+		JLabel setupLabel = Theme.label(setup.toString(), Theme.SUBTLE);
+		setupLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
+		maxHitDetails.add(setupLabel);
+
+		if (max.getOnTaskMaxHit() >= 0)
+		{
+			String task = "On task (" + max.getSlayerTask() + ")";
+			maxHitDetails.add(detailRow(task, max.getOnTaskMaxHit(),
+				max.isTargetOnTask(),
+				max.isTargetOnTask() ? "Your current target is part of your task" : "Black mask / Slayer helm bonus on task monsters"));
+		}
+		if (max.getVsUndeadMaxHit() >= 0)
+		{
+			maxHitDetails.add(detailRow("Vs undead (" + max.getSalve().getDisplayName() + ")", max.getVsUndeadMaxHit(),
+				false, "Salve amulet bonus against undead. It doesn't stack with the Slayer helm."));
+		}
+	}
+
+	private static JPanel detailRow(String label, int value, boolean highlight, String tooltip)
+	{
+		JPanel row = new JPanel(new BorderLayout(6, 0));
+		row.setBackground(highlight ? Theme.darken(Theme.SUCCESS, 0.72f) : Theme.HEADER);
+		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
+		row.setToolTipText(tooltip);
+		row.add(Theme.label(label, highlight ? Theme.SUCCESS : Theme.MUTED), BorderLayout.CENTER);
+		row.add(Theme.boldLabel(String.valueOf(value), highlight ? Theme.SUCCESS : Theme.TEXT), BorderLayout.EAST);
+		return row;
+	}
+
+	private int totalSessionXp()
+	{
+		int total = 0;
+		for (SkillProgress progress : plugin.getSkillProgress().values())
+		{
+			total += progress.getSessionXpGained();
+		}
+		return total;
+	}
+
+	private void updateGoals()
+	{
+		List<Skill> active = new ArrayList<>();
+		for (Map.Entry<Skill, SkillProgress> entry : plugin.getSkillProgress().entrySet())
+		{
+			if (entry.getValue().isGoalSet())
+			{
+				active.add(entry.getKey());
+			}
+		}
+
+		if (!active.equals(shownGoals))
+		{
+			goalsList.removeAll();
+			for (Skill skill : active)
+			{
+				goalsList.add(goalCards.computeIfAbsent(skill,
+					s -> new GoalCard(s, plugin, config, skillIconManager, this)));
+			}
+			goalCards.keySet().retainAll(active);
+			shownGoals = active;
+		}
+
+		for (Skill skill : active)
+		{
+			goalCards.get(skill).update();
+		}
+
+		goalsEmpty.setVisible(active.isEmpty());
+		int session = totalSessionXp();
+		sessionLabel.setText(session > 0 ? "+" + Formatting.withCommas(session) + " xp this session" : "");
+	}
+
+	private void updateMonsters()
+	{
+		MonsterTracker tracker = plugin.getMonsterTracker();
+		int revision = tracker.getRevision();
+		if (revision == monsterRevision)
+		{
+			return;
+		}
+		monsterRevision = revision;
+
+		List<MonsterTracker.Snapshot> snapshots = tracker.snapshot();
+		Map<String, MonsterCard> keep = new HashMap<>();
+		monstersList.removeAll();
+
+		int kills = 0;
+		long loot = 0;
+		for (MonsterTracker.Snapshot s : snapshots)
+		{
+			MonsterCard card = monsterCards.get(s.getName());
+			if (card == null)
+			{
+				card = new MonsterCard(s.getName(), itemManager, plugin);
+			}
+			card.update(s);
+			keep.put(s.getName(), card);
+			monstersList.add(card);
+			kills += s.getKills();
+			loot += s.getLootValue();
+		}
+		monsterCards.clear();
+		monsterCards.putAll(keep);
+
+		killsValue.setText(Formatting.withCommas(kills));
+		lootValue.setText(QuantityFormatter.quantityToStackSize(loot));
+		lootValue.setToolTipText(Formatting.withCommas(loot) + " gp");
+		monsterCountValue.setText(String.valueOf(snapshots.size()));
+		monstersEmpty.setVisible(snapshots.isEmpty());
+	}
+
+	// ---- Dialogs ----------------------------------------------------------------
+
+	private void confirmReset()
+	{
+		int choice = JOptionPane.showConfirmDialog(this,
+			"Clear damage stats, monsters and XP rates?\nYour goals and colours are kept.",
+			"Reset tracker", JOptionPane.YES_NO_OPTION);
 		if (choice == JOptionPane.YES_OPTION)
 		{
-			plugin.resetHitStats();
-			plugin.getSessionSummary().reset();
-			for (SkillProgress p : plugin.getSkillProgress().values())
-			{
-				p.reset();
-			}
-			refresh();
-		}
-	}
-
-	private void buildSkillRows()
-	{
-		for (Skill skill : Skill.values())
-		{
-			if (skill == Skill.OVERALL)
-			{
-				continue;
-			}
-			skillRows.put(skill, new SkillRow(skill));
+			plugin.resetTracker();
 		}
 	}
 
 	/**
-	 * Skill picker, so a goal can be set without needing the in-game stats tab.
+	 * Asks for a goal. With a null skill, the dialog also asks which skill.
 	 */
-	private void promptSkillPickerThenGoalDialog()
+	void promptGoalDialog(Skill presetSkill)
 	{
-		Skill[] pickable = Arrays.stream(Skill.values())
-			.filter(s -> s != Skill.OVERALL)
-			.toArray(Skill[]::new);
-
-		JComboBox<Skill> skillCombo = new JComboBox<>(pickable);
-		skillCombo.setRenderer(new DefaultListCellRenderer()
+		Skill[] skills = Skill.values();
+		JComboBox<Skill> skillBox = new JComboBox<>(skills);
+		skillBox.setRenderer(new DefaultListCellRenderer()
 		{
 			@Override
-			public java.awt.Component getListCellRendererComponent(
-				JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus)
+			public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected, boolean focus)
 			{
-				super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+				super.getListCellRendererComponent(list, value, index, selected, focus);
 				if (value instanceof Skill)
 				{
 					Skill s = (Skill) value;
-					SkillProgress progress = plugin.getSkillProgress().get(s);
-					boolean tracked = progress != null && progress.isGoalSet();
-					setText(capitalize(s.getName()) + (tracked ? "  (tracked)" : ""));
+					SkillProgress p = plugin.getSkillProgress().get(s);
+					setText(Formatting.capitalize(s.getName()) + (p != null && p.isGoalSet() ? "  (goal: " + p.getGoal() + ")" : ""));
 				}
 				return this;
 			}
 		});
-
-		int choice = JOptionPane.showConfirmDialog(
-			this, skillCombo, "Choose a skill",
-			JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-
-		if (choice == JOptionPane.OK_OPTION)
+		if (presetSkill != null)
 		{
-			Skill selected = (Skill) skillCombo.getSelectedItem();
-			if (selected != null)
+			skillBox.setSelectedItem(presetSkill);
+		}
+
+		JTextField input = new JTextField(defaultGoalText(presetSkill != null ? presetSkill : skills[0]), 14);
+		skillBox.addActionListener(e -> input.setText(defaultGoalText((Skill) skillBox.getSelectedItem())));
+
+		JPanel presets = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		presets.add(presetButton("Next level", () ->
+		{
+			SkillProgress p = plugin.getSkillProgress().get((Skill) skillBox.getSelectedItem());
+			int level = p == null ? 1 : p.getCurrentLevel();
+			input.setText(String.valueOf(Math.min(Goal.MAX_LEVEL, level + 1)));
+		}));
+		presets.add(presetButton("99", () -> input.setText("99")));
+		presets.add(presetButton("126", () -> input.setText("126")));
+		presets.add(presetButton("200M", () -> input.setText("200m")));
+
+		JPanel form = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+		if (presetSkill == null)
+		{
+			form.add(new JLabel("Skill"));
+			form.add(skillBox);
+		}
+		form.add(new JLabel("Goal"));
+		form.add(input);
+		form.add(presets);
+		form.add(new JLabel("<html><small>A level from 2 to 126, or XP like 13,034,431, 500k or 13.03m.</small></html>"));
+
+		String title = presetSkill != null ? "Goal for " + Formatting.capitalize(presetSkill.getName()) : "Add goal";
+		while (true)
+		{
+			int choice = JOptionPane.showConfirmDialog(this, form, title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+			if (choice != JOptionPane.OK_OPTION)
 			{
-				promptGoalLevelDialog(selected);
+				return;
+			}
+
+			Skill skill = presetSkill != null ? presetSkill : (Skill) skillBox.getSelectedItem();
+			try
+			{
+				Goal goal = Goal.parse(input.getText());
+				SkillProgress progress = plugin.getSkillProgress().get(skill);
+				if (progress != null && progress.isXpKnown() && goal.getTargetXp() <= progress.getCurrentXp())
+				{
+					throw new IllegalArgumentException("You already have " + Formatting.withCommas(progress.getCurrentXp())
+						+ " " + Formatting.capitalize(skill.getName()) + " xp. Pick a higher goal.");
+				}
+				plugin.setGoal(skill, goal);
+				return;
+			}
+			catch (IllegalArgumentException e)
+			{
+				JOptionPane.showMessageDialog(this, e.getMessage(), "Invalid goal", JOptionPane.WARNING_MESSAGE);
 			}
 		}
 	}
 
-	public void promptGoalLevelDialog(Skill skill)
+	private String defaultGoalText(Skill skill)
 	{
 		SkillProgress progress = plugin.getSkillProgress().get(skill);
-		int currentGoal = (progress != null && progress.isGoalSet()) ? progress.getGoalLevel() : 99;
-
-		String input = JOptionPane.showInputDialog(
-			this,
-			"Goal level for " + capitalize(skill.getName()) + " (2-99):",
-			currentGoal);
-
-		if (input == null || input.trim().isEmpty())
+		if (progress == null)
 		{
-			return;
+			return "99";
 		}
-
-		try
+		Goal existing = progress.getGoal();
+		if (existing != null)
 		{
-			int level = Integer.parseInt(input.trim());
-			if (level < 2 || level > 99)
-			{
-				JOptionPane.showMessageDialog(this, "Level must be between 2 and 99.");
-				return;
-			}
-			plugin.setGoalLevel(skill, level);
+			return existing.getType() == Goal.Type.LEVEL
+				? String.valueOf(existing.getTargetLevel())
+				: Formatting.withCommas(existing.getTargetXp());
 		}
-		catch (NumberFormatException e)
+		int level = progress.getCurrentLevel();
+		if (level < 99)
 		{
-			JOptionPane.showMessageDialog(this, "Please enter a valid number.");
+			return "99";
 		}
+		return level < Experience.MAX_VIRT_LEVEL ? String.valueOf(level + 1) : "200m";
 	}
 
-	public void promptSkillColorDialog(Skill skill)
+	private static JButton presetButton(String text, Runnable action)
 	{
-		Color current = plugin.getSkillColor(skill);
-		Color chosen = JColorChooser.showDialog(
-			this,
-			"Color for " + capitalize(skill.getName()),
-			current != null ? current : ColorScheme.BRAND_ORANGE);
-
-		if (chosen != null)
-		{
-			plugin.setSkillColor(skill, chosen);
-		}
-	}
-
-	private void showSessionSummaryDialog()
-	{
-		SessionSummary summary = plugin.getSessionSummary();
-
-		StringBuilder sb = new StringBuilder();
-		sb.append("=== Session Summary ===\n\n");
-
-		if (summary.getXpGainedThisSession().isEmpty())
-		{
-			sb.append("No XP gained yet this session.\n\n");
-		}
-		else
-		{
-			sb.append(String.format("Total XP gained: %,d\n\n", summary.getTotalXpGained()));
-			for (Map.Entry<Skill, Integer> entry : summary.getXpGainedThisSession().entrySet())
-			{
-				sb.append(String.format("  %s: %,d xp\n", capitalize(entry.getKey().getName()), entry.getValue()));
-			}
-			sb.append("\n");
-		}
-
-		sb.append(String.format("Total hits landed: %,d\n", summary.getTotalHitsLanded()));
-
-		if (summary.getBiggestHitDamage() >= 0)
-		{
-			String monster = summary.getBiggestHitMonsterName();
-			sb.append(String.format("Biggest hit: %d%s\n",
-				summary.getBiggestHitDamage(),
-				monster != null ? " (on " + monster + ")" : " (target unknown)"));
-		}
-		else
-		{
-			sb.append("Biggest hit: none recorded yet\n");
-		}
-
-		JTextArea textArea = new JTextArea(sb.toString());
-		textArea.setEditable(false);
-		textArea.setFont(FontManager.getRunescapeSmallFont());
-		textArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		textArea.setForeground(Color.WHITE);
-
-		JScrollPane scroll = new JScrollPane(textArea);
-		scroll.setPreferredSize(new Dimension(250, 280));
-
-		JOptionPane.showMessageDialog(this, scroll, "Session Summary", JOptionPane.PLAIN_MESSAGE);
-	}
-
-	public void refresh()
-	{
-		updateDamageLabels();
-
-		int visible = 0;
-		int insertIndex = 1; // index 0 is the empty-state label
-
-		for (Skill skill : Skill.values())
-		{
-			if (skill == Skill.OVERALL)
-			{
-				continue;
-			}
-
-			SkillRow row = skillRows.get(skill);
-			if (row == null)
-			{
-				continue;
-			}
-
-			SkillProgress progress = plugin.getSkillProgress().get(skill);
-			boolean tracked = progress != null && progress.isGoalSet();
-			boolean inContainer = row.getParent() == skillsContainer;
-
-			// Rows are added/removed rather than shown/hidden: an invisible BoxLayout child
-			// can still reserve its layout space, which left blank gaps behind.
-			if (tracked)
-			{
-				if (!inContainer)
-				{
-					skillsContainer.add(row, insertIndex);
-				}
-				insertIndex++;
-				visible++;
-				row.update();
-			}
-			else if (inContainer)
-			{
-				skillsContainer.remove(row);
-			}
-		}
-
-		emptyStateLabel.setVisible(visible == 0);
-
-		skillsContainer.revalidate();
-		skillsContainer.repaint();
-	}
-
-	private void updateDamageLabels()
-	{
-		HitStats stats = plugin.getHitStats();
-		avgDamageLabel.setText(String.format("Average damage: %.2f", stats.getAverageDamage()));
-		biggestHitLabel.setText("Biggest hit: " + stats.getMaxHit());
-		hitCountLabel.setText("Hits recorded: " + stats.getHitCount());
-
-		if (config.showMeleeMaxHit())
-		{
-			int maxHit = plugin.getMeleeMaxHit();
-			meleeMaxHitLabel.setText(maxHit >= 0 ? "Max hit: " + maxHit : "Max hit: no weapon");
-		}
-	}
-
-	private static String capitalize(String s)
-	{
-		if (s == null || s.isEmpty())
-		{
-			return s;
-		}
-		return s.substring(0, 1).toUpperCase() + s.substring(1).toLowerCase();
-	}
-
-	/**
-	 * A single tracked skill.
-	 *
-	 * Structure mirrors RuneLite's XpInfoBox:
-	 *   this (BorderLayout)
-	 *     └─ NORTH: container (BorderLayout)
-	 *          ├─ WEST:   skill icon
-	 *          ├─ CENTER: stats grid (name / rate / level→goal / eta)
-	 *          └─ SOUTH:  progress bar
-	 *
-	 * Adding to NORTH is what stops the row being stretched vertically.
-	 */
-	private class SkillRow extends JPanel
-	{
-		private final Skill skill;
-
-		private final JPanel container = new JPanel(new BorderLayout());
-		private final JPanel statsPanel = new JPanel();
-		private final ProgressBar progressBar = new ProgressBar();
-
-		private final JLabel nameLabel = new JLabel();
-		private final JLabel rateLabel = new JLabel();
-		private final JLabel goalLabel = new JLabel();
-		private final JLabel etaLabel = new JLabel();
-
-		SkillRow(Skill skill)
-		{
-			this.skill = skill;
-
-			setLayout(new BorderLayout());
-			setBorder(new EmptyBorder(0, 0, 5, 0));
-			setBackground(ColorScheme.DARK_GRAY_COLOR);
-
-			container.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-			container.setBorder(new EmptyBorder(6, 6, 6, 6));
-
-			JLabel iconLabel = new JLabel();
-			java.awt.image.BufferedImage icon = skillIconManager.getSkillImage(skill, true);
-			if (icon != null)
-			{
-				iconLabel.setIcon(new ImageIcon(icon));
-			}
-			iconLabel.setBorder(new EmptyBorder(0, 0, 0, 6));
-			iconLabel.setVerticalAlignment(JLabel.TOP);
-
-			// 2x2 grid: name / level-goal on the first row, rate / eta on the second.
-			// Plain GridLayout is safe here (rather than stretching cells) because the
-			// whole row sits in BorderLayout.NORTH and keeps its natural height.
-			statsPanel.setLayout(new GridLayout(2, 2, 0, 2));
-			statsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-
-			nameLabel.setFont(FontManager.getRunescapeSmallFont());
-			nameLabel.setForeground(Color.WHITE);
-
-			goalLabel.setFont(FontManager.getRunescapeSmallFont());
-			goalLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			goalLabel.setHorizontalAlignment(JLabel.RIGHT);
-
-			rateLabel.setFont(FontManager.getRunescapeSmallFont());
-			rateLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-			etaLabel.setFont(FontManager.getRunescapeSmallFont());
-			etaLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			etaLabel.setHorizontalAlignment(JLabel.RIGHT);
-
-			statsPanel.add(nameLabel);
-			statsPanel.add(goalLabel);
-			statsPanel.add(rateLabel);
-			statsPanel.add(etaLabel);
-
-			progressBar.setBackground(ColorScheme.PROGRESS_INPROGRESS_COLOR.darker());
-			progressBar.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
-			progressBar.setMaximumValue(100);
-			progressBar.setPreferredSize(new Dimension(0, 16));
-
-			container.add(iconLabel, BorderLayout.WEST);
-			container.add(statsPanel, BorderLayout.CENTER);
-			container.add(progressBar, BorderLayout.SOUTH);
-
-			// Rebuilt on each open so the dismiss/show label matches current state.
-			JPopupMenu popup = new JPopupMenu();
-			popup.addPopupMenuListener(new PopupMenuListener()
-			{
-				@Override
-				public void popupMenuWillBecomeVisible(PopupMenuEvent e)
-				{
-					popup.removeAll();
-					for (JMenuItem item : buildMenuItems())
-					{
-						popup.add(item);
-					}
-				}
-
-				@Override
-				public void popupMenuWillBecomeInvisible(PopupMenuEvent e)
-				{
-				}
-
-				@Override
-				public void popupMenuCanceled(PopupMenuEvent e)
-				{
-				}
-			});
-			container.setComponentPopupMenu(popup);
-			progressBar.setComponentPopupMenu(popup);
-
-			add(container, BorderLayout.NORTH);
-		}
-
-		private List<JMenuItem> buildMenuItems()
-		{
-			List<JMenuItem> items = new ArrayList<>();
-
-			JMenuItem setGoal = new JMenuItem("Set goal level");
-			setGoal.addActionListener(e -> promptGoalLevelDialog(skill));
-			items.add(setGoal);
-
-			JMenuItem setColor = new JMenuItem("Set colour");
-			setColor.addActionListener(e -> promptSkillColorDialog(skill));
-			items.add(setColor);
-
-			JMenuItem clearColor = new JMenuItem("Clear colour");
-			clearColor.addActionListener(e -> plugin.setSkillColor(skill, null));
-			items.add(clearColor);
-
-			SkillProgress progress = plugin.getSkillProgress().get(skill);
-			boolean dismissed = progress != null && progress.isDismissedFromOverlay();
-			JMenuItem toggleOverlay = new JMenuItem(dismissed ? "Show on overlay" : "Hide from overlay");
-			toggleOverlay.addActionListener(e ->
-			{
-				if (progress != null)
-				{
-					progress.setDismissedFromOverlay(!dismissed);
-				}
-			});
-			items.add(toggleOverlay);
-
-			JMenuItem stopTracking = new JMenuItem("Stop tracking");
-			stopTracking.addActionListener(e -> plugin.clearGoal(skill));
-			items.add(stopTracking);
-
-			return items;
-		}
-
-		void update()
-		{
-			SkillProgress progress = plugin.getSkillProgress().get(skill);
-			if (progress == null)
-			{
-				return;
-			}
-
-			Color custom = plugin.getSkillColor(skill);
-			Color background = custom != null ? custom : ColorScheme.DARKER_GRAY_COLOR;
-			container.setBackground(background);
-			statsPanel.setBackground(background);
-
-			int level = progress.getCurrentLevel();
-			int goal = progress.getGoalLevel();
-			boolean reached = level >= goal;
-
-			nameLabel.setText(capitalize(skill.getName()));
-			goalLabel.setText(level + " \u2192 " + goal);
-
-			int rate = progress.getXpPerHour();
-			rateLabel.setText(rate > 0 ? String.format("%,d xp/hr", rate) : "idle");
-
-			if (reached)
-			{
-				etaLabel.setText("done");
-				progressBar.setValue(100);
-				progressBar.setCenterLabel("Goal reached");
-				progressBar.setForeground(ColorScheme.PROGRESS_COMPLETE_COLOR);
-				progressBar.setBackground(ColorScheme.PROGRESS_COMPLETE_COLOR.darker());
-			}
-			else
-			{
-				double hours = progress.getEstimatedHoursToGoal();
-				etaLabel.setText(hours > 0 ? String.format("%.1fh left", hours) : "");
-
-				int percent = (int) Math.round(progress.getProgressToGoal() * 100);
-				progressBar.setValue(percent);
-				progressBar.setCenterLabel(percent + "%");
-				progressBar.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
-				progressBar.setBackground(ColorScheme.PROGRESS_INPROGRESS_COLOR.darker());
-			}
-
-			progressBar.setLeftLabel(String.valueOf(level));
-			progressBar.setRightLabel(String.valueOf(goal));
-		}
+		JButton button = new JButton(text);
+		button.setFocusPainted(false);
+		button.addActionListener(e -> action.run());
+		return button;
 	}
 }

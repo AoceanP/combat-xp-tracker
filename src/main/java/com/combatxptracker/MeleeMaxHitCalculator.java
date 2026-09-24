@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,47 +24,47 @@
  */
 package com.combatxptracker;
 
+import java.util.List;
+import java.util.Locale;
 import javax.inject.Inject;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
-import net.runelite.api.EquipmentInventorySlot;
-import net.runelite.api.InventoryID;
+import net.runelite.api.EnumID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.NPC;
+import net.runelite.api.ParamID;
+import net.runelite.api.Player;
 import net.runelite.api.Prayer;
 import net.runelite.api.Skill;
+import net.runelite.api.StructComposition;
+import net.runelite.api.gameval.DBTableID;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.client.game.ItemEquipmentStats;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStats;
-import net.runelite.client.game.ItemEquipmentStats;
 
 /**
- * Computes melee max hit from the player's current equipment, boosted Strength level,
- * and active prayer, using the formula published on the OSRS Wiki's "Maximum melee hit"
- * page (fetched directly from the live page, last edited 27 April 2026):
+ * Reads the player's gear, prayers, Strength level, attack style and slayer task from
+ * the client, and feeds them into {@link MeleeMaxHit}.
  *
- *   Effective Strength = floor((floor(Strength + PotionBonus) x Prayer) + Style + 8) x Void
- *   Base Damage = 0.5 + Effective Strength x (Strength Bonus + 64) / 640
- *   Max Hit = floor(Base Damage)
+ * Must be called on the client thread: item compositions, varbits and DB tables can
+ * only be read there.
  *
- * This is written independently from real RuneLite API calls -- it is NOT a port or
- * derivative of any existing max-hit plugin's source. The underlying formula is public
- * game mechanics documented by the wiki, not anyone's original expression; only the
- * *code* implementing it needs to be original, and it is.
- *
- * SCOPE (deliberately limited on this first pass, matching how even the most popular
- * existing max-hit plugin, at 116k+ installs, still lists unsupported cases on its own
- * page rather than claiming full coverage):
- *   - Covers: equipped weapon's melee strength bonus, boosted Strength level (which
- *     already reflects potions via getBoostedSkillLevel), the five strength-boosting
- *     prayers, aggressive/controlled/accurate style bonus, void melee.
- *   - NOT covered yet: weapon special attacks (AGS, DWH, dragon dagger, etc.), Dharok's
- *     HP-scaling passive, Salve amulet / Slayer helm conditionals (undead / task
- *     detection isn't attempted), Obsidian/Berserker necklace set bonuses, Inquisitor's
- *     armour, Osmumten's fang's asymmetric roll, Keris variants, or the 200 damage cap.
- *     A style bonus of 0 (accurate/defensive) is assumed by default since the current
- *     attack style in use isn't read here.
+ * Covered: strength bonus from every worn slot, boosted Strength (potions), the five
+ * strength prayers, the selected attack style, Void melee, Salve amulet variants,
+ * Black mask / Slayer helmet on task, and the 200 damage cap.
+ * Not covered: special attacks, Dharok's, Obsidian / Berserker necklace, Inquisitor's,
+ * Keris, Osmumten's fang and other weapon passives.
  */
 public class MeleeMaxHitCalculator
 {
+	// Slayer task id meaning "boss task"; the real target is in a sublist
+	// (from [proc,helper_slayer_current_assignment], same as the core Slayer plugin).
+	private static final int BOSS_TASK_ID = 98;
+
 	private final Client client;
 	private final ItemManager itemManager;
 
@@ -76,128 +76,343 @@ public class MeleeMaxHitCalculator
 	}
 
 	/**
-	 * Style bonus added during effective strength calculation. Aggressive gives +3,
-	 * controlled +1, accurate/defensive +0 (per the wiki's bonus table). Exposed so the
-	 * caller can offer a style selector rather than this class guessing the active style.
+	 * Everything the panel shows about the max hit.
 	 */
-	public enum StyleBonus
+	public static final class Result
 	{
-		ACCURATE_OR_DEFENSIVE(0),
-		CONTROLLED(1),
-		AGGRESSIVE(3);
+		private final int maxHit;
+		private final int onTaskMaxHit;
+		private final int vsUndeadMaxHit;
+		private final MeleeMaxHit.TargetBonus salve;
+		private final String attackStyleName;
+		private final boolean meleeStyle;
+		private final MeleeMaxHit.StrengthPrayer prayer;
+		private final int strengthBonus;
+		private final boolean voidMelee;
+		private final String slayerTask;
+		private final boolean targetIsOnTask;
 
-		private final int value;
-
-		StyleBonus(int value)
+		Result(int maxHit, int onTaskMaxHit, int vsUndeadMaxHit, MeleeMaxHit.TargetBonus salve,
+			String attackStyleName, boolean meleeStyle, MeleeMaxHit.StrengthPrayer prayer,
+			int strengthBonus, boolean voidMelee, String slayerTask, boolean targetIsOnTask)
 		{
-			this.value = value;
+			this.maxHit = maxHit;
+			this.onTaskMaxHit = onTaskMaxHit;
+			this.vsUndeadMaxHit = vsUndeadMaxHit;
+			this.salve = salve;
+			this.attackStyleName = attackStyleName;
+			this.meleeStyle = meleeStyle;
+			this.prayer = prayer;
+			this.strengthBonus = strengthBonus;
+			this.voidMelee = voidMelee;
+			this.slayerTask = slayerTask;
+			this.targetIsOnTask = targetIsOnTask;
+		}
+
+		public int getMaxHit()
+		{
+			return maxHit;
+		}
+
+		/**
+		 * @return the max hit on slayer task targets, or -1 if no Black mask / Slayer
+		 * helmet is worn or there's no task
+		 */
+		public int getOnTaskMaxHit()
+		{
+			return onTaskMaxHit;
+		}
+
+		/**
+		 * @return the max hit against undead, or -1 if no Salve amulet is worn
+		 */
+		public int getVsUndeadMaxHit()
+		{
+			return vsUndeadMaxHit;
+		}
+
+		public MeleeMaxHit.TargetBonus getSalve()
+		{
+			return salve;
+		}
+
+		public String getAttackStyleName()
+		{
+			return attackStyleName;
+		}
+
+		/**
+		 * False when the selected style is ranged or magic; the number is then what the
+		 * player would hit on a melee style with +0 style bonus.
+		 */
+		public boolean isMeleeStyle()
+		{
+			return meleeStyle;
+		}
+
+		public MeleeMaxHit.StrengthPrayer getPrayer()
+		{
+			return prayer;
+		}
+
+		public int getStrengthBonus()
+		{
+			return strengthBonus;
+		}
+
+		public boolean isVoidMelee()
+		{
+			return voidMelee;
+		}
+
+		public String getSlayerTask()
+		{
+			return slayerTask;
+		}
+
+		public boolean isTargetOnTask()
+		{
+			return targetIsOnTask;
+		}
+
+		/**
+		 * Every field, so two results that would display the same compare equal. The
+		 * plugin uses this to only refresh the panel when something visible changed.
+		 */
+		@Override
+		public String toString()
+		{
+			return maxHit + "|" + onTaskMaxHit + "|" + vsUndeadMaxHit + "|" + salve + "|" + attackStyleName
+				+ "|" + meleeStyle + "|" + prayer + "|" + strengthBonus + "|" + voidMelee + "|" + slayerTask
+				+ "|" + targetIsOnTask;
 		}
 	}
 
 	/**
-	 * @return the calculated max hit, or -1 if no weapon is equipped or its equipment
-	 * stats couldn't be resolved (e.g. unarmed, or the item has no equipment data).
+	 * @return the result, or null if the equipment isn't loaded yet
 	 */
-	public int calculate(StyleBonus style, boolean voidMeleeActive)
+	public Result calculate(CombatStyle.AttackStyle attackStyle, String slayerTask)
 	{
-		Integer strengthBonus = getEquippedStrengthBonus();
-		if (strengthBonus == null)
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		if (worn == null)
 		{
-			return -1;
+			return null;
 		}
 
-		int boostedStrength = client.getBoostedSkillLevel(Skill.STRENGTH);
+		int strengthBonus = 0;
+		boolean voidTop = false;
+		boolean voidRobe = false;
+		boolean voidGloves = false;
+		boolean voidHelm = false;
+		boolean slayerHeadgear = false;
+		MeleeMaxHit.TargetBonus salve = null;
 
-		double prayerMultiplier = getStrengthPrayerMultiplier();
+		for (Item item : worn.getItems())
+		{
+			int id = item.getId();
+			if (id <= 0)
+			{
+				continue;
+			}
 
-		// Effective Strength = floor((floor(Strength + PotionBonus) x Prayer) + Style + 8) x Void
-		// getBoostedSkillLevel already folds in potion bonuses, so the inner floor(Strength
-		// + PotionBonus) step collapses to just the boosted level itself.
-		double afterPrayer = boostedStrength * prayerMultiplier;
-		double beforeVoid = Math.floor(afterPrayer) + style.value + 8;
-		double voidMultiplier = voidMeleeActive ? 1.1 : 1.0;
-		int effectiveStrength = (int) Math.floor(beforeVoid * voidMultiplier);
+			ItemStats stats = itemManager.getItemStats(id);
+			if (stats != null)
+			{
+				ItemEquipmentStats equipment = stats.getEquipment();
+				if (equipment != null)
+				{
+					strengthBonus += equipment.getStr();
+				}
+			}
 
-		// Base Damage = 0.5 + Effective Strength x (Strength Bonus + 64) / 640
-		double baseDamage = 0.5 + effectiveStrength * (strengthBonus + 64) / 640.0;
+			// Matching on names covers every recolour, imbue, ornament and league
+			// variant without a list of dozens of item ids.
+			String name = itemManager.getItemComposition(id).getName().toLowerCase(Locale.ROOT);
+			if (name.contains("void") && name.contains("top"))
+			{
+				voidTop = true;
+			}
+			else if (name.contains("void") && name.contains("robe"))
+			{
+				voidRobe = true;
+			}
+			else if (name.contains("void knight gloves"))
+			{
+				voidGloves = true;
+			}
+			else if (name.contains("void melee helm"))
+			{
+				voidHelm = true;
+			}
+			else if (name.startsWith("salve amulet"))
+			{
+				// "Salve amulet (e)" and "Salve amulet(ei)" are 20%; the rest 1/6.
+				salve = name.contains("(e") ? MeleeMaxHit.TargetBonus.SALVE_E : MeleeMaxHit.TargetBonus.SALVE;
+			}
+			else if (name.contains("slayer helmet") || name.startsWith("black mask"))
+			{
+				slayerHeadgear = true;
+			}
+		}
 
-		return (int) Math.floor(baseDamage);
+		boolean voidMelee = voidTop && voidRobe && voidGloves && voidHelm;
+		boolean meleeStyle = attackStyle != null && attackStyle.getStyle() == CombatStyle.MELEE;
+		int styleBonus = meleeStyle ? attackStyle.getMeleeStrengthBonus() : 0;
+		MeleeMaxHit.StrengthPrayer prayer = activeStrengthPrayer();
+
+		int maxHit = MeleeMaxHit.maxHit(
+			client.getBoostedSkillLevel(Skill.STRENGTH), prayer, styleBonus, voidMelee, strengthBonus);
+
+		boolean hasTask = slayerTask != null;
+		int onTask = slayerHeadgear && hasTask ? MeleeMaxHit.TargetBonus.SLAYER_HELM.apply(maxHit) : -1;
+		// Salve and the slayer helm don't stack; against undead the Salve applies.
+		int vsUndead = salve != null ? salve.apply(maxHit) : -1;
+
+		boolean targetOnTask = hasTask && SlayerTaskMatcher.matches(slayerTask, currentTargetName());
+
+		return new Result(maxHit, onTask, vsUndead, salve,
+			attackStyle != null ? attackStyle.getName() : null, meleeStyle,
+			prayer, strengthBonus, voidMelee, slayerTask, targetOnTask);
+	}
+
+	private MeleeMaxHit.StrengthPrayer activeStrengthPrayer()
+	{
+		if (isActive(Prayer.PIETY))
+		{
+			return MeleeMaxHit.StrengthPrayer.PIETY;
+		}
+		if (isActive(Prayer.CHIVALRY))
+		{
+			return MeleeMaxHit.StrengthPrayer.CHIVALRY;
+		}
+		if (isActive(Prayer.ULTIMATE_STRENGTH))
+		{
+			return MeleeMaxHit.StrengthPrayer.ULTIMATE_STRENGTH;
+		}
+		if (isActive(Prayer.SUPERHUMAN_STRENGTH))
+		{
+			return MeleeMaxHit.StrengthPrayer.SUPERHUMAN_STRENGTH;
+		}
+		if (isActive(Prayer.BURST_OF_STRENGTH))
+		{
+			return MeleeMaxHit.StrengthPrayer.BURST_OF_STRENGTH;
+		}
+		return MeleeMaxHit.StrengthPrayer.NONE;
+	}
+
+	private boolean isActive(Prayer prayer)
+	{
+		return client.getVarbitValue(prayer.getVarbit()) == 1;
+	}
+
+	private String currentTargetName()
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null)
+		{
+			return null;
+		}
+		Actor target = local.getInteracting();
+		return target instanceof NPC ? target.getName() : null;
 	}
 
 	/**
-	 * @return the equipped weapon's melee strength bonus, or null if no weapon is
-	 * equipped or its stats aren't resolvable. Only the weapon slot is read -- armour
-	 * pieces also contribute strength bonus in the real game (e.g. Bandos, Fighter
-	 * torso), but summing every slot is left for a later pass rather than guessed at
-	 * here; treat this as weapon-only strength bonus for now, understating total bonus
-	 * for players wearing strength-bonus armour.
+	 * The attack style selected in the combat tab, or null if it can't be read. Uses the
+	 * same weapon-style enum and structs as the core Attack Styles plugin.
 	 */
-	private Integer getEquippedStrengthBonus()
+	public CombatStyle.AttackStyle readAttackStyle()
 	{
-		ItemContainer equipment = client.getItemContainer(InventoryID.EQUIPMENT);
-		if (equipment == null)
+		int weaponType = client.getVarbitValue(VarbitID.COMBAT_WEAPON_CATEGORY);
+		int index = client.getVarpValue(VarPlayerID.COM_MODE);
+		// Staves only use indices 0-4; defensive casting is index 4 plus this varbit.
+		if (index == 4)
+		{
+			index += client.getVarbitValue(VarbitID.AUTOCAST_DEFMODE);
+		}
+
+		int stylesEnum = client.getEnum(EnumID.WEAPON_STYLES).getIntValue(weaponType);
+		if (stylesEnum == -1)
+		{
+			return CombatStyle.AttackStyle.fromName(fallbackStyleName(weaponType, index));
+		}
+
+		int[] styleStructs = client.getEnum(stylesEnum).getIntVals();
+		if (index < 0 || index >= styleStructs.length)
 		{
 			return null;
 		}
 
-		Item[] items = equipment.getItems();
-		int weaponSlot = EquipmentInventorySlot.WEAPON.getSlotIdx();
-		if (weaponSlot < 0 || weaponSlot >= items.length)
+		StructComposition struct = client.getStructComposition(styleStructs[index]);
+		String name = struct.getStringValue(ParamID.ATTACK_STYLE_NAME);
+		// Index 5 reuses the "Defensive" struct for defensive casting.
+		if (index == 5 && "Defensive".equalsIgnoreCase(name))
 		{
-			return null;
+			name = "Defensive casting";
 		}
-
-		Item weapon = items[weaponSlot];
-		if (weapon == null || weapon.getId() <= 0)
-		{
-			return null;
-		}
-
-		ItemStats stats = itemManager.getItemStats(weapon.getId());
-		if (stats == null || !stats.isEquipable())
-		{
-			return null;
-		}
-
-		ItemEquipmentStats equipmentStats = stats.getEquipment();
-		if (equipmentStats == null)
-		{
-			return null;
-		}
-
-		return equipmentStats.getStr();
+		return CombatStyle.AttackStyle.fromName(name);
 	}
 
 	/**
-	 * @return the strength-boosting prayer multiplier for whichever of the five relevant
-	 * prayers is currently active, or 1.0 if none are. Values confirmed against the OSRS
-	 * Wiki's bonus table (Burst of Strength 1.05, Superhuman Strength 1.1, Ultimate
-	 * Strength 1.15, Chivalry 1.18, Piety 1.23). If multiple were somehow simultaneously
-	 * active (shouldn't happen in practice, since these prayers occupy the same prayer
-	 * book slot), the strongest is used.
+	 * Weapon types missing from the enum, hardcoded the same way the core Attack Styles
+	 * plugin does.
 	 */
-	private double getStrengthPrayerMultiplier()
+	private static String fallbackStyleName(int weaponType, int index)
 	{
-		if (client.isPrayerActive(Prayer.PIETY))
+		String[] names;
+		if (weaponType == 22)
 		{
-			return 1.23;
+			// Blue moon spear
+			names = new String[]{"Accurate", "Aggressive", null, "Defensive", "Casting", "Defensive casting"};
 		}
-		if (client.isPrayerActive(Prayer.CHIVALRY))
+		else if (weaponType == 30)
 		{
-			return 1.18;
+			// Partisan
+			names = new String[]{"Accurate", "Aggressive", "Aggressive", "Defensive"};
 		}
-		if (client.isPrayerActive(Prayer.ULTIMATE_STRENGTH))
+		else
 		{
-			return 1.15;
+			return null;
 		}
-		if (client.isPrayerActive(Prayer.SUPERHUMAN_STRENGTH))
+		return index >= 0 && index < names.length ? names[index] : null;
+	}
+
+	/**
+	 * The current slayer task's name, e.g. "Abyssal demons", or null with no task.
+	 * Read from the game's slayer task table, the same way the core Slayer plugin does.
+	 */
+	public String readSlayerTaskName()
+	{
+		if (client.getVarpValue(VarPlayerID.SLAYER_COUNT) <= 0)
 		{
-			return 1.1;
+			return null;
 		}
-		if (client.isPrayerActive(Prayer.BURST_OF_STRENGTH))
+
+		int taskId = client.getVarpValue(VarPlayerID.SLAYER_TARGET);
+		int taskRow;
+		if (taskId == BOSS_TASK_ID)
 		{
-			return 1.05;
+			List<Integer> bossRows = client.getDBRowsByValue(
+				DBTableID.SlayerTaskSublist.ID,
+				DBTableID.SlayerTaskSublist.COL_TASK_SUBTABLE_ID,
+				0,
+				client.getVarbitValue(VarbitID.SLAYER_TARGET_BOSSID));
+			if (bossRows.isEmpty())
+			{
+				return null;
+			}
+			taskRow = (Integer) client.getDBTableField(bossRows.get(0), DBTableID.SlayerTaskSublist.COL_TASK, 0)[0];
 		}
-		return 1.0;
+		else
+		{
+			List<Integer> taskRows = client.getDBRowsByValue(DBTableID.SlayerTask.ID, DBTableID.SlayerTask.COL_ID, 0, taskId);
+			if (taskRows.isEmpty())
+			{
+				return null;
+			}
+			taskRow = taskRows.get(0);
+		}
+
+		Object[] name = client.getDBTableField(taskRow, DBTableID.SlayerTask.COL_NAME_UPPERCASE, 0);
+		return name.length > 0 && name[0] instanceof String ? (String) name[0] : null;
 	}
 }

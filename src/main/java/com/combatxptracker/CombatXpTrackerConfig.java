@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,19 +24,48 @@
  */
 package com.combatxptracker;
 
+import java.awt.Color;
+import net.runelite.client.config.Alpha;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.Range;
 
-@ConfigGroup("combatxptracker")
+@ConfigGroup(CombatXpTrackerConfig.GROUP)
 public interface CombatXpTrackerConfig extends Config
 {
+	String GROUP = "combatxptracker";
+
+	@ConfigSection(
+		name = "Goals",
+		description = "Skill goals and XP/hr",
+		position = 0
+	)
+	String goalsSection = "goals";
+
+	@ConfigSection(
+		name = "Combat",
+		description = "Damage, max hit and per-monster tracking",
+		position = 1
+	)
+	String combatSection = "combat";
+
+	@ConfigSection(
+		name = "Overlays",
+		description = "On-screen overlay and infoboxes",
+		position = 2
+	)
+	String overlaySection = "overlays";
+
+	// ---- Goals ---------------------------------------------------------------
+
 	@ConfigItem(
 		keyName = "xpHrInterval",
 		name = "XP/hr averaging window",
 		description = "How many seconds of recent activity to average XP/hr over. Lower = more reactive, higher = smoother.",
-		position = 0
+		position = 0,
+		section = goalsSection
 	)
 	@Range(min = 5, max = 300)
 	default int xpHrIntervalSeconds()
@@ -44,22 +73,40 @@ public interface CombatXpTrackerConfig extends Config
 		return 30;
 	}
 
+	@Alpha
 	@ConfigItem(
-		keyName = "resetHitsOnLogout",
-		name = "Reset hit stats on logout",
-		description = "Clears average/max damage stats when you log out.",
-		position = 1
+		keyName = "goalBarColor",
+		name = "Goal bar colour",
+		description = "Fill colour of the goal progress bars. Right-click a goal in the panel to give one skill its own colour.",
+		position = 1,
+		section = goalsSection
 	)
-	default boolean resetHitsOnLogout()
+	default Color goalBarColor()
 	{
-		return false;
+		return new Color(79, 195, 247);
+	}
+
+	// ---- Combat --------------------------------------------------------------
+
+	@ConfigItem(
+		keyName = "showMeleeMaxHit",
+		name = "Show melee max hit",
+		description = "Shows your melee max hit from worn gear, boosted Strength, prayer, attack style, Void, "
+			+ "Salve amulet and Slayer helm. Special attacks and weapon passives aren't included.",
+		position = 0,
+		section = combatSection
+	)
+	default boolean showMeleeMaxHit()
+	{
+		return true;
 	}
 
 	@ConfigItem(
 		keyName = "showZeroHits",
 		name = "Include 0-damage hits in average",
-		description = "Whether misses (0 damage, non-blocked) count toward your average hit calculation.",
-		position = 2
+		description = "Whether misses (0 damage) count toward your average hit.",
+		position = 1,
+		section = combatSection
 	)
 	default boolean showZeroHits()
 	{
@@ -67,10 +114,37 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "trackMonsterLoot",
+		name = "Track monster drops",
+		description = "Records each monster's drops and their Grand Exchange value in the Monsters tab.",
+		position = 2,
+		section = combatSection
+	)
+	default boolean trackMonsterLoot()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "resetHitsOnLogout",
+		name = "Reset stats on logout",
+		description = "Clears damage stats and the Monsters tab when you log out.",
+		position = 3,
+		section = combatSection
+	)
+	default boolean resetHitsOnLogout()
+	{
+		return false;
+	}
+
+	// ---- Overlays ------------------------------------------------------------
+
+	@ConfigItem(
 		keyName = "showOverlay",
 		name = "Show on-screen overlay",
-		description = "Displays average damage, biggest hit, and your goal-tracked skills' XP/hr on screen, in addition to the sidebar panel.",
-		position = 3
+		description = "Shows average damage, biggest hit, max hit and your goals' XP/hr on screen.",
+		position = 0,
+		section = overlaySection
 	)
 	default boolean showOverlay()
 	{
@@ -79,9 +153,10 @@ public interface CombatXpTrackerConfig extends Config
 
 	@ConfigItem(
 		keyName = "showInfobox",
-		name = "Show goal infobox",
-		description = "Shows an infobox near the minimap for the skill you're actively training, with its progress toward your goal.",
-		position = 4
+		name = "Show goal infoboxes",
+		description = "Shows an infobox per goal with its progress.",
+		position = 1,
+		section = overlaySection
 	)
 	default boolean showInfobox()
 	{
@@ -89,55 +164,11 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "debugMenuLogging",
-		name = "Debug: log right-click IDs",
-		description = "TEMPORARY DIAGNOSTIC. When enabled, right-clicking in the stats tab prints the raw widget IDs to the client log, so the 'Set goal level' menu entry can be fixed. Leave off unless asked.",
-		position = 90
-	)
-	default boolean debugMenuLogging()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "showMeleeMaxHit",
-		name = "Show melee max hit",
-		description = "Displays your calculated max melee hit based on equipped weapon, Strength level, and active prayer. "
-			+ "Does NOT yet account for weapon special attacks, Dharok's, Salve amulet, Slayer helm, or several other bonuses -- treat it as an estimate, not an exact figure.",
-		position = 7
-	)
-	default boolean showMeleeMaxHit()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "assumeAggressiveStyle",
-		name = "Assume aggressive attack style",
-		description = "The calculator can't currently detect your selected combat style, so this assumes Aggressive (+3 Strength) when checked, or Accurate/Defensive (+0) when unchecked.",
-		position = 8
-	)
-	default boolean assumeAggressiveStyle()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "assumeVoidMelee",
-		name = "Wearing void melee armour",
-		description = "The calculator can't currently detect your worn armour set, so check this if you're wearing a full void melee set (adds the 10% multiplier).",
-		position = 9
-	)
-	default boolean assumeVoidMelee()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "showCombinedDrop",
 		name = "Show damage on XP drops",
-		description = "When an XP gain and a hit land close together, shows the hit damage alongside the XP drop overlay.",
-		position = 5
+		description = "When an XP gain and a hit land close together, shows the hit next to that skill on the overlay.",
+		position = 2,
+		section = overlaySection
 	)
 	default boolean showCombinedDrop()
 	{
@@ -147,8 +178,9 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "combinedDropWindowMillis",
 		name = "XP/damage pairing window (ms)",
-		description = "How close together (in milliseconds) an XP gain and a hit need to land to be shown as paired.",
-		position = 6
+		description = "How close together (in milliseconds) an XP gain and a hit need to land to be paired.",
+		position = 3,
+		section = overlaySection
 	)
 	@Range(min = 100, max = 3000)
 	default int combinedDropWindowMillis()

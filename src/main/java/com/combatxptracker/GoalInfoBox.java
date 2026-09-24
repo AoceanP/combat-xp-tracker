@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, YourNameHere <https://github.com/YourNameHere>
+ * Copyright (c) 2026, AoceanP <https://github.com/AoceanP>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,14 +31,12 @@ import net.runelite.client.ui.overlay.infobox.InfoBox;
 import net.runelite.client.ui.overlay.infobox.InfoBoxPriority;
 
 /**
- * An infobox (rendered near the minimap by RuneLite's InfoBoxOverlay) showing progress
- * toward the goal for a single skill.
- *
- * One of these exists per goal-tracked skill. The text is the percentage complete, so a
- * glance during combat tells you how close you are without opening the sidebar.
+ * Infobox showing one goal's progress as a percentage.
  */
 public class GoalInfoBox extends InfoBox
 {
+	private static final Color GOAL_REACHED = new Color(96, 220, 140);
+
 	private final Skill skill;
 	private final CombatXpTrackerPlugin plugin;
 
@@ -55,61 +53,65 @@ public class GoalInfoBox extends InfoBox
 		return skill;
 	}
 
+	private SkillProgress progress()
+	{
+		return plugin.getSkillProgress().get(skill);
+	}
+
 	@Override
 	public String getText()
 	{
-		SkillProgress progress = plugin.getSkillProgress().get(skill);
-		if (progress == null)
+		SkillProgress progress = progress();
+		if (progress == null || !progress.isGoalSet())
 		{
 			return "";
 		}
-		if (progress.getCurrentLevel() >= progress.getGoalLevel())
+		if (progress.isGoalReached())
 		{
-			return "done";
+			return "Done";
 		}
-		return Math.round(progress.getProgressToGoal() * 100) + "%";
+		return (int) Math.floor(progress.getProgressToGoal() * 100) + "%";
 	}
 
 	@Override
 	public Color getTextColor()
 	{
-		SkillProgress progress = plugin.getSkillProgress().get(skill);
-		if (progress != null && progress.getCurrentLevel() >= progress.getGoalLevel())
-		{
-			return Color.GREEN;
-		}
-		return Color.WHITE;
+		SkillProgress progress = progress();
+		return progress != null && progress.isGoalReached() ? GOAL_REACHED : Color.WHITE;
 	}
 
 	@Override
 	public boolean render()
 	{
-		SkillProgress progress = plugin.getSkillProgress().get(skill);
+		SkillProgress progress = progress();
 		return progress != null && progress.isGoalSet();
 	}
 
 	@Override
 	public String getTooltip()
 	{
-		SkillProgress progress = plugin.getSkillProgress().get(skill);
-		if (progress == null)
+		SkillProgress progress = progress();
+		Goal goal = progress == null ? null : progress.getGoal();
+		if (goal == null)
 		{
 			return "";
 		}
-		String name = skill.getName();
-		if (progress.getCurrentLevel() >= progress.getGoalLevel())
+
+		String name = Formatting.capitalize(skill.getName());
+		if (progress.isGoalReached())
 		{
-			return name + ": goal of " + progress.getGoalLevel() + " reached";
+			return name + ": goal of " + goal + " reached";
 		}
+
+		StringBuilder sb = new StringBuilder()
+			.append(name).append(": ").append(goal)
+			.append("</br>").append(Formatting.withCommas(progress.getXpRemainingToGoal())).append(" xp left");
 		int rate = progress.getXpPerHour();
-		String eta = "";
-		double hours = progress.getEstimatedHoursToGoal();
-		if (hours > 0)
+		if (rate > 0)
 		{
-			eta = String.format(" (~%.1fh at %,d xp/hr)", hours, rate);
+			sb.append("</br>").append(Formatting.withCommas(rate)).append(" xp/hr, ")
+				.append(Formatting.duration(progress.getEstimatedHoursToGoal())).append(" to go");
 		}
-		return String.format("%s: level %d \u2192 %d, %,d xp to go%s",
-			name, progress.getCurrentLevel(), progress.getGoalLevel(),
-			progress.getXpRemainingToGoal(), eta);
+		return sb.toString();
 	}
 }
