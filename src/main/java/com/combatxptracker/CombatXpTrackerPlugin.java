@@ -46,6 +46,8 @@ import net.runelite.api.Client;
 import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
@@ -54,9 +56,12 @@ import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.StatChanged;
+import net.runelite.api.gameval.InventoryID;
 import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatColorType;
@@ -114,6 +119,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final int SAVE_INTERVAL_TICKS = 50;
 
 	private static final String MONSTERS_KEY = "monsters";
+
+	/** The option some bosses use to hand out their reward, e.g. the Royal Titans. */
+	private static final String LOOT_OPTION = "Loot";
+	/** How long (3.6s) to wait after a "Loot" click for the reward to arrive. */
+	private static final int LOOT_WINDOW_TICKS = 6;
 
 	// Skill name embedded in the stats tab's own menu options, e.g.
 	// "View <col=ff981f>Attack</col> guide". The core XP Tracker reads it the same way.
@@ -183,6 +193,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	private final Map<NPC, Integer> countedKills = new HashMap<>();
 	private int savedMonsterRevision = -1;
 	private int ticksSinceSave;
+	// A "Loot" click on a boss (e.g. the Royal Titans) waiting for its reward to arrive
+	// in the inventory: which NPC, when, and what the inventory held at the click.
+	private String pendingLootNpc;
+	private int pendingLootTick;
+	private Map<Integer, Long> pendingLootBefore;
 
 	// Written on the client thread, read by the panel and overlay.
 	private volatile MaxHitCalculator.Result maxHitResult;
@@ -239,6 +254,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		saveMonsters();
 		engagedNpcs.clear();
 		countedKills.clear();
+		pendingLootNpc = null;
+		pendingLootBefore = null;
 		savedMonsterRevision = -1;
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
@@ -276,6 +293,8 @@ public class CombatXpTrackerPlugin extends Plugin
 			}
 			engagedNpcs.clear();
 			countedKills.clear();
+			pendingLootNpc = null;
+			pendingLootBefore = null;
 			if (config.resetHitsOnLogout())
 			{
 				hitStats.reset();
@@ -321,6 +340,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		refreshCombatState();
 		pruneKillTracking();
+		if (pendingLootNpc != null && client.getTickCount() - pendingLootTick > LOOT_WINDOW_TICKS)
+		{
+			// Nothing arrived (e.g. "Loot" gave nothing, or the inventory was full).
+			pendingLootNpc = null;
+			pendingLootBefore = null;
+		}
 		if (++ticksSinceSave >= SAVE_INTERVAL_TICKS)
 		{
 			ticksSinceSave = 0;
@@ -439,6 +464,89 @@ public class CombatXpTrackerPlugin extends Plugin
 			countedKills.put(npc, client.getTickCount());
 			panelDirty = true;
 		}
+	}
+
+	/**
+	 * Some bosses don't drop loot on death. The Royal Titans, for example, give their
+	 * reward when you pick "Loot" on them afterwards, straight into the inventory, and
+	 * RuneLite's NpcLootReceived never fires for it. So remember the click and what the
+	 * inventory held, and record what gets added in the next few ticks.
+	 */
+	@Subscribe
+	public void onMenuOptionClicked(MenuOptionClicked event)
+	{
+		MenuEntry entry = event.getMenuEntry();
+		NPC npc = entry.getNpc();
+		if (npc == null || !LOOT_OPTION.equals(Text.removeTags(entry.getOption())))
+		{
+			return;
+		}
+		String name = cleanName(npc.getName());
+		if (name == null)
+		{
+			return;
+		}
+		pendingLootNpc = name;
+		pendingLootTick = client.getTickCount();
+		pendingLootBefore = inventoryCounts(client.getItemContainer(InventoryID.INV));
+	}
+
+	@Subscribe
+	public void onItemContainerChanged(ItemContainerChanged event)
+	{
+		if (event.getContainerId() != InventoryID.INV || pendingLootNpc == null)
+		{
+			return;
+		}
+
+		Map<Integer, Long> after = inventoryCounts(event.getItemContainer());
+		Map<Integer, Long> gained = InventoryDiff.gained(pendingLootBefore, after);
+		if (gained.isEmpty())
+		{
+			// Something was used or dropped meanwhile; keep waiting from the new state.
+			pendingLootBefore = after;
+			return;
+		}
+
+		String name = pendingLootNpc;
+		// Only the first change counts, so later pickups or withdrawals are never
+		// mistaken for boss loot.
+		pendingLootNpc = null;
+		pendingLootBefore = null;
+
+		if (config.trackMonsterLoot())
+		{
+			List<MonsterTracker.Drop> drops = new ArrayList<>();
+			for (Map.Entry<Integer, Long> e : gained.entrySet())
+			{
+				int id = e.getKey();
+				int quantity = (int) Math.min(Integer.MAX_VALUE, e.getValue());
+				drops.add(new MonsterTracker.Drop(id, itemManager.getItemComposition(id).getName(), quantity, itemManager.getItemPrice(id)));
+			}
+			monsterTracker.recordLoot(name, drops, System.currentTimeMillis());
+			panelDirty = true;
+		}
+	}
+
+	/**
+	 * Item id -> total quantity, with noted items counted as their normal item so they
+	 * price and stack the same way as regular drops.
+	 */
+	private Map<Integer, Long> inventoryCounts(ItemContainer container)
+	{
+		Map<Integer, Long> counts = new HashMap<>();
+		if (container == null)
+		{
+			return counts;
+		}
+		for (Item item : container.getItems())
+		{
+			if (item.getId() > 0 && item.getQuantity() > 0)
+			{
+				counts.merge(itemManager.canonicalize(item.getId()), (long) item.getQuantity(), Long::sum);
+			}
+		}
+		return counts;
 	}
 
 	@Subscribe
