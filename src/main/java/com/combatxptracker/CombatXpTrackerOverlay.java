@@ -87,8 +87,8 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			.right(String.valueOf(hitStats.getMaxHit()))
 			.build());
 
-		MeleeMaxHitCalculator.Result maxHit = plugin.getMaxHitResult();
-		if (config.showMeleeMaxHit() && maxHit != null)
+		MaxHitCalculator.Result maxHit = plugin.getMaxHitResult();
+		if (config.showMeleeMaxHit() && maxHit != null && maxHit.getMaxHit() >= 0)
 		{
 			String right = String.valueOf(maxHit.getMaxHit());
 			if (maxHit.isTargetOnTask() && maxHit.getOnTaskMaxHit() >= 0)
@@ -96,9 +96,9 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 				right = maxHit.getOnTaskMaxHit() + " (task)";
 			}
 			panelComponent.getChildren().add(LineComponent.builder()
-				.left("Melee max:")
+				.left(maxHit.getStyle().getDisplayName() + " max:")
 				.right(right)
-				.rightColor(CombatStyle.MELEE.getColor())
+				.rightColor(maxHit.getStyle().getColor())
 				.build());
 		}
 
@@ -115,7 +115,7 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			String right = reached
 				? "Goal reached!"
 				: String.format(Locale.US, "%s/hr (%d%%)",
-					Formatting.compactXp(progress.getXpPerHour()),
+					Formatting.compactXp(progress.getXpPerHour(config.xpRateMode())),
 					(int) Math.floor(progress.getProgressToGoal() * 100));
 
 			// Best-effort pairing of this skill's latest XP drop with a hit that landed at

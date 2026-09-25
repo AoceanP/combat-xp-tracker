@@ -106,11 +106,11 @@ public class GoalInfoBox extends InfoBox
 		StringBuilder sb = new StringBuilder()
 			.append(name).append(": ").append(goal)
 			.append("</br>").append(Formatting.withCommas(progress.getXpRemainingToGoal())).append(" xp left");
-		int rate = progress.getXpPerHour();
+		int rate = progress.getXpPerHour(plugin.getXpRateMode());
 		if (rate > 0)
 		{
 			sb.append("</br>").append(Formatting.withCommas(rate)).append(" xp/hr, ")
-				.append(Formatting.duration(progress.getEstimatedHoursToGoal())).append(" to go");
+				.append(Formatting.duration(progress.getEstimatedHoursToGoal(plugin.getXpRateMode()))).append(" to go");
 		}
 		return sb.toString();
 	}

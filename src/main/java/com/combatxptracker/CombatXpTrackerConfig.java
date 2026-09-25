@@ -30,6 +30,7 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.Notification;
 import net.runelite.client.config.Range;
 
 @ConfigGroup(CombatXpTrackerConfig.GROUP)
@@ -63,7 +64,8 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "xpHrInterval",
 		name = "XP/hr averaging window",
-		description = "How many seconds of recent activity to average XP/hr over. Lower = more reactive, higher = smoother.",
+		description = "With the 'Recent' XP/hr mode: how many seconds of recent activity to average over. "
+			+ "Lower = more reactive, higher = smoother.",
 		position = 0,
 		section = goalsSection
 	)
@@ -73,12 +75,25 @@ public interface CombatXpTrackerConfig extends Config
 		return 30;
 	}
 
+	@ConfigItem(
+		keyName = "xpRateMode",
+		name = "XP/hr mode",
+		description = "Recent: the last few seconds of XP drops, reacts quickly. "
+			+ "Whole session: all XP this session divided by time spent training (breaks over 5 minutes aren't counted), steadier.",
+		position = 1,
+		section = goalsSection
+	)
+	default XpRateMode xpRateMode()
+	{
+		return XpRateMode.RECENT;
+	}
+
 	@Alpha
 	@ConfigItem(
 		keyName = "goalBarColor",
 		name = "Goal bar colour",
 		description = "Fill colour of the goal progress bars. Right-click a goal in the panel to give one skill its own colour.",
-		position = 1,
+		position = 2,
 		section = goalsSection
 	)
 	default Color goalBarColor()
@@ -86,13 +101,37 @@ public interface CombatXpTrackerConfig extends Config
 		return new Color(79, 195, 247);
 	}
 
+	@ConfigItem(
+		keyName = "goalNotification",
+		name = "Notify when a goal is reached",
+		description = "Sends a RuneLite notification when you reach a goal.",
+		position = 3,
+		section = goalsSection
+	)
+	default Notification goalNotification()
+	{
+		return Notification.ON;
+	}
+
+	@ConfigItem(
+		keyName = "goalChatMessage",
+		name = "Chat message when a goal is reached",
+		description = "Adds a message to your chatbox when you reach a goal. Only you can see it.",
+		position = 4,
+		section = goalsSection
+	)
+	default boolean goalChatMessage()
+	{
+		return true;
+	}
+
 	// ---- Combat --------------------------------------------------------------
 
 	@ConfigItem(
 		keyName = "showMeleeMaxHit",
-		name = "Show melee max hit",
-		description = "Shows your melee max hit from worn gear, boosted Strength, prayer, attack style, Void, "
-			+ "Salve amulet and Slayer helm. Special attacks and weapon passives aren't included.",
+		name = "Show max hit",
+		description = "Shows your max hit for the style you're using (melee, ranged or magic) from your gear, levels, prayers, "
+			+ "attack style, Void, Salve amulet and Slayer helm. Special attacks and weapon passives aren't included.",
 		position = 0,
 		section = combatSection
 	)
@@ -128,13 +167,49 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "resetHitsOnLogout",
 		name = "Reset stats on logout",
-		description = "Clears damage stats and the Monsters tab when you log out.",
+		description = "Clears damage stats and the Monsters tab (including what's remembered) when you log out.",
 		position = 3,
 		section = combatSection
 	)
 	default boolean resetHitsOnLogout()
 	{
 		return false;
+	}
+
+	@ConfigItem(
+		keyName = "rememberMonsters",
+		name = "Remember monsters",
+		description = "Keeps the Monsters tab between sessions and client restarts, separately for each account.",
+		position = 4,
+		section = combatSection
+	)
+	default boolean rememberMonsters()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "monsterSort",
+		name = "Sort monsters by",
+		description = "Order of the Monsters tab. You can also change it at the top of the tab.",
+		position = 5,
+		section = combatSection
+	)
+	default MonsterSort monsterSort()
+	{
+		return MonsterSort.RECENT;
+	}
+
+	@ConfigItem(
+		keyName = "hiddenMonsters",
+		name = "Hidden monsters",
+		description = "Monsters left out of the Monsters tab, separated by commas. Right-click a monster in the panel to hide it.",
+		position = 6,
+		section = combatSection
+	)
+	default String hiddenMonsters()
+	{
+		return "";
 	}
 
 	// ---- Overlays ------------------------------------------------------------

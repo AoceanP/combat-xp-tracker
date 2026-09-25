@@ -270,7 +270,7 @@ class GoalCard extends JPanel
 			levelLabel.setText(xpKnown ? Formatting.compactXp(xp) + " / " + goal.getShortLabel() : "Goal " + goal.getShortLabel());
 		}
 
-		int rate = progress.getXpPerHour();
+		int rate = progress.getXpPerHour(config.xpRateMode());
 		if (!xpKnown)
 		{
 			rateLabel.setText("Log in to track");
@@ -287,7 +287,7 @@ class GoalCard extends JPanel
 		{
 			rateLabel.setText(Formatting.compactXp(rate) + " xp/hr");
 			rateLabel.setForeground(fill);
-			etaLabel.setText(Formatting.duration(progress.getEstimatedHoursToGoal()) + " left");
+			etaLabel.setText(Formatting.duration(progress.getEstimatedHoursToGoal(config.xpRateMode())) + " left");
 		}
 		else
 		{

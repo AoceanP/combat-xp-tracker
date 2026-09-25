@@ -66,13 +66,20 @@ public class SkillProgress
 
 	// XP when this session began, -1 until the first real baseline after login.
 	private int sessionStartXp = -1;
+	// Time spent actually training this session, for the whole-session XP/hr.
+	private final ActivityTimer sessionActivity = new ActivityTimer();
 
 	public synchronized void recordXp(int newXp, long nowMillis, int windowSeconds)
 	{
+		boolean gained = xpKnown && newXp > currentXp;
 		// Resuming a dismissed skill puts it back on the overlay.
 		if (dismissedFromOverlay && newXp > currentXp)
 		{
 			dismissedFromOverlay = false;
+		}
+		if (gained)
+		{
+			sessionActivity.mark(nowMillis);
 		}
 		currentXp = newXp;
 		xpKnown = true;
@@ -129,6 +136,34 @@ public class SkillProgress
 		}
 		double hours = elapsedMillis / 3_600_000.0;
 		return (int) Math.round((last.xp - first.xp) / hours);
+	}
+
+	/**
+	 * XP gained this session per hour of training, breaks over 5 minutes excluded.
+	 * 0 until there's a minute of training.
+	 */
+	public synchronized int getSessionXpPerHour()
+	{
+		double rate = ActivityTimer.perHour(getSessionXpGained(), sessionActivity.getActiveMillis());
+		return rate < 0 ? 0 : (int) Math.round(rate);
+	}
+
+	public synchronized int getXpPerHour(XpRateMode mode)
+	{
+		return mode == XpRateMode.SESSION ? getSessionXpPerHour() : getXpPerHour();
+	}
+
+	/**
+	 * Hours left at the given rate mode, or -1 when there's no rate to estimate from.
+	 */
+	public synchronized double getEstimatedHoursToGoal(XpRateMode mode)
+	{
+		int rate = getXpPerHour(mode);
+		if (rate <= 0 || goal == null)
+		{
+			return -1;
+		}
+		return getXpRemainingToGoal() / (double) rate;
 	}
 
 	public synchronized int getCurrentXp()
@@ -294,5 +329,6 @@ public class SkillProgress
 	{
 		samples.clear();
 		sessionStartXp = xpKnown ? currentXp : -1;
+		sessionActivity.reset();
 	}
 }

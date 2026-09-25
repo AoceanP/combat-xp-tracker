@@ -74,11 +74,13 @@ class MonsterCard extends JPanel
 	private final JLabel avgLabel = Theme.label("", Theme.MUTED);
 	private final JLabel maxLabel = Theme.label("", Theme.TEXT);
 	private final JPanel styleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+	private final JLabel ratesLabel = Theme.label("", Theme.SUBTLE);
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private final JLabel noLootLabel = Theme.label("No drops recorded yet", Theme.SUBTLE);
 
 	private boolean collapsed;
-	private String lootKey = "";
+	// null until the first update, so an empty loot list still shows its message.
+	private String lootKey;
 
 	MonsterCard(String monsterName, ItemManager itemManager, CombatXpTrackerPlugin plugin)
 	{
@@ -116,6 +118,8 @@ class MonsterCard extends JPanel
 		stats.setOpaque(false);
 		stats.add(statsRow, BorderLayout.NORTH);
 		stats.add(styleRow, BorderLayout.CENTER);
+		ratesLabel.setToolTipText("Per hour of fighting this monster. Breaks over 5 minutes aren't counted.");
+		stats.add(ratesLabel, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
 
@@ -133,6 +137,10 @@ class MonsterCard extends JPanel
 		JMenuItem toggle = new JMenuItem("Collapse / expand");
 		toggle.addActionListener(e -> toggleCollapsed());
 		menu.add(toggle);
+		JMenuItem hide = new JMenuItem("Hide " + monsterName);
+		hide.setToolTipText("Keeps tracking it, but leaves it out of this tab. Unhide from the bottom of the tab or the plugin settings.");
+		hide.addActionListener(e -> plugin.hideMonster(monsterName));
+		menu.add(hide);
 		JMenuItem remove = new JMenuItem("Remove " + monsterName);
 		remove.addActionListener(e -> plugin.removeMonster(monsterName));
 		menu.add(remove);
@@ -206,6 +214,23 @@ class MonsterCard extends JPanel
 			styleRow.add(chip);
 		}
 		styleRow.setVisible(!s.getBiggestByStyle().isEmpty());
+
+		double killsPerHour = s.getKillsPerHour();
+		double gpPerHour = s.getGpPerHour();
+		if (killsPerHour < 0)
+		{
+			ratesLabel.setVisible(false);
+		}
+		else
+		{
+			String rates = String.format(java.util.Locale.US, "%.1f kills/hr", killsPerHour);
+			if (gpPerHour > 0)
+			{
+				rates += "   " + QuantityFormatter.quantityToStackSize(Math.round(gpPerHour)) + " gp/hr";
+			}
+			ratesLabel.setText(rates);
+			ratesLabel.setVisible(true);
+		}
 
 		updateLoot(s.getLoot());
 	}

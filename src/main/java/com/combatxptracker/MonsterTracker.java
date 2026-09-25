@@ -25,14 +25,19 @@
 package com.combatxptracker;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Per-monster session stats: hits, damage, biggest hit per combat style, kills and loot.
+ * Per-monster stats: hits, damage, biggest hit per combat style, kills, loot, and how
+ * long was spent fighting each monster (for kills/hr and GP/hr).
  *
  * Written on the client thread and read by the Swing panel, so every public method is
  * synchronized and reads return immutable snapshots rather than live objects.
@@ -117,6 +122,7 @@ public class MonsterTracker
 		private final Map<CombatStyle, Integer> biggestByStyle;
 		private final List<LootLine> loot;
 		private final long lootValue;
+		private final long activeMillis;
 		private final long lastActivityMillis;
 
 		Snapshot(Entry e)
@@ -138,7 +144,8 @@ public class MonsterTracker
 				value += line.getTotalValue();
 			}
 			lootValue = value;
-			lastActivityMillis = e.lastActivityMillis;
+			activeMillis = e.activity.getActiveMillis();
+			lastActivityMillis = e.activity.getLastMillis();
 		}
 
 		public String getName()
@@ -189,10 +196,59 @@ public class MonsterTracker
 			return lootValue;
 		}
 
+		/**
+		 * Time spent fighting this monster, not counting breaks.
+		 */
+		public long getActiveMillis()
+		{
+			return activeMillis;
+		}
+
 		public long getLastActivityMillis()
 		{
 			return lastActivityMillis;
 		}
+
+		/**
+		 * @return kills per hour of fighting, or -1 until there's a minute of activity
+		 */
+		public double getKillsPerHour()
+		{
+			return ActivityTimer.perHour(kills, activeMillis);
+		}
+
+		/**
+		 * @return loot value per hour of fighting, or -1 until there's a minute of activity
+		 */
+		public double getGpPerHour()
+		{
+			return ActivityTimer.perHour(lootValue, activeMillis);
+		}
+	}
+
+	/**
+	 * Plain data for saving one monster to the RuneLite profile with Gson.
+	 */
+	static final class Saved
+	{
+		String name;
+		int kills;
+		int hits;
+		long totalDamage;
+		int biggestHit = -1;
+		CombatStyle biggestHitStyle;
+		Map<CombatStyle, Integer> biggestByStyle;
+		List<SavedLoot> loot;
+		long activeMillis;
+		long lastActivityMillis = -1;
+	}
+
+	static final class SavedLoot
+	{
+		int id;
+		String name;
+		long quantity;
+		long unitPrice;
 	}
 
 	private static final class Entry
@@ -205,7 +261,7 @@ public class MonsterTracker
 		CombatStyle biggestHitStyle;
 		final Map<CombatStyle, Integer> biggestByStyle = new EnumMap<>(CombatStyle.class);
 		final Map<Integer, LootLine> loot = new LinkedHashMap<>();
-		long lastActivityMillis;
+		final ActivityTimer activity = new ActivityTimer();
 
 		Entry(String name)
 		{
@@ -222,7 +278,7 @@ public class MonsterTracker
 	 */
 	public synchronized void recordHit(String monsterName, int damage, CombatStyle style, long nowMillis)
 	{
-		if (monsterName == null || monsterName.isEmpty())
+		if (isBlank(monsterName))
 		{
 			return;
 		}
@@ -238,18 +294,29 @@ public class MonsterTracker
 		{
 			e.biggestByStyle.merge(style, damage, Math::max);
 		}
-		e.lastActivityMillis = nowMillis;
+		e.activity.mark(nowMillis);
 		revision++;
 	}
 
-	public synchronized void recordKill(String monsterName, List<Drop> drops, long nowMillis)
+	public synchronized void recordKill(String monsterName, long nowMillis)
 	{
-		if (monsterName == null || monsterName.isEmpty())
+		if (isBlank(monsterName))
 		{
 			return;
 		}
 		Entry e = entries.computeIfAbsent(monsterName, Entry::new);
 		e.kills++;
+		e.activity.mark(nowMillis);
+		revision++;
+	}
+
+	public synchronized void recordLoot(String monsterName, List<Drop> drops, long nowMillis)
+	{
+		if (isBlank(monsterName) || drops.isEmpty())
+		{
+			return;
+		}
+		Entry e = entries.computeIfAbsent(monsterName, Entry::new);
 		for (Drop d : drops)
 		{
 			LootLine existing = e.loot.get(d.itemId);
@@ -257,7 +324,7 @@ public class MonsterTracker
 			// Keep the latest price so the total tracks the current market.
 			e.loot.put(d.itemId, new LootLine(d.itemId, d.name, qty, d.unitPrice));
 		}
-		e.lastActivityMillis = nowMillis;
+		e.activity.mark(nowMillis);
 		revision++;
 	}
 
@@ -271,12 +338,13 @@ public class MonsterTracker
 		{
 			out.add(new Snapshot(e));
 		}
-		out.sort((a, b) -> Long.compare(b.getLastActivityMillis(), a.getLastActivityMillis()));
+		out.sort(MonsterSort.RECENT.comparator());
 		return out;
 	}
 
 	/**
-	 * Increases on every change, so the panel can skip rebuilding when nothing changed.
+	 * Increases on every change, so the panel can skip rebuilding and the plugin can
+	 * skip saving when nothing changed.
 	 */
 	public synchronized int getRevision()
 	{
@@ -295,5 +363,135 @@ public class MonsterTracker
 	{
 		entries.clear();
 		revision++;
+	}
+
+	public synchronized boolean isEmpty()
+	{
+		return entries.isEmpty();
+	}
+
+	// ---- Saving and loading -----------------------------------------------------
+
+	public synchronized List<Saved> exportState()
+	{
+		List<Saved> out = new ArrayList<>(entries.size());
+		for (Entry e : entries.values())
+		{
+			Saved s = new Saved();
+			s.name = e.name;
+			s.kills = e.kills;
+			s.hits = e.hits;
+			s.totalDamage = e.totalDamage;
+			s.biggestHit = e.biggestHit;
+			s.biggestHitStyle = e.biggestHitStyle;
+			s.biggestByStyle = new EnumMap<>(e.biggestByStyle);
+			s.loot = new ArrayList<>();
+			for (LootLine line : e.loot.values())
+			{
+				SavedLoot l = new SavedLoot();
+				l.id = line.itemId;
+				l.name = line.name;
+				l.quantity = line.quantity;
+				l.unitPrice = line.unitPrice;
+				s.loot.add(l);
+			}
+			s.activeMillis = e.activity.getActiveMillis();
+			s.lastActivityMillis = e.activity.getLastMillis();
+			out.add(s);
+		}
+		return out;
+	}
+
+	/**
+	 * Replaces everything with saved data. Bad entries are skipped rather than failing
+	 * the whole load, so one corrupt monster can't wipe the rest.
+	 */
+	public synchronized void importState(Collection<Saved> saved)
+	{
+		entries.clear();
+		if (saved != null)
+		{
+			for (Saved s : saved)
+			{
+				if (s == null || isBlank(s.name))
+				{
+					continue;
+				}
+				Entry e = new Entry(s.name);
+				e.kills = Math.max(0, s.kills);
+				e.hits = Math.max(0, s.hits);
+				e.totalDamage = Math.max(0, s.totalDamage);
+				e.biggestHit = s.biggestHit;
+				e.biggestHitStyle = s.biggestHitStyle;
+				if (s.biggestByStyle != null)
+				{
+					for (Map.Entry<CombatStyle, Integer> b : s.biggestByStyle.entrySet())
+					{
+						if (b.getKey() != null && b.getValue() != null)
+						{
+							e.biggestByStyle.put(b.getKey(), b.getValue());
+						}
+					}
+				}
+				if (s.loot != null)
+				{
+					for (SavedLoot l : s.loot)
+					{
+						if (l != null && l.quantity > 0)
+						{
+							e.loot.put(l.id, new LootLine(l.id, l.name == null ? "Unknown" : l.name, l.quantity, l.unitPrice));
+						}
+					}
+				}
+				e.activity.restore(s.activeMillis, s.lastActivityMillis);
+				entries.put(e.name, e);
+			}
+		}
+		revision++;
+	}
+
+	// ---- View helpers -----------------------------------------------------------
+
+	/**
+	 * Drops hidden monsters and sorts the rest for the Monsters tab.
+	 */
+	public static List<Snapshot> view(List<Snapshot> all, MonsterSort sort, Set<String> hiddenLowercase)
+	{
+		List<Snapshot> out = new ArrayList<>(all.size());
+		for (Snapshot s : all)
+		{
+			if (!hiddenLowercase.contains(s.getName().toLowerCase(Locale.ROOT)))
+			{
+				out.add(s);
+			}
+		}
+		out.sort((sort == null ? MonsterSort.RECENT : sort).comparator());
+		return out;
+	}
+
+	/**
+	 * Parses the "hidden monsters" setting: comma separated, case insensitive.
+	 */
+	public static Set<String> parseNames(String csv)
+	{
+		Set<String> names = new LinkedHashSet<>();
+		if (csv == null)
+		{
+			return names;
+		}
+		for (String part : csv.split(","))
+		{
+			String name = part.trim().toLowerCase(Locale.ROOT);
+			if (!name.isEmpty())
+			{
+				names.add(name);
+			}
+		}
+		return names;
+	}
+
+	private static boolean isBlank(String s)
+	{
+		return s == null || s.trim().isEmpty();
 	}
 }

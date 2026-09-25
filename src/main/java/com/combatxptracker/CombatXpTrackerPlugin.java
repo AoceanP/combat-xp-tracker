@@ -24,18 +24,24 @@
  */
 package com.combatxptracker;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonParseException;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Actor;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.Experience;
 import net.runelite.api.GameState;
@@ -44,16 +50,24 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Skill;
+import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.StatChanged;
+import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.chat.ChatColorType;
+import net.runelite.client.chat.ChatMessageBuilder;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.NpcLootReceived;
+import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
 import net.runelite.client.game.SkillIconManager;
@@ -89,6 +103,17 @@ public class CombatXpTrackerPlugin extends Plugin
 	 * enough to cover a slow ranged or magic projectile landing after the XP drop.
 	 */
 	private static final int XP_STYLE_MEMORY_TICKS = 10;
+
+	/**
+	 * An NPC counts as a kill if it dies within this many ticks (30s) of the player's
+	 * last hit on it.
+	 */
+	private static final int KILL_CREDIT_TICKS = 50;
+
+	/** How often (in ticks) changed monster stats are saved: every 30 seconds. */
+	private static final int SAVE_INTERVAL_TICKS = 50;
+
+	private static final String MONSTERS_KEY = "monsters";
 
 	// Skill name embedded in the stats tab's own menu options, e.g.
 	// "View <col=ff981f>Attack</col> guide". The core XP Tracker reads it the same way.
@@ -126,7 +151,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	private CombatXpTrackerOverlay overlay;
 
 	@Inject
-	private MeleeMaxHitCalculator meleeMaxHitCalculator;
+	private MaxHitCalculator maxHitCalculator;
+
+	@Inject
+	private Notifier notifier;
+
+	@Inject
+	private ChatMessageManager chatMessageManager;
+
+	@Inject
+	private Gson gson;
 
 	private final Map<Skill, SkillProgress> skillProgress = new EnumMap<>(Skill.class);
 	private final Map<Skill, GoalInfoBox> infoBoxes = new EnumMap<>(Skill.class);
@@ -143,9 +177,15 @@ public class CombatXpTrackerPlugin extends Plugin
 	private CombatStyle lastXpStyle;
 	private int lastXpStyleTick;
 	private String maxHitKey;
+	// NPCs the player hit recently -> tick of the last hit, for counting kills.
+	private final Map<NPC, Integer> engagedNpcs = new HashMap<>();
+	// NPCs already counted as a kill on death -> tick, so their loot doesn't count again.
+	private final Map<NPC, Integer> countedKills = new HashMap<>();
+	private int savedMonsterRevision = -1;
+	private int ticksSinceSave;
 
 	// Written on the client thread, read by the panel and overlay.
-	private volatile MeleeMaxHitCalculator.Result maxHitResult;
+	private volatile MaxHitCalculator.Result maxHitResult;
 
 	@Provides
 	CombatXpTrackerConfig provideConfig(ConfigManager configManager)
@@ -181,16 +221,25 @@ public class CombatXpTrackerPlugin extends Plugin
 		overlayManager.add(overlay);
 		syncInfoBoxes();
 
-		// Turned on while already logged in: GameStateChanged won't fire, so baseline now.
+		// Turned on while already logged in: GameStateChanged and RuneScapeProfileChanged
+		// won't fire, so baseline and load now.
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
-			clientThread.invokeLater(this::onLoggedIn);
+			clientThread.invokeLater(() ->
+			{
+				loadMonsters();
+				onLoggedIn();
+			});
 		}
 	}
 
 	@Override
 	protected void shutDown()
 	{
+		saveMonsters();
+		engagedNpcs.clear();
+		countedKills.clear();
+		savedMonsterRevision = -1;
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(overlay);
 		removeAllInfoBoxes();
@@ -225,14 +274,26 @@ public class CombatXpTrackerPlugin extends Plugin
 			{
 				progress.reset();
 			}
+			engagedNpcs.clear();
+			countedKills.clear();
 			if (config.resetHitsOnLogout())
 			{
 				hitStats.reset();
 				combinedDropTracker.reset();
 				monsterTracker.reset();
 			}
+			saveMonsters();
 			refreshPanelNow();
 		}
+	}
+
+	@Subscribe
+	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
+	{
+		// Each account keeps its own Monsters tab. The previous account's stats were
+		// already saved on logout.
+		loadMonsters();
+		refreshPanelNow();
 	}
 
 	@Subscribe
@@ -246,6 +307,12 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			syncInfoBoxes();
 		}
+		if ("rememberMonsters".equals(event.getKey()))
+		{
+			// Turning it off forgets what was saved; turning it on saves right away.
+			savedMonsterRevision = -1;
+			clientThread.invokeLater(this::saveMonsters);
+		}
 		refreshPanelNow();
 	}
 
@@ -253,6 +320,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	public void onGameTick(GameTick tick)
 	{
 		refreshCombatState();
+		pruneKillTracking();
+		if (++ticksSinceSave >= SAVE_INTERVAL_TICKS)
+		{
+			ticksSinceSave = 0;
+			saveMonsters();
+		}
 		// Panel updates are batched to at most one per tick. Hitsplats and XP drops can
 		// fire several times a tick in combat, and refreshing on each made the panel flicker.
 		if (panelDirty)
@@ -289,8 +362,15 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 
+		boolean wasReached = progress.isGoalReached();
 		progress.recordXp(xp, System.currentTimeMillis(), config.xpHrIntervalSeconds());
 		ensureGoalStart(skill, progress);
+
+		// Only announce a real gain crossing the goal, not the first value after login.
+		if (hadBaseline && !wasReached && progress.isGoalReached())
+		{
+			announceGoalReached(skill, progress.getGoal());
+		}
 
 		if (hadBaseline && delta > 0)
 		{
@@ -330,9 +410,43 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (target instanceof NPC)
 		{
 			monsterTracker.recordHit(cleanName(target.getName()), damage, resolveHitStyle(), now);
+			engagedNpcs.put((NPC) target, client.getTickCount());
 		}
 
 		panelDirty = true;
+	}
+
+	/**
+	 * Counts a kill when an NPC the player recently hit dies. Unlike counting drops, this
+	 * also catches kills that drop nothing.
+	 */
+	@Subscribe
+	public void onActorDeath(ActorDeath event)
+	{
+		if (!(event.getActor() instanceof NPC))
+		{
+			return;
+		}
+		NPC npc = (NPC) event.getActor();
+		if (engagedNpcs.remove(npc) == null)
+		{
+			return;
+		}
+		String name = cleanName(npc.getName());
+		if (name != null)
+		{
+			monsterTracker.recordKill(name, System.currentTimeMillis());
+			countedKills.put(npc, client.getTickCount());
+			panelDirty = true;
+		}
+	}
+
+	@Subscribe
+	public void onNpcDespawned(NpcDespawned event)
+	{
+		// Walked away or despawned without dying. Kills already counted are kept until
+		// pruned, because the loot event can arrive after the despawn.
+		engagedNpcs.remove(event.getNpc());
 	}
 
 	@Subscribe
@@ -345,9 +459,17 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 
-		List<MonsterTracker.Drop> drops = new ArrayList<>();
+		long now = System.currentTimeMillis();
+		// The death normally counted the kill already. If it didn't (e.g. the death
+		// happened off-screen), the loot still proves one.
+		if (countedKills.remove(npc) == null)
+		{
+			monsterTracker.recordKill(name, now);
+		}
+
 		if (config.trackMonsterLoot())
 		{
+			List<MonsterTracker.Drop> drops = new ArrayList<>();
 			for (ItemStack stack : event.getItems())
 			{
 				// Canonicalize so noted drops are priced and stacked as the normal item.
@@ -355,8 +477,8 @@ public class CombatXpTrackerPlugin extends Plugin
 				String itemName = itemManager.getItemComposition(id).getName();
 				drops.add(new MonsterTracker.Drop(id, itemName, stack.getQuantity(), itemManager.getItemPrice(id)));
 			}
+			monsterTracker.recordLoot(name, drops, now);
 		}
-		monsterTracker.recordKill(name, drops, System.currentTimeMillis());
 		panelDirty = true;
 	}
 
@@ -448,7 +570,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 
-		attackStyle = meleeMaxHitCalculator.readAttackStyle();
+		attackStyle = maxHitCalculator.readAttackStyle();
 		if (!config.showMeleeMaxHit())
 		{
 			return;
@@ -456,8 +578,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 		// Recalculated once per tick rather than per frame in the overlay. Gear, prayers,
 		// boosts, style and task can all change between ticks, but not within one.
-		MeleeMaxHitCalculator.Result result = meleeMaxHitCalculator.calculate(
-			attackStyle, meleeMaxHitCalculator.readSlayerTaskName());
+		MaxHitCalculator.Result result = maxHitCalculator.calculate(attackStyle, maxHitCalculator.readSlayerTaskName());
 		String key = result == null ? null : result.toString();
 		if (key != null && !key.equals(maxHitKey))
 		{
@@ -465,6 +586,99 @@ public class CombatXpTrackerPlugin extends Plugin
 			maxHitResult = result;
 			panelDirty = true;
 		}
+	}
+
+	/**
+	 * Forgets NPCs that weren't hit for a while (no kill credit) and old counted kills
+	 * whose loot never came.
+	 */
+	private void pruneKillTracking()
+	{
+		int tick = client.getTickCount();
+		engagedNpcs.values().removeIf(lastHit -> tick - lastHit > KILL_CREDIT_TICKS);
+		countedKills.values().removeIf(counted -> tick - counted > KILL_CREDIT_TICKS);
+	}
+
+	private void announceGoalReached(Skill skill, Goal goal)
+	{
+		String skillName = Formatting.capitalize(skill.getName());
+		String what = goal.getType() == Goal.Type.LEVEL
+			? "level " + goal.getTargetLevel() + " " + skillName
+			: goal.getShortLabel() + " " + skillName + " xp";
+
+		notifier.notify(config.goalNotification(), "Goal reached: " + what + "!");
+
+		if (config.goalChatMessage())
+		{
+			String message = new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append("Goal reached: ")
+				.append(ChatColorType.NORMAL)
+				.append("you hit " + what + "!")
+				.build();
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(message)
+				.build());
+		}
+	}
+
+	// ---- Remembering monsters between sessions ---------------------------------------
+
+	/**
+	 * Loads the current account's saved monsters, or starts empty. Called when the
+	 * RuneLite profile switches to a (possibly different) account.
+	 */
+	private void loadMonsters()
+	{
+		List<MonsterTracker.Saved> saved = null;
+		if (config.rememberMonsters() && configManager.getRSProfileKey() != null)
+		{
+			String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY);
+			if (json != null && !json.isEmpty())
+			{
+				try
+				{
+					MonsterTracker.Saved[] parsed = gson.fromJson(json, MonsterTracker.Saved[].class);
+					saved = parsed == null ? null : Arrays.asList(parsed);
+				}
+				catch (JsonParseException e)
+				{
+					// Corrupt data: start fresh rather than break the plugin.
+					saved = null;
+				}
+			}
+		}
+		monsterTracker.importState(saved);
+		engagedNpcs.clear();
+		countedKills.clear();
+		savedMonsterRevision = monsterTracker.getRevision();
+	}
+
+	/**
+	 * Saves the monsters to the current account's profile if they changed since the last
+	 * save. Cheap to call often.
+	 */
+	private void saveMonsters()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return;
+		}
+		int revision = monsterTracker.getRevision();
+		if (revision == savedMonsterRevision)
+		{
+			return;
+		}
+		savedMonsterRevision = revision;
+
+		if (!config.rememberMonsters() || monsterTracker.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY,
+			gson.toJson(monsterTracker.exportState()));
 	}
 
 	/**
@@ -601,6 +815,29 @@ public class CombatXpTrackerPlugin extends Plugin
 		refreshPanelNow();
 	}
 
+	/**
+	 * Hides a monster from the Monsters tab. Its stats are still tracked, so unhiding
+	 * brings them back.
+	 */
+	public void hideMonster(String name)
+	{
+		Set<String> hidden = MonsterTracker.parseNames(config.hiddenMonsters());
+		if (hidden.add(name.toLowerCase()))
+		{
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "hiddenMonsters", String.join(", ", hidden));
+		}
+	}
+
+	public void unhideAllMonsters()
+	{
+		configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, "hiddenMonsters");
+	}
+
+	public void setMonsterSort(MonsterSort sort)
+	{
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "monsterSort", sort);
+	}
+
 	private int loadGoalStart(Skill skill)
 	{
 		String stored = configManager.getConfiguration(CombatXpTrackerConfig.GROUP, GOAL_START_KEY_PREFIX + skill.getName());
@@ -678,10 +915,15 @@ public class CombatXpTrackerPlugin extends Plugin
 		return monsterTracker;
 	}
 
+	public XpRateMode getXpRateMode()
+	{
+		return config.xpRateMode();
+	}
+
 	/**
 	 * @return the latest max hit, or null before the first calculation
 	 */
-	public MeleeMaxHitCalculator.Result getMaxHitResult()
+	public MaxHitCalculator.Result getMaxHitResult()
 	{
 		return maxHitResult;
 	}

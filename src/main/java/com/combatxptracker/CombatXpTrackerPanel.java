@@ -26,10 +26,15 @@ package com.combatxptracker;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.Rectangle;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -48,6 +53,7 @@ import javax.swing.JTextField;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
+import javax.swing.Timer;
 import net.runelite.api.Experience;
 import net.runelite.api.Skill;
 import net.runelite.client.game.ItemManager;
@@ -106,7 +112,12 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final JLabel lootValue = tileValue();
 	private final JLabel monsterCountValue = tileValue();
 	private final Map<String, MonsterCard> monsterCards = new HashMap<>();
-	private int monsterRevision = -1;
+	private final JComboBox<MonsterSort> sortBox = new JComboBox<>(MonsterSort.values());
+	private final JLabel hiddenLabel = Theme.label("", Theme.SUBTLE);
+	private final JLabel monstersCaption = Theme.label("Monsters", Theme.MUTED);
+	// Revision + sort + hidden list last shown, so the list is only rebuilt on changes.
+	private String monsterViewKey = "";
+	private boolean updatingSortBox;
 
 	CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config,
 		SkillIconManager skillIconManager, ItemManager itemManager)
@@ -154,14 +165,20 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private JPanel buildHeader()
 	{
-		JPanel header = new JPanel(new BorderLayout(8, 0));
+		JPanel header = new JPanel(new BorderLayout(0, 6));
 		header.setOpaque(false);
 
 		JLabel title = Theme.boldLabel("Combat & XP Tracker", Theme.TEXT);
-		header.add(title, BorderLayout.CENTER);
+		header.add(title, BorderLayout.NORTH);
 
-		JLabel reset = Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset);
-		header.add(reset, BorderLayout.EAST);
+		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
+		buttons.setOpaque(false);
+		JLabel[] copy = new JLabel[1];
+		copy[0] = Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post",
+			() -> copySummary(copy[0]));
+		buttons.add(copy[0]);
+		buttons.add(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset));
+		header.add(buttons, BorderLayout.CENTER);
 		return header;
 	}
 
@@ -230,16 +247,47 @@ class CombatXpTrackerPanel extends PluginPanel
 		summary.setOpaque(false);
 		summary.add(tile(killsValue, Theme.label("Kills", Theme.MUTED)));
 		summary.add(tile(lootValue, Theme.label("Loot", Theme.MUTED)));
-		summary.add(tile(monsterCountValue, Theme.label("Monsters", Theme.MUTED)));
+		summary.add(tile(monsterCountValue, monstersCaption));
 		lootValue.setForeground(Theme.GOLD);
 
+		sortBox.setFocusable(false);
+		sortBox.setToolTipText("Order of the monsters below");
+		sortBox.addActionListener(e ->
+		{
+			if (!updatingSortBox && sortBox.getSelectedItem() != null)
+			{
+				plugin.setMonsterSort((MonsterSort) sortBox.getSelectedItem());
+			}
+		});
+		JPanel sortRow = new JPanel(new BorderLayout(6, 0));
+		sortRow.setOpaque(false);
+		sortRow.add(Theme.label("Sort by", Theme.MUTED), BorderLayout.WEST);
+		sortRow.add(sortBox, BorderLayout.CENTER);
+
 		monstersList.setOpaque(false);
+
+		hiddenLabel.setHorizontalAlignment(SwingConstants.CENTER);
+		hiddenLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		hiddenLabel.setToolTipText("Click to show every hidden monster again");
+		hiddenLabel.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				plugin.unhideAllMonsters();
+			}
+		});
 
 		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
 		view.setOpaque(false);
 		view.add(summary);
+		view.add(sortRow);
 		view.add(collapsible(monstersEmpty));
 		view.add(monstersList);
+		JPanel hiddenHolder = new JPanel(new BorderLayout());
+		hiddenHolder.setOpaque(false);
+		hiddenHolder.add(hiddenLabel, BorderLayout.CENTER);
+		view.add(hiddenHolder);
 		return view;
 	}
 
@@ -350,7 +398,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		hitsValue.setText(Formatting.withCommas(count));
 
 		maxHitDetails.removeAll();
-		MeleeMaxHitCalculator.Result max = plugin.getMaxHitResult();
+		MaxHitCalculator.Result max = plugin.getMaxHitResult();
 		if (!config.showMeleeMaxHit())
 		{
 			fourthCaption.setText("Session XP");
@@ -360,33 +408,31 @@ class CombatXpTrackerPanel extends PluginPanel
 			return;
 		}
 
-		fourthCaption.setText("Melee max");
-		fourthValue.setForeground(CombatStyle.MELEE.getColor());
 		if (max == null)
 		{
+			fourthCaption.setText("Max hit");
+			fourthValue.setForeground(Theme.TEXT);
 			fourthValue.setText("-");
 			fourthValue.setToolTipText("Log in to calculate");
 			return;
 		}
 
-		fourthValue.setText(String.valueOf(max.getMaxHit()));
-		fourthValue.setToolTipText("<html>Melee max hit from worn gear, boosted Strength, prayer and attack style."
-			+ "<br>Special attacks and weapon passives aren't included.</html>");
+		CombatStyle style = max.getStyle();
+		fourthCaption.setText(style.getDisplayName() + " max");
+		fourthValue.setForeground(style.getColor());
+		fourthValue.setText(max.getMaxHit() >= 0 ? String.valueOf(max.getMaxHit()) : "-");
+		fourthValue.setToolTipText("<html>" + style.getDisplayName() + " max hit for your current attack style, gear, "
+			+ "levels and prayers.<br>Special attacks and weapon passives aren't included.</html>");
 
-		StringBuilder setup = new StringBuilder();
-		setup.append(max.isMeleeStyle() ? max.getAttackStyleName() : "Not on a melee style");
-		if (max.getPrayer() != MeleeMaxHit.StrengthPrayer.NONE)
+		String text = max.getNote() != null ? max.getNote() : max.getSetup();
+		if (text != null && !text.isEmpty())
 		{
-			setup.append(", ").append(max.getPrayer().getDisplayName());
+			// Wraps onto a second line rather than being cut off.
+			JLabel setupLabel = Theme.label("<html><div style='width:175px'>" + text + "</div></html>", Theme.SUBTLE);
+			setupLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
+			setupLabel.setToolTipText(text);
+			maxHitDetails.add(setupLabel);
 		}
-		setup.append(", +").append(max.getStrengthBonus()).append(" str");
-		if (max.isVoidMelee())
-		{
-			setup.append(", Void");
-		}
-		JLabel setupLabel = Theme.label(setup.toString(), Theme.SUBTLE);
-		setupLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
-		maxHitDetails.add(setupLabel);
 
 		if (max.getOnTaskMaxHit() >= 0)
 		{
@@ -397,7 +443,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		}
 		if (max.getVsUndeadMaxHit() >= 0)
 		{
-			maxHitDetails.add(detailRow("Vs undead (" + max.getSalve().getDisplayName() + ")", max.getVsUndeadMaxHit(),
+			maxHitDetails.add(detailRow("Vs undead (" + max.getUndeadSource() + ")", max.getVsUndeadMaxHit(),
 				false, "Salve amulet bonus against undead. It doesn't stack with the Slayer helm."));
 		}
 	}
@@ -459,20 +505,30 @@ class CombatXpTrackerPanel extends PluginPanel
 	private void updateMonsters()
 	{
 		MonsterTracker tracker = plugin.getMonsterTracker();
-		int revision = tracker.getRevision();
-		if (revision == monsterRevision)
+		MonsterSort sort = config.monsterSort();
+		String hiddenSetting = config.hiddenMonsters();
+		String key = tracker.getRevision() + "|" + sort + "|" + hiddenSetting;
+		if (key.equals(monsterViewKey))
 		{
 			return;
 		}
-		monsterRevision = revision;
+		monsterViewKey = key;
 
-		List<MonsterTracker.Snapshot> snapshots = tracker.snapshot();
+		if (sortBox.getSelectedItem() != sort)
+		{
+			updatingSortBox = true;
+			sortBox.setSelectedItem(sort);
+			updatingSortBox = false;
+		}
+
+		List<MonsterTracker.Snapshot> all = tracker.snapshot();
+		List<MonsterTracker.Snapshot> shown = MonsterTracker.view(all, sort, MonsterTracker.parseNames(hiddenSetting));
 		Map<String, MonsterCard> keep = new HashMap<>();
 		monstersList.removeAll();
 
 		int kills = 0;
 		long loot = 0;
-		for (MonsterTracker.Snapshot s : snapshots)
+		for (MonsterTracker.Snapshot s : shown)
 		{
 			MonsterCard card = monsterCards.get(s.getName());
 			if (card == null)
@@ -491,8 +547,38 @@ class CombatXpTrackerPanel extends PluginPanel
 		killsValue.setText(Formatting.withCommas(kills));
 		lootValue.setText(QuantityFormatter.quantityToStackSize(loot));
 		lootValue.setToolTipText(Formatting.withCommas(loot) + " gp");
-		monsterCountValue.setText(String.valueOf(snapshots.size()));
-		monstersEmpty.setVisible(snapshots.isEmpty());
+		monsterCountValue.setText(String.valueOf(shown.size()));
+		monstersEmpty.setVisible(shown.isEmpty());
+
+		int hidden = all.size() - shown.size();
+		hiddenLabel.setText(hidden > 0 ? hidden + " hidden - click to show" : "");
+		hiddenLabel.setVisible(hidden > 0);
+	}
+
+	/**
+	 * Puts a text summary of the session on the clipboard and briefly confirms it on
+	 * the button.
+	 */
+	private void copySummary(JLabel button)
+	{
+		MonsterTracker tracker = plugin.getMonsterTracker();
+		List<MonsterTracker.Snapshot> monsters = MonsterTracker.view(tracker.snapshot(), config.monsterSort(),
+			MonsterTracker.parseNames(config.hiddenMonsters()));
+		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode());
+
+		try
+		{
+			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+			button.setText("Copied!");
+		}
+		catch (IllegalStateException e)
+		{
+			// Another program is holding the clipboard.
+			button.setText("Try again");
+		}
+		Timer restore = new Timer(1500, e -> button.setText("Copy"));
+		restore.setRepeats(false);
+		restore.start();
 	}
 
 	// ---- Dialogs ----------------------------------------------------------------

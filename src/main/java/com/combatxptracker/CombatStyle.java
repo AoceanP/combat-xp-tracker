@@ -86,12 +86,37 @@ public enum CombatStyle
 		private final String name;
 		private final CombatStyle style;
 		private final int meleeStrengthBonus;
+		private final int rangedStrengthBonus;
 
 		private AttackStyle(String name, CombatStyle style, int meleeStrengthBonus)
+		{
+			this(name, style, meleeStrengthBonus, 0);
+		}
+
+		private AttackStyle(String name, CombatStyle style, int meleeStrengthBonus, int rangedStrengthBonus)
 		{
 			this.name = name;
 			this.style = style;
 			this.meleeStrengthBonus = meleeStrengthBonus;
+			this.rangedStrengthBonus = rangedStrengthBonus;
+		}
+
+		/**
+		 * Accurate on a ranged weapon. The game names both Accurate and Rapid
+		 * "Ranging", so this is told apart by the style's position (the first one).
+		 */
+		public static AttackStyle rangedAccurate()
+		{
+			return new AttackStyle("Accurate", RANGED, 0, 3);
+		}
+
+		/**
+		 * Powered staves (tridents, Sanguinesti, Tumeken's shadow) use melee-sounding
+		 * style names but always attack with magic.
+		 */
+		public static AttackStyle poweredStaff(String styleName)
+		{
+			return new AttackStyle(styleName == null ? "Accurate" : styleName, MAGIC, 0, 0);
 		}
 
 		/**
@@ -115,7 +140,8 @@ public enum CombatStyle
 				case "defensive":
 					return new AttackStyle("Defensive", MELEE, 0);
 				case "ranging":
-					return new AttackStyle("Ranging", RANGED, 0);
+					// Accurate and Rapid are both "Ranging"; see rangedAccurate().
+					return new AttackStyle("Rapid", RANGED, 0);
 				case "longrange":
 					return new AttackStyle("Longrange", RANGED, 0);
 				case "casting":
@@ -145,6 +171,15 @@ public enum CombatStyle
 		public int getMeleeStrengthBonus()
 		{
 			return meleeStrengthBonus;
+		}
+
+		/**
+		 * The style bonus added to effective Ranged Strength: +3 on Accurate, 0 on Rapid
+		 * and Longrange (OSRS Wiki, "Maximum ranged hit").
+		 */
+		public int getRangedStrengthBonus()
+		{
+			return rangedStrengthBonus;
 		}
 	}
 }
