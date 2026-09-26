@@ -167,7 +167,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "resetHitsOnLogout",
 		name = "Reset stats on logout",
-		description = "Clears damage stats and the Monsters tab (including what's remembered) when you log out.",
+		description = "Clears damage stats and this session's monsters when you log out. All-time monsters are kept.",
 		position = 3,
 		section = combatSection
 	)
@@ -208,6 +208,54 @@ public interface CombatXpTrackerConfig extends Config
 		section = combatSection
 	)
 	default String hiddenMonsters()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "monsterRange",
+		name = "Monsters tab shows",
+		description = "This session, or everything remembered for this account. You can also switch at the top of the tab.",
+		position = 7,
+		section = combatSection
+	)
+	default MonsterRange monsterRange()
+	{
+		return MonsterRange.ALL_TIME;
+	}
+
+	@ConfigItem(
+		keyName = "lootPrice",
+		name = "Value loot at",
+		description = "Grand Exchange price, or High Alchemy value (useful for ironmen, who can't use the GE).",
+		position = 8,
+		section = combatSection
+	)
+	default LootPrice lootPrice()
+	{
+		return LootPrice.GRAND_EXCHANGE;
+	}
+
+	@ConfigItem(
+		keyName = "ignoredItems",
+		name = "Ignored items",
+		description = "Items left out of loot and its value, separated by commas. Use * as a wildcard, e.g. 'bones, *ashes'. "
+			+ "Right-click an item in the Monsters tab to ignore it.",
+		position = 9,
+		section = combatSection
+	)
+	default String ignoredItems()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "collapsedMonsters",
+		name = "Collapsed monsters",
+		description = "Monster cards collapsed in the panel. Set by clicking a card's header.",
+		hidden = true
+	)
+	default String collapsedMonsters()
 	{
 		return "";
 	}

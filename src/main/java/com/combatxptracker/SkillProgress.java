@@ -68,9 +68,31 @@ public class SkillProgress
 	private int sessionStartXp = -1;
 	// Time spent actually training this session, for the whole-session XP/hr.
 	private final ActivityTimer sessionActivity = new ActivityTimer();
+	// XP drops this session, for the average XP per action.
+	private int sessionActions;
 
-	public synchronized void recordXp(int newXp, long nowMillis, int windowSeconds)
+	/**
+	 * The largest XP gain accepted in one step. Anything bigger means the previous value
+	 * wasn't real: while logging in the client can briefly report 0 XP, and the real value
+	 * then arrives as a "gain" of the player's whole lifetime XP.
+	 */
+	static final int MAX_PLAUSIBLE_XP_DELTA = 200_000;
+
+	/**
+	 * Records an XP value from the client.
+	 *
+	 * @return true for a normal update; false if the jump from the previous value was
+	 * impossible, in which case the previous value is treated as bogus and this one
+	 * becomes the new starting point (samples and session start included)
+	 */
+	public synchronized boolean recordXp(int newXp, long nowMillis, int windowSeconds)
 	{
+		if (isImpossibleJump(newXp))
+		{
+			rebase(newXp, nowMillis);
+			return false;
+		}
+
 		boolean gained = xpKnown && newXp > currentXp;
 		// Resuming a dismissed skill puts it back on the overlay.
 		if (dismissedFromOverlay && newXp > currentXp)
@@ -80,6 +102,7 @@ public class SkillProgress
 		if (gained)
 		{
 			sessionActivity.mark(nowMillis);
+			sessionActions++;
 		}
 		currentXp = newXp;
 		xpKnown = true;
@@ -89,6 +112,7 @@ public class SkillProgress
 		}
 		samples.addLast(new XpSample(nowMillis, newXp));
 		pruneOlderThan(nowMillis - windowSeconds * 1000L);
+		return true;
 	}
 
 	/**
@@ -98,6 +122,12 @@ public class SkillProgress
 	 */
 	public synchronized void resetBaseline(int realXp, long nowMillis)
 	{
+		if (isImpossibleJump(realXp))
+		{
+			// The session start came from a bogus value; start the session here instead.
+			rebase(realXp, nowMillis);
+			return;
+		}
 		samples.clear();
 		currentXp = realXp;
 		xpKnown = true;
@@ -106,6 +136,22 @@ public class SkillProgress
 			sessionStartXp = realXp;
 		}
 		samples.addLast(new XpSample(nowMillis, realXp));
+	}
+
+	private boolean isImpossibleJump(int newXp)
+	{
+		return xpKnown && (long) newXp - currentXp > MAX_PLAUSIBLE_XP_DELTA;
+	}
+
+	private void rebase(int xp, long nowMillis)
+	{
+		samples.clear();
+		currentXp = xp;
+		xpKnown = true;
+		sessionStartXp = xp;
+		sessionActions = 0;
+		sessionActivity.reset();
+		samples.addLast(new XpSample(nowMillis, xp));
 	}
 
 	private void pruneOlderThan(long cutoffMillis)
@@ -146,6 +192,27 @@ public class SkillProgress
 	{
 		double rate = ActivityTimer.perHour(getSessionXpGained(), sessionActivity.getActiveMillis());
 		return rate < 0 ? 0 : (int) Math.round(rate);
+	}
+
+	/**
+	 * Roughly how many more XP drops (kills, hits, logs chopped...) reach the goal, from
+	 * this session's average XP per drop.
+	 *
+	 * @return the estimate, or -1 without a goal or fewer than 3 drops to average over
+	 */
+	public synchronized int getActionsLeftToGoal()
+	{
+		if (goal == null || sessionActions < 3)
+		{
+			return -1;
+		}
+		int gained = getSessionXpGained();
+		if (gained <= 0)
+		{
+			return -1;
+		}
+		double perAction = gained / (double) sessionActions;
+		return (int) Math.ceil(getXpRemainingToGoal() / perAction);
 	}
 
 	public synchronized int getXpPerHour(XpRateMode mode)
@@ -330,5 +397,6 @@ public class SkillProgress
 		samples.clear();
 		sessionStartXp = xpKnown ? currentXp : -1;
 		sessionActivity.reset();
+		sessionActions = 0;
 	}
 }

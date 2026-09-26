@@ -96,7 +96,11 @@ public class SkillProgressTest
 		assertEquals(Experience.getLevelForXp(xp), p.getCurrentLevel());
 		assertTrue(p.getCurrentLevel() > 99);
 
-		p.recordXp(150_000_000, 3_600_000, 7200);
+		// 50M over an hour in 200K drops (one huge jump would be rejected as impossible).
+		for (int i = 1; i <= 250; i++)
+		{
+			p.recordXp(100_000_000 + i * 200_000, i * 14_400L, 7200);
+		}
 		assertEquals(0.5, p.getProgressToGoal(), 1e-9);
 		// 50M in an hour -> 1 more hour to go
 		assertEquals(1.0, p.getEstimatedHoursToGoal(), 1e-9);

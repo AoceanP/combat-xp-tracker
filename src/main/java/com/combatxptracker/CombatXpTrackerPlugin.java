@@ -62,6 +62,8 @@ import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatColorType;
@@ -96,12 +98,6 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String GOAL_START_KEY_PREFIX = "goalstart.";
 	private static final String COLOR_KEY_PREFIX = "color.";
 	private static final String SET_GOAL_MENU_OPTION = "Set goal";
-
-	/**
-	 * The largest XP gain accepted from one StatChanged event. Anything bigger means the
-	 * previous value was a bad baseline (e.g. a 0 from before login), not a real gain.
-	 */
-	private static final int MAX_PLAUSIBLE_XP_DELTA = 200_000;
 
 	/**
 	 * How many ticks an XP drop's combat style is trusted for when labelling hits. Long
@@ -176,7 +172,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	private final Map<Skill, GoalInfoBox> infoBoxes = new EnumMap<>(Skill.class);
 	private final HitStats hitStats = new HitStats();
 	private final CombinedDropTracker combinedDropTracker = new CombinedDropTracker();
+	// All-time stats (remembered per account) and this session's stats.
 	private final MonsterTracker monsterTracker = new MonsterTracker();
+	private final MonsterTracker sessionMonsters = new MonsterTracker();
 
 	private CombatXpTrackerPanel panel;
 	private NavigationButton navButton;
@@ -198,6 +196,13 @@ public class CombatXpTrackerPlugin extends Plugin
 	private String pendingLootNpc;
 	private int pendingLootTick;
 	private Map<Integer, Long> pendingLootBefore;
+	// Multi-NPC bosses: last tick a member's death counted as a kill, so e.g. both Royal
+	// Titans dying in one fight count once.
+	private final Map<BossGroups, Integer> lastGroupKillTick = new EnumMap<>(BossGroups.class);
+
+	// Current slayer task for the Monsters tab, read each tick. Null/0 without a task.
+	private volatile String slayerTaskName;
+	private volatile int slayerTaskRemaining;
 
 	// Written on the client thread, read by the panel and overlay.
 	private volatile MaxHitCalculator.Result maxHitResult;
@@ -264,6 +269,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		hitStats.reset();
 		combinedDropTracker.reset();
 		monsterTracker.reset();
+		sessionMonsters.reset();
+		lastGroupKillTick.clear();
+		slayerTaskName = null;
+		slayerTaskRemaining = 0;
 		maxHitResult = null;
 		maxHitKey = null;
 		attackStyle = null;
@@ -297,9 +306,10 @@ public class CombatXpTrackerPlugin extends Plugin
 			pendingLootBefore = null;
 			if (config.resetHitsOnLogout())
 			{
+				// Only this session's stats; what's remembered all-time is kept.
 				hitStats.reset();
 				combinedDropTracker.reset();
-				monsterTracker.reset();
+				sessionMonsters.reset();
 			}
 			saveMonsters();
 			refreshPanelNow();
@@ -379,16 +389,15 @@ public class CombatXpTrackerPlugin extends Plugin
 		int xp = event.getXp();
 		int delta = xp - progress.getCurrentXp();
 
-		if (hadBaseline && delta > MAX_PLAUSIBLE_XP_DELTA)
+		boolean wasReached = progress.isGoalReached();
+		if (!progress.recordXp(xp, System.currentTimeMillis(), config.xpHrIntervalSeconds()))
 		{
-			// Implausible jump: treat as a baseline correction, not a gain.
-			progress.resetBaseline(xp, System.currentTimeMillis());
+			// An impossible jump (e.g. from a 0 reported while logging in): SkillProgress
+			// started over from this value, session included. Not a real gain.
+			ensureGoalStart(skill, progress);
 			panelDirty = true;
 			return;
 		}
-
-		boolean wasReached = progress.isGoalReached();
-		progress.recordXp(xp, System.currentTimeMillis(), config.xpHrIntervalSeconds());
 		ensureGoalStart(skill, progress);
 
 		// Only announce a real gain crossing the goal, not the first value after login.
@@ -434,7 +443,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		Actor target = event.getActor();
 		if (target instanceof NPC)
 		{
-			monsterTracker.recordHit(cleanName(target.getName()), damage, resolveHitStyle(), now);
+			String name = BossGroups.trackedName(cleanName(target.getName()));
+			CombatStyle style = resolveHitStyle();
+			monsterTracker.recordHit(name, damage, style, now);
+			sessionMonsters.recordHit(name, damage, style, now);
 			engagedNpcs.put((NPC) target, client.getTickCount());
 		}
 
@@ -460,10 +472,36 @@ public class CombatXpTrackerPlugin extends Plugin
 		String name = cleanName(npc.getName());
 		if (name != null)
 		{
-			monsterTracker.recordKill(name, System.currentTimeMillis());
 			countedKills.put(npc, client.getTickCount());
-			panelDirty = true;
+			countKill(name, System.currentTimeMillis());
 		}
+	}
+
+	/**
+	 * Adds a kill, handling multi-NPC bosses: minions (e.g. Nex's) don't count, and
+	 * members dying together (e.g. both Royal Titans) count once.
+	 */
+	private void countKill(String npcName, long now)
+	{
+		if (!BossGroups.countsAsKill(npcName))
+		{
+			return;
+		}
+		BossGroups group = BossGroups.of(npcName);
+		if (group != null && group.getSameKillTicks() > 0)
+		{
+			int tick = client.getTickCount();
+			Integer last = lastGroupKillTick.get(group);
+			if (last != null && tick - last <= group.getSameKillTicks())
+			{
+				return;
+			}
+			lastGroupKillTick.put(group, tick);
+		}
+		String tracked = BossGroups.trackedName(npcName);
+		monsterTracker.recordKill(tracked, now);
+		sessionMonsters.recordKill(tracked, now);
+		panelDirty = true;
 	}
 
 	/**
@@ -486,7 +524,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			return;
 		}
-		pendingLootNpc = name;
+		pendingLootNpc = BossGroups.trackedName(name);
 		pendingLootTick = client.getTickCount();
 		pendingLootBefore = inventoryCounts(client.getItemContainer(InventoryID.INV));
 	}
@@ -519,11 +557,11 @@ public class CombatXpTrackerPlugin extends Plugin
 			List<MonsterTracker.Drop> drops = new ArrayList<>();
 			for (Map.Entry<Integer, Long> e : gained.entrySet())
 			{
-				int id = e.getKey();
-				int quantity = (int) Math.min(Integer.MAX_VALUE, e.getValue());
-				drops.add(new MonsterTracker.Drop(id, itemManager.getItemComposition(id).getName(), quantity, itemManager.getItemPrice(id)));
+				drops.add(drop(e.getKey(), (int) Math.min(Integer.MAX_VALUE, e.getValue())));
 			}
-			monsterTracker.recordLoot(name, drops, System.currentTimeMillis());
+			long now = System.currentTimeMillis();
+			monsterTracker.recordLoot(name, drops, now);
+			sessionMonsters.recordLoot(name, drops, now);
 			panelDirty = true;
 		}
 	}
@@ -572,7 +610,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		// happened off-screen), the loot still proves one.
 		if (countedKills.remove(npc) == null)
 		{
-			monsterTracker.recordKill(name, now);
+			countKill(name, now);
 		}
 
 		if (config.trackMonsterLoot())
@@ -581,13 +619,24 @@ public class CombatXpTrackerPlugin extends Plugin
 			for (ItemStack stack : event.getItems())
 			{
 				// Canonicalize so noted drops are priced and stacked as the normal item.
-				int id = itemManager.canonicalize(stack.getId());
-				String itemName = itemManager.getItemComposition(id).getName();
-				drops.add(new MonsterTracker.Drop(id, itemName, stack.getQuantity(), itemManager.getItemPrice(id)));
+				drops.add(drop(itemManager.canonicalize(stack.getId()), stack.getQuantity()));
 			}
-			monsterTracker.recordLoot(name, drops, now);
+			String tracked = BossGroups.trackedName(name);
+			monsterTracker.recordLoot(tracked, drops, now);
+			sessionMonsters.recordLoot(tracked, drops, now);
 		}
 		panelDirty = true;
+	}
+
+	/**
+	 * A drop with both its GE price and High Alchemy value, so the price setting can be
+	 * switched without re-recording anything. Must run on the client thread.
+	 */
+	private MonsterTracker.Drop drop(int itemId, int quantity)
+	{
+		String name = itemManager.getItemComposition(itemId).getName();
+		long ha = itemId == ItemID.COINS ? 1 : itemManager.getItemComposition(itemId).getHaPrice();
+		return new MonsterTracker.Drop(itemId, name, quantity, itemManager.getItemPrice(itemId), ha);
 	}
 
 	@Subscribe
@@ -679,6 +728,14 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 
 		attackStyle = maxHitCalculator.readAttackStyle();
+		String task = maxHitCalculator.readSlayerTaskName();
+		int remaining = task == null ? 0 : client.getVarpValue(VarPlayerID.SLAYER_COUNT);
+		if (!java.util.Objects.equals(task, slayerTaskName) || remaining != slayerTaskRemaining)
+		{
+			slayerTaskName = task;
+			slayerTaskRemaining = remaining;
+			panelDirty = true;
+		}
 		if (!config.showMeleeMaxHit())
 		{
 			return;
@@ -686,7 +743,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 		// Recalculated once per tick rather than per frame in the overlay. Gear, prayers,
 		// boosts, style and task can all change between ticks, but not within one.
-		MaxHitCalculator.Result result = maxHitCalculator.calculate(attackStyle, maxHitCalculator.readSlayerTaskName());
+		MaxHitCalculator.Result result = maxHitCalculator.calculate(attackStyle, task);
 		String key = result == null ? null : result.toString();
 		if (key != null && !key.equals(maxHitKey))
 		{
@@ -758,6 +815,9 @@ public class CombatXpTrackerPlugin extends Plugin
 			}
 		}
 		monsterTracker.importState(saved);
+		// 1.5.x saved each Royal Titan (etc.) separately and had no High Alchemy values.
+		monsterTracker.rename(BossGroups::trackedName);
+		monsterTracker.fillMissingHaPrices(id -> id == ItemID.COINS ? 1 : itemManager.getItemComposition(id).getHaPrice());
 		engagedNpcs.clear();
 		countedKills.clear();
 		savedMonsterRevision = monsterTracker.getRevision();
@@ -903,13 +963,20 @@ public class CombatXpTrackerPlugin extends Plugin
 	}
 
 	/**
-	 * Clears damage stats, monsters and XP rates. Goals and colours are kept.
+	 * Clears this session's damage stats, monsters and XP rates. Goals and colours are
+	 * kept.
+	 *
+	 * @param allTimeToo also forget every remembered monster for this account
 	 */
-	public void resetTracker()
+	public void resetTracker(boolean allTimeToo)
 	{
 		hitStats.reset();
 		combinedDropTracker.reset();
-		monsterTracker.reset();
+		sessionMonsters.reset();
+		if (allTimeToo)
+		{
+			monsterTracker.reset();
+		}
 		for (SkillProgress progress : skillProgress.values())
 		{
 			progress.resetSession();
@@ -920,7 +987,45 @@ public class CombatXpTrackerPlugin extends Plugin
 	public void removeMonster(String name)
 	{
 		monsterTracker.remove(name);
+		sessionMonsters.remove(name);
 		refreshPanelNow();
+	}
+
+	/**
+	 * Leaves an item out of every loot grid and loot value, like the Loot Tracker's
+	 * ignore list.
+	 */
+	public void ignoreItem(String itemName)
+	{
+		Set<String> ignored = MonsterTracker.parseNames(config.ignoredItems());
+		if (ignored.add(itemName.toLowerCase()))
+		{
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "ignoredItems", String.join(", ", ignored));
+		}
+	}
+
+	public void setMonsterRange(MonsterRange range)
+	{
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "monsterRange", range);
+	}
+
+	public boolean isCollapsed(String monsterName)
+	{
+		return MonsterTracker.parseNames(config.collapsedMonsters()).contains(monsterName.toLowerCase());
+	}
+
+	/**
+	 * Remembers whether a monster card is collapsed, so it stays that way after a
+	 * restart.
+	 */
+	public void setCollapsed(String monsterName, boolean collapsed)
+	{
+		Set<String> names = MonsterTracker.parseNames(config.collapsedMonsters());
+		boolean changed = collapsed ? names.add(monsterName.toLowerCase()) : names.remove(monsterName.toLowerCase());
+		if (changed)
+		{
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "collapsedMonsters", String.join(", ", names));
+		}
 	}
 
 	/**
@@ -1021,6 +1126,24 @@ public class CombatXpTrackerPlugin extends Plugin
 	public MonsterTracker getMonsterTracker()
 	{
 		return monsterTracker;
+	}
+
+	public MonsterTracker getMonsterTracker(MonsterRange range)
+	{
+		return range == MonsterRange.SESSION ? sessionMonsters : monsterTracker;
+	}
+
+	/**
+	 * @return the current slayer task's name, or null without a task
+	 */
+	public String getSlayerTaskName()
+	{
+		return slayerTaskName;
+	}
+
+	public int getSlayerTaskRemaining()
+	{
+		return slayerTaskRemaining;
 	}
 
 	public XpRateMode getXpRateMode()

@@ -34,6 +34,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
+import java.util.function.ToLongFunction;
+import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 
 /**
  * Per-monster stats: hits, damage, biggest hit per combat style, kills, loot, and how
@@ -54,13 +58,24 @@ public class MonsterTracker
 		private final String name;
 		private final int quantity;
 		private final long unitPrice;
+		private final long haPrice;
 
 		public Drop(int itemId, String name, int quantity, long unitPrice)
+		{
+			this(itemId, name, quantity, unitPrice, 0);
+		}
+
+		/**
+		 * @param unitPrice Grand Exchange price of one item
+		 * @param haPrice   High Alchemy value of one item
+		 */
+		public Drop(int itemId, String name, int quantity, long unitPrice, long haPrice)
 		{
 			this.itemId = itemId;
 			this.name = name;
 			this.quantity = quantity;
 			this.unitPrice = unitPrice;
+			this.haPrice = haPrice;
 		}
 	}
 
@@ -73,13 +88,27 @@ public class MonsterTracker
 		private final String name;
 		private final long quantity;
 		private final long unitPrice;
+		private final long haPrice;
+		private final LootPrice priceMode;
 
-		LootLine(int itemId, String name, long quantity, long unitPrice)
+		LootLine(int itemId, String name, long quantity, long unitPrice, long haPrice)
+		{
+			this(itemId, name, quantity, unitPrice, haPrice, LootPrice.GRAND_EXCHANGE);
+		}
+
+		private LootLine(int itemId, String name, long quantity, long unitPrice, long haPrice, LootPrice priceMode)
 		{
 			this.itemId = itemId;
 			this.name = name;
 			this.quantity = quantity;
 			this.unitPrice = unitPrice;
+			this.haPrice = haPrice;
+			this.priceMode = priceMode;
+		}
+
+		LootLine priced(LootPrice mode)
+		{
+			return new LootLine(itemId, name, quantity, unitPrice, haPrice, mode);
 		}
 
 		public int getItemId()
@@ -97,14 +126,17 @@ public class MonsterTracker
 			return quantity;
 		}
 
+		/**
+		 * Value of one item in the price mode this line was read with.
+		 */
 		public long getUnitPrice()
 		{
-			return unitPrice;
+			return priceMode == LootPrice.HIGH_ALCHEMY ? haPrice : unitPrice;
 		}
 
 		public long getTotalValue()
 		{
-			return unitPrice * quantity;
+			return getUnitPrice() * quantity;
 		}
 	}
 
@@ -127,6 +159,11 @@ public class MonsterTracker
 
 		Snapshot(Entry e)
 		{
+			this(e, LootPrice.GRAND_EXCHANGE, name -> false);
+		}
+
+		Snapshot(Entry e, LootPrice price, Predicate<String> ignoredItem)
+		{
 			name = e.name;
 			kills = e.kills;
 			hits = e.hits;
@@ -134,7 +171,14 @@ public class MonsterTracker
 			biggestHit = e.biggestHit;
 			biggestHitStyle = e.biggestHitStyle;
 			biggestByStyle = Collections.unmodifiableMap(new EnumMap<>(e.biggestByStyle));
-			List<LootLine> lines = new ArrayList<>(e.loot.values());
+			List<LootLine> lines = new ArrayList<>();
+			for (LootLine line : e.loot.values())
+			{
+				if (!ignoredItem.test(line.getName()))
+				{
+					lines.add(line.priced(price));
+				}
+			}
 			// Most valuable first, like the core Loot Tracker.
 			lines.sort((a, b) -> Long.compare(b.getTotalValue(), a.getTotalValue()));
 			loot = Collections.unmodifiableList(lines);
@@ -249,6 +293,7 @@ public class MonsterTracker
 		String name;
 		long quantity;
 		long unitPrice;
+		long haPrice;
 	}
 
 	private static final class Entry
@@ -322,7 +367,7 @@ public class MonsterTracker
 			LootLine existing = e.loot.get(d.itemId);
 			long qty = d.quantity + (existing == null ? 0 : existing.quantity);
 			// Keep the latest price so the total tracks the current market.
-			e.loot.put(d.itemId, new LootLine(d.itemId, d.name, qty, d.unitPrice));
+			e.loot.put(d.itemId, new LootLine(d.itemId, d.name, qty, d.unitPrice, d.haPrice));
 		}
 		e.activity.mark(nowMillis);
 		revision++;
@@ -333,13 +378,96 @@ public class MonsterTracker
 	 */
 	public synchronized List<Snapshot> snapshot()
 	{
+		return snapshot(LootPrice.GRAND_EXCHANGE, name -> false);
+	}
+
+	/**
+	 * @param price       how to value loot
+	 * @param ignoredItem item names to leave out of the loot and its value
+	 */
+	public synchronized List<Snapshot> snapshot(LootPrice price, Predicate<String> ignoredItem)
+	{
 		List<Snapshot> out = new ArrayList<>(entries.size());
 		for (Entry e : entries.values())
 		{
-			out.add(new Snapshot(e));
+			out.add(new Snapshot(e, price, ignoredItem));
 		}
 		out.sort(MonsterSort.RECENT.comparator());
 		return out;
+	}
+
+	/**
+	 * Fills in High Alchemy values missing from data saved by 1.5.x, which only stored
+	 * GE prices.
+	 */
+	public synchronized void fillMissingHaPrices(ToLongFunction<Integer> haPriceOfItem)
+	{
+		for (Entry e : entries.values())
+		{
+			for (Map.Entry<Integer, LootLine> l : e.loot.entrySet())
+			{
+				LootLine line = l.getValue();
+				if (line.haPrice <= 0)
+				{
+					long ha = haPriceOfItem.applyAsLong(line.itemId);
+					if (ha > 0)
+					{
+						l.setValue(new LootLine(line.itemId, line.name, line.quantity, line.unitPrice, ha));
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Renames monsters, merging entries that end up with the same name. Used to fold
+	 * cards saved separately by 1.5.x (e.g. each Royal Titan) into one boss card.
+	 */
+	public synchronized void rename(UnaryOperator<String> newName)
+	{
+		Map<String, Entry> merged = new LinkedHashMap<>();
+		for (Entry e : entries.values())
+		{
+			String name = newName.apply(e.name);
+			Entry target = merged.get(name);
+			if (target == null)
+			{
+				target = new Entry(name);
+				merged.put(name, target);
+			}
+			mergeInto(target, e);
+		}
+		if (!merged.keySet().equals(entries.keySet()))
+		{
+			entries.clear();
+			entries.putAll(merged);
+			revision++;
+		}
+	}
+
+	private static void mergeInto(Entry target, Entry source)
+	{
+		target.kills += source.kills;
+		target.hits += source.hits;
+		target.totalDamage += source.totalDamage;
+		if (source.biggestHit > target.biggestHit)
+		{
+			target.biggestHit = source.biggestHit;
+			target.biggestHitStyle = source.biggestHitStyle;
+		}
+		for (Map.Entry<CombatStyle, Integer> b : source.biggestByStyle.entrySet())
+		{
+			target.biggestByStyle.merge(b.getKey(), b.getValue(), Math::max);
+		}
+		for (LootLine line : source.loot.values())
+		{
+			LootLine existing = target.loot.get(line.itemId);
+			long qty = line.quantity + (existing == null ? 0 : existing.quantity);
+			target.loot.put(line.itemId, new LootLine(line.itemId, line.name, qty, line.unitPrice, line.haPrice));
+		}
+		target.activity.restore(
+			target.activity.getActiveMillis() + source.activity.getActiveMillis(),
+			Math.max(target.activity.getLastMillis(), source.activity.getLastMillis()));
 	}
 
 	/**
@@ -393,6 +521,7 @@ public class MonsterTracker
 				l.name = line.name;
 				l.quantity = line.quantity;
 				l.unitPrice = line.unitPrice;
+				l.haPrice = line.haPrice;
 				s.loot.add(l);
 			}
 			s.activeMillis = e.activity.getActiveMillis();
@@ -439,7 +568,7 @@ public class MonsterTracker
 					{
 						if (l != null && l.quantity > 0)
 						{
-							e.loot.put(l.id, new LootLine(l.id, l.name == null ? "Unknown" : l.name, l.quantity, l.unitPrice));
+							e.loot.put(l.id, new LootLine(l.id, l.name == null ? "Unknown" : l.name, l.quantity, l.unitPrice, l.haPrice));
 						}
 					}
 				}
@@ -488,6 +617,56 @@ public class MonsterTracker
 			}
 		}
 		return names;
+	}
+
+	/**
+	 * Parses the "ignored items" setting: comma separated item names, case insensitive,
+	 * with * as a wildcard (e.g. "bones, *ashes").
+	 */
+	public static Predicate<String> itemMatcher(String csv)
+	{
+		List<Pattern> patterns = new ArrayList<>();
+		for (String name : parseNames(csv))
+		{
+			patterns.add(Pattern.compile(wildcardRegex(name)));
+		}
+		return itemName ->
+		{
+			if (itemName == null || patterns.isEmpty())
+			{
+				return false;
+			}
+			String lower = itemName.toLowerCase(Locale.ROOT);
+			for (Pattern pattern : patterns)
+			{
+				if (pattern.matcher(lower).matches())
+				{
+					return true;
+				}
+			}
+			return false;
+		};
+	}
+
+	/**
+	 * "*ashes" -> ".*\Qashes\E": everything literal except the * wildcards.
+	 */
+	static String wildcardRegex(String wildcard)
+	{
+		StringBuilder regex = new StringBuilder();
+		String[] parts = wildcard.split("\\*", -1);
+		for (int i = 0; i < parts.length; i++)
+		{
+			if (i > 0)
+			{
+				regex.append(".*");
+			}
+			if (!parts[i].isEmpty())
+			{
+				regex.append(Pattern.quote(parts[i]));
+			}
+		}
+		return regex.toString();
 	}
 
 	private static boolean isBlank(String s)

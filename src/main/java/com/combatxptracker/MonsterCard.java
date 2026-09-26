@@ -75,6 +75,8 @@ class MonsterCard extends JPanel
 	private final JLabel maxLabel = Theme.label("", Theme.TEXT);
 	private final JPanel styleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 	private final JLabel ratesLabel = Theme.label("", Theme.SUBTLE);
+	private final JLabel taskLabel = Theme.label("", Theme.SUCCESS);
+	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private final JLabel noLootLabel = Theme.label("No drops recorded yet", Theme.SUBTLE);
 
@@ -86,6 +88,7 @@ class MonsterCard extends JPanel
 	{
 		this.monsterName = monsterName;
 		this.itemManager = itemManager;
+		this.plugin = plugin;
 
 		setLayout(new BorderLayout());
 		setOpaque(false);
@@ -119,7 +122,12 @@ class MonsterCard extends JPanel
 		stats.add(statsRow, BorderLayout.NORTH);
 		stats.add(styleRow, BorderLayout.CENTER);
 		ratesLabel.setToolTipText("Per hour of fighting this monster. Breaks over 5 minutes aren't counted.");
-		stats.add(ratesLabel, BorderLayout.SOUTH);
+		taskLabel.setToolTipText("Your current slayer task. Time left uses your kills/hr on this monster.");
+		JPanel extra = new JPanel(new GridLayout(0, 1, 0, 2));
+		extra.setOpaque(false);
+		extra.add(ratesLabel);
+		extra.add(taskLabel);
+		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
 
@@ -170,6 +178,10 @@ class MonsterCard extends JPanel
 				header.setBackground(Theme.HEADER);
 			}
 		});
+
+		// Stays collapsed across restarts if it was collapsed before.
+		collapsed = plugin.isCollapsed(monsterName);
+		body.setVisible(!collapsed);
 	}
 
 	String getMonsterName()
@@ -181,12 +193,33 @@ class MonsterCard extends JPanel
 	{
 		collapsed = !collapsed;
 		body.setVisible(!collapsed);
+		plugin.setCollapsed(monsterName, collapsed);
 		revalidate();
 		repaint();
 	}
 
-	void update(MonsterTracker.Snapshot s)
+	/**
+	 * @param taskRemaining kills left on the slayer task if this monster is the task,
+	 *                      otherwise -1
+	 */
+	void update(MonsterTracker.Snapshot s, int taskRemaining)
 	{
+		if (taskRemaining > 0)
+		{
+			String text = "Task: " + Formatting.withCommas(taskRemaining) + " left";
+			double killsPerHour = s.getKillsPerHour();
+			if (killsPerHour > 0)
+			{
+				text += " (~" + Formatting.duration(taskRemaining / killsPerHour) + ")";
+			}
+			taskLabel.setText(text);
+			taskLabel.setVisible(true);
+		}
+		else
+		{
+			taskLabel.setVisible(false);
+		}
+
 		killsLabel.setText(s.getKills() > 0 ? "x " + s.getKills() : "");
 		valueLabel.setText(s.getLootValue() > 0 ? QuantityFormatter.quantityToStackSize(s.getLootValue()) + " gp" : "");
 		valueLabel.setToolTipText(s.getLootValue() > 0 ? Formatting.withCommas(s.getLootValue()) + " gp" : null);
@@ -286,7 +319,15 @@ class MonsterCard extends JPanel
 		String value = line.getTotalValue() > 0
 			? "<br><font color='#FFC640'>" + Formatting.withCommas(line.getTotalValue()) + " gp</font>"
 			: "";
-		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value + "</html>");
+		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value
+			+ "<br><font color='#888888'>Right-click to ignore</font></html>");
+
+		JPopupMenu menu = new JPopupMenu();
+		JMenuItem ignore = new JMenuItem("Ignore " + line.getName());
+		ignore.setToolTipText("Leave it out of loot and loot value everywhere. Undo in the plugin settings.");
+		ignore.addActionListener(e -> plugin.ignoreItem(line.getName()));
+		menu.add(ignore);
+		slot.setComponentPopupMenu(menu);
 		return slot;
 	}
 

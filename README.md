@@ -6,7 +6,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Set a goal from the panel (**+ Add goal**) or by right-clicking a skill in the stats tab and choosing **Set goal**
 - Goals can be a level from 2 to 126 (virtual levels past 99 work) or an XP amount up to 200M: `99`, `126`, `13.03m`, `200m`, `500k`
 - A light blue progress bar fills from the XP you had when you set the goal, so it never resets on level-up
-- XP/hr, time left, XP left and XP gained this session for every goal
+- XP/hr, time left, XP left, roughly how many kills/hits/actions are left, and XP gained this session for every goal
 - XP/hr can be the last few seconds (reacts fast) or the whole session with breaks left out (steadier)
 - A notification and a chat message when you reach a goal
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
@@ -21,11 +21,14 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 
 ## Monsters
 - Every monster you fight, like the Loot Tracker: kills, hits, average hit, biggest hit and which combat style dealt it
+- Switch between **This session** and **All time** (remembered between sessions, separately for each account)
 - Kills are counted when a monster you hit dies, even if it drops nothing
+- Bosses fought as several NPCs share one card: Royal Titans, Grotesque Guardians, Nex (with her minions) and the Barrows brothers
+- Loot from bosses you **Loot** after the kill (e.g. the Royal Titans) is recorded too
 - Kills per hour and GP per hour, counting only time spent fighting
-- Every drop with its Grand Exchange value
-- Sort by most recent, loot value, kills, biggest hit or name; right-click to hide a monster
-- Remembered between sessions and client restarts, separately for each account
+- Your slayer task on the matching card: kills left and roughly how long at your kill rate
+- Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
+- Search, sort, hide monsters, ignore items (right-click an item), and collapsed cards stay collapsed
 
 ## Session summary
 - **Copy** puts a text summary of your session (XP, hits, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord

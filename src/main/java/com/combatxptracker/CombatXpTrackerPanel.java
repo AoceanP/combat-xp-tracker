@@ -54,6 +54,8 @@ import javax.swing.ScrollPaneConstants;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import net.runelite.api.Experience;
 import net.runelite.api.Skill;
 import net.runelite.client.game.ItemManager;
@@ -61,6 +63,7 @@ import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.ui.components.IconTextField;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 import net.runelite.client.util.QuantityFormatter;
@@ -115,6 +118,9 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final JComboBox<MonsterSort> sortBox = new JComboBox<>(MonsterSort.values());
 	private final JLabel hiddenLabel = Theme.label("", Theme.SUBTLE);
 	private final JLabel monstersCaption = Theme.label("Monsters", Theme.MUTED);
+	private final Map<MonsterRange, JLabel> rangeTabs = new EnumMap<>(MonsterRange.class);
+	private final IconTextField searchField = new IconTextField();
+	private final JLabel noMatchLabel = Theme.label("No monsters match your search", Theme.SUBTLE);
 	// Revision + sort + hidden list last shown, so the list is only rebuilt on changes.
 	private String monsterViewKey = "";
 	private boolean updatingSortBox;
@@ -280,9 +286,54 @@ class CombatXpTrackerPanel extends PluginPanel
 
 		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
 		view.setOpaque(false);
+		JPanel rangeRow = new JPanel(new GridLayout(1, 2, 4, 0));
+		rangeRow.setOpaque(false);
+		for (MonsterRange range : MonsterRange.values())
+		{
+			JLabel tab = rangeTab(range);
+			rangeTabs.put(range, tab);
+			rangeRow.add(tab);
+		}
+
+		searchField.setIcon(IconTextField.Icon.SEARCH);
+		searchField.setPreferredSize(new Dimension(0, 28));
+		// Same look as the search boxes in RuneLite's own panels.
+		searchField.setBackground(Theme.CARD);
+		searchField.setHoverBackgroundColor(Theme.CARD_HOVER);
+		searchField.setToolTipText("Search monsters by name");
+		searchField.getDocument().addDocumentListener(new DocumentListener()
+		{
+			@Override
+			public void insertUpdate(DocumentEvent e)
+			{
+				updateMonsters();
+			}
+
+			@Override
+			public void removeUpdate(DocumentEvent e)
+			{
+				updateMonsters();
+			}
+
+			@Override
+			public void changedUpdate(DocumentEvent e)
+			{
+				updateMonsters();
+			}
+		});
+		searchField.addClearListener(this::updateMonsters);
+
+		view.add(rangeRow);
 		view.add(summary);
+		view.add(searchField);
 		view.add(sortRow);
 		view.add(collapsible(monstersEmpty));
+		noMatchLabel.setHorizontalAlignment(SwingConstants.CENTER);
+		noMatchLabel.setVisible(false);
+		JPanel noMatchHolder = new JPanel(new BorderLayout());
+		noMatchHolder.setOpaque(false);
+		noMatchHolder.add(noMatchLabel, BorderLayout.CENTER);
+		view.add(noMatchHolder);
 		view.add(monstersList);
 		JPanel hiddenHolder = new JPanel(new BorderLayout());
 		hiddenHolder.setOpaque(false);
@@ -504,15 +555,27 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private void updateMonsters()
 	{
-		MonsterTracker tracker = plugin.getMonsterTracker();
+		MonsterRange range = config.monsterRange();
+		MonsterTracker tracker = plugin.getMonsterTracker(range);
 		MonsterSort sort = config.monsterSort();
 		String hiddenSetting = config.hiddenMonsters();
-		String key = tracker.getRevision() + "|" + sort + "|" + hiddenSetting;
+		LootPrice price = config.lootPrice();
+		String ignoredSetting = config.ignoredItems();
+		String search = searchField.getText() == null ? "" : searchField.getText().trim().toLowerCase();
+		String task = plugin.getSlayerTaskName();
+		int taskRemaining = plugin.getSlayerTaskRemaining();
+		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
+			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining;
 		if (key.equals(monsterViewKey))
 		{
 			return;
 		}
 		monsterViewKey = key;
+
+		for (Map.Entry<MonsterRange, JLabel> tab : rangeTabs.entrySet())
+		{
+			styleRangeTab(tab.getValue(), tab.getKey() == range);
+		}
 
 		if (sortBox.getSelectedItem() != sort)
 		{
@@ -521,8 +584,16 @@ class CombatXpTrackerPanel extends PluginPanel
 			updatingSortBox = false;
 		}
 
-		List<MonsterTracker.Snapshot> all = tracker.snapshot();
-		List<MonsterTracker.Snapshot> shown = MonsterTracker.view(all, sort, MonsterTracker.parseNames(hiddenSetting));
+		List<MonsterTracker.Snapshot> all = tracker.snapshot(price, MonsterTracker.itemMatcher(ignoredSetting));
+		List<MonsterTracker.Snapshot> visible = MonsterTracker.view(all, sort, MonsterTracker.parseNames(hiddenSetting));
+		List<MonsterTracker.Snapshot> shown = new ArrayList<>();
+		for (MonsterTracker.Snapshot s : visible)
+		{
+			if (search.isEmpty() || s.getName().toLowerCase().contains(search))
+			{
+				shown.add(s);
+			}
+		}
 		Map<String, MonsterCard> keep = new HashMap<>();
 		monstersList.removeAll();
 
@@ -535,7 +606,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			{
 				card = new MonsterCard(s.getName(), itemManager, plugin);
 			}
-			card.update(s);
+			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1);
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();
@@ -548,9 +619,10 @@ class CombatXpTrackerPanel extends PluginPanel
 		lootValue.setText(QuantityFormatter.quantityToStackSize(loot));
 		lootValue.setToolTipText(Formatting.withCommas(loot) + " gp");
 		monsterCountValue.setText(String.valueOf(shown.size()));
-		monstersEmpty.setVisible(shown.isEmpty());
+		monstersEmpty.setVisible(shown.isEmpty() && search.isEmpty());
+		noMatchLabel.setVisible(shown.isEmpty() && !search.isEmpty());
 
-		int hidden = all.size() - shown.size();
+		int hidden = all.size() - visible.size();
 		hiddenLabel.setText(hidden > 0 ? hidden + " hidden - click to show" : "");
 		hiddenLabel.setVisible(hidden > 0);
 	}
@@ -561,9 +633,11 @@ class CombatXpTrackerPanel extends PluginPanel
 	 */
 	private void copySummary(JLabel button)
 	{
-		MonsterTracker tracker = plugin.getMonsterTracker();
-		List<MonsterTracker.Snapshot> monsters = MonsterTracker.view(tracker.snapshot(), config.monsterSort(),
-			MonsterTracker.parseNames(config.hiddenMonsters()));
+		// The summary is about this session, whichever range the tab is showing.
+		MonsterTracker tracker = plugin.getMonsterTracker(MonsterRange.SESSION);
+		List<MonsterTracker.Snapshot> monsters = MonsterTracker.view(
+			tracker.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems())),
+			config.monsterSort(), MonsterTracker.parseNames(config.hiddenMonsters()));
 		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode());
 
 		try
@@ -585,13 +659,79 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private void confirmReset()
 	{
-		int choice = JOptionPane.showConfirmDialog(this,
-			"Clear damage stats, monsters and XP rates?\nYour goals and colours are kept.",
-			"Reset tracker", JOptionPane.YES_NO_OPTION);
-		if (choice == JOptionPane.YES_OPTION)
+		Object[] options = {"This session", "Everything", "Cancel"};
+		int choice = JOptionPane.showOptionDialog(this,
+			"What should be reset?\n\n"
+				+ "This session: damage stats, XP rates and this session's monsters.\n"
+				+ "Everything: also every monster remembered for this account.\n\n"
+				+ "Your goals and colours are always kept.",
+			"Reset tracker", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+		if (choice == 0)
 		{
-			plugin.resetTracker();
+			plugin.resetTracker(false);
 		}
+		else if (choice == 1)
+		{
+			plugin.resetTracker(true);
+		}
+	}
+
+	private JLabel rangeTab(MonsterRange range)
+	{
+		JLabel tab = new JLabel(range.toString(), SwingConstants.CENTER);
+		tab.setFont(FontManager.getRunescapeSmallFont());
+		tab.setOpaque(true);
+		tab.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		tab.setBorder(BorderFactory.createEmptyBorder(5, 6, 5, 6));
+		tab.setToolTipText(range == MonsterRange.SESSION
+			? "Since the client started or your last Reset"
+			: "Everything remembered for this account");
+		tab.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				plugin.setMonsterRange(range);
+			}
+		});
+		styleRangeTab(tab, false);
+		return tab;
+	}
+
+	private void styleRangeTab(JLabel tab, boolean selected)
+	{
+		tab.setBackground(selected ? Theme.darken(config.goalBarColor(), 0.55f) : Theme.CARD);
+		tab.setForeground(selected ? Theme.TEXT : Theme.MUTED);
+	}
+
+	/**
+	 * Whether a card belongs to the current slayer task: by its own name, or for boss
+	 * groups (e.g. Royal Titans) by any member's name.
+	 */
+	private static boolean isTaskMonster(String task, String cardName)
+	{
+		if (task == null)
+		{
+			return false;
+		}
+		if (SlayerTaskMatcher.matches(task, cardName))
+		{
+			return true;
+		}
+		for (BossGroups group : BossGroups.values())
+		{
+			if (group.getDisplayName().equals(cardName))
+			{
+				for (String member : group.getMembers())
+				{
+					if (SlayerTaskMatcher.matches(task, member))
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	/**

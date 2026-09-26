@@ -302,9 +302,28 @@ class GoalCard extends JPanel
 		bar.setValue(fraction, shownOnce);
 		shownOnce = true;
 
-		remainingLabel.setText(xpKnown && !reached
-			? Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left"
-			: "");
+		int actionsLeft = progress.getActionsLeftToGoal();
+		if (!xpKnown || reached)
+		{
+			remainingLabel.setText("");
+			remainingLabel.setToolTipText(null);
+		}
+		else if (actionsLeft > 0)
+		{
+			// Short form so it fits next to the session XP: "1.23M xp, ~1.2K hits"
+			// Slayer XP comes once per kill; other combat skills once per hit.
+			String unit = skill == Skill.SLAYER ? "kills"
+				: CombinedDropTracker.isCombatSkill(skill) ? "hits" : "actions";
+			remainingLabel.setText(Formatting.compactXp(progress.getXpRemainingToGoal()) + " xp, ~"
+				+ Formatting.compactXp(actionsLeft) + " " + unit);
+			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left"
+				+ "<br>About " + Formatting.withCommas(actionsLeft) + " more XP drops at this session's average</html>");
+		}
+		else
+		{
+			remainingLabel.setText(Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left");
+			remainingLabel.setToolTipText(null);
+		}
 		int gained = progress.getSessionXpGained();
 		sessionLabel.setText(gained > 0 ? "+" + Formatting.compactXp(gained) + " session" : "");
 
