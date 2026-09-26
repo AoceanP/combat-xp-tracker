@@ -485,6 +485,14 @@ class CombatXpTrackerPanel extends PluginPanel
 			maxHitDetails.add(setupLabel);
 		}
 
+		if (max.getSpecMaxHit() >= 0)
+		{
+			SpecialAttack spec = max.getSpec();
+			String label = "Spec (" + spec.getDisplayName() + ")";
+			String value = spec.getHits() > 1 ? spec.getHits() + " x " + max.getSpecMaxHit() : String.valueOf(max.getSpecMaxHit());
+			maxHitDetails.add(detailRow(label, value, false,
+				"Special attack max hit, before Slayer helm or Salve bonuses"));
+		}
 		if (max.getOnTaskMaxHit() >= 0)
 		{
 			String task = "On task (" + max.getSlayerTask() + ")";
@@ -501,12 +509,17 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private static JPanel detailRow(String label, int value, boolean highlight, String tooltip)
 	{
+		return detailRow(label, String.valueOf(value), highlight, tooltip);
+	}
+
+	private static JPanel detailRow(String label, String value, boolean highlight, String tooltip)
+	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
 		row.setBackground(highlight ? Theme.darken(Theme.SUCCESS, 0.72f) : Theme.HEADER);
 		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
 		row.setToolTipText(tooltip);
 		row.add(Theme.label(label, highlight ? Theme.SUCCESS : Theme.MUTED), BorderLayout.CENTER);
-		row.add(Theme.boldLabel(String.valueOf(value), highlight ? Theme.SUCCESS : Theme.TEXT), BorderLayout.EAST);
+		row.add(Theme.boldLabel(value, highlight ? Theme.SUCCESS : Theme.TEXT), BorderLayout.EAST);
 		return row;
 	}
 
@@ -565,7 +578,8 @@ class CombatXpTrackerPanel extends PluginPanel
 		String task = plugin.getSlayerTaskName();
 		int taskRemaining = plugin.getSlayerTaskRemaining();
 		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
-			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining;
+			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
+			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters();
 		if (key.equals(monsterViewKey))
 		{
 			return;
@@ -584,8 +598,10 @@ class CombatXpTrackerPanel extends PluginPanel
 			updatingSortBox = false;
 		}
 
-		List<MonsterTracker.Snapshot> all = tracker.snapshot(price, MonsterTracker.itemMatcher(ignoredSetting));
-		List<MonsterTracker.Snapshot> visible = MonsterTracker.view(all, sort, MonsterTracker.parseNames(hiddenSetting));
+		long rareValue = config.rareDropValue();
+		java.util.Set<String> pinned = MonsterTracker.parseNames(config.pinnedMonsters());
+		List<MonsterTracker.Snapshot> all = tracker.snapshot(price, MonsterTracker.itemMatcher(ignoredSetting), rareValue);
+		List<MonsterTracker.Snapshot> visible = MonsterTracker.view(all, sort, MonsterTracker.parseNames(hiddenSetting), pinned);
 		List<MonsterTracker.Snapshot> shown = new ArrayList<>();
 		for (MonsterTracker.Snapshot s : visible)
 		{
@@ -606,7 +622,8 @@ class CombatXpTrackerPanel extends PluginPanel
 			{
 				card = new MonsterCard(s.getName(), itemManager, plugin);
 			}
-			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1);
+			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
+				pinned.contains(s.getName().toLowerCase()));
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();

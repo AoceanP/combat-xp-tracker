@@ -35,11 +35,14 @@ import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.util.AsyncBufferedImage;
 import net.runelite.client.util.QuantityFormatter;
@@ -76,6 +79,7 @@ class MonsterCard extends JPanel
 	private final JPanel styleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 	private final JLabel ratesLabel = Theme.label("", Theme.SUBTLE);
 	private final JLabel taskLabel = Theme.label("", Theme.SUCCESS);
+	private final JLabel dryLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private final JLabel noLootLabel = Theme.label("No drops recorded yet", Theme.SUBTLE);
@@ -123,10 +127,17 @@ class MonsterCard extends JPanel
 		stats.add(styleRow, BorderLayout.CENTER);
 		ratesLabel.setToolTipText("Per hour of fighting this monster. Breaks over 5 minutes aren't counted.");
 		taskLabel.setToolTipText("Your current slayer task. Time left uses your kills/hr on this monster.");
-		JPanel extra = new JPanel(new GridLayout(0, 1, 0, 2));
+		// BoxLayout skips hidden lines; a grid would leave blank rows for them.
+		JPanel extra = new JPanel();
+		extra.setLayout(new BoxLayout(extra, BoxLayout.Y_AXIS));
 		extra.setOpaque(false);
+		ratesLabel.setAlignmentX(LEFT_ALIGNMENT);
+		taskLabel.setAlignmentX(LEFT_ALIGNMENT);
+		dryLabel.setAlignmentX(LEFT_ALIGNMENT);
 		extra.add(ratesLabel);
 		extra.add(taskLabel);
+		dryLabel.setToolTipText("Kills since this monster last dropped an item worth at least your \"Rare drop value\" setting.");
+		extra.add(dryLabel);
 		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
@@ -145,6 +156,27 @@ class MonsterCard extends JPanel
 		JMenuItem toggle = new JMenuItem("Collapse / expand");
 		toggle.addActionListener(e -> toggleCollapsed());
 		menu.add(toggle);
+		JMenuItem pin = new JMenuItem();
+		pin.addActionListener(e -> plugin.setPinned(monsterName, !plugin.isPinned(monsterName)));
+		menu.add(pin);
+		menu.addPopupMenuListener(new PopupMenuListener()
+		{
+			@Override
+			public void popupMenuWillBecomeVisible(PopupMenuEvent e)
+			{
+				pin.setText(plugin.isPinned(monsterName) ? "Unpin" : "Pin to top");
+			}
+
+			@Override
+			public void popupMenuWillBecomeInvisible(PopupMenuEvent e)
+			{
+			}
+
+			@Override
+			public void popupMenuCanceled(PopupMenuEvent e)
+			{
+			}
+		});
 		JMenuItem hide = new JMenuItem("Hide " + monsterName);
 		hide.setToolTipText("Keeps tracking it, but leaves it out of this tab. Unhide from the bottom of the tab or the plugin settings.");
 		hide.addActionListener(e -> plugin.hideMonster(monsterName));
@@ -202,8 +234,27 @@ class MonsterCard extends JPanel
 	 * @param taskRemaining kills left on the slayer task if this monster is the task,
 	 *                      otherwise -1
 	 */
-	void update(MonsterTracker.Snapshot s, int taskRemaining)
+	void update(MonsterTracker.Snapshot s, int taskRemaining, long rareValue, boolean pinned)
 	{
+		// A gold stripe marks pinned cards.
+		header.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, pinned ? 3 : 0, 0, 0, Theme.GOLD),
+			BorderFactory.createEmptyBorder(6, pinned ? 5 : 8, 6, 8)));
+		header.setToolTipText(pinned ? "Pinned to the top. Right-click to unpin." : null);
+
+		if (s.getKills() > 0 && rareValue < Long.MAX_VALUE)
+		{
+			String value = QuantityFormatter.quantityToStackSize(rareValue) + "+";
+			dryLabel.setText(s.hasEverDroppedRare()
+				? kills(s.getKillsSinceRare()) + " since a " + value + " drop"
+				: "No " + value + " drop in " + kills(s.getKills()));
+			dryLabel.setVisible(true);
+		}
+		else
+		{
+			dryLabel.setVisible(false);
+		}
+
 		if (taskRemaining > 0)
 		{
 			String text = "Task: " + Formatting.withCommas(taskRemaining) + " left";
@@ -277,7 +328,8 @@ class MonsterCard extends JPanel
 		StringBuilder key = new StringBuilder();
 		for (MonsterTracker.LootLine line : loot)
 		{
-			key.append(line.getItemId()).append(':').append(line.getQuantity()).append(':').append(line.getUnitPrice()).append(',');
+			key.append(line.getItemId()).append(':').append(line.getQuantity()).append(':').append(line.getUnitPrice())
+				.append(':').append(line.isRare()).append(',');
 		}
 		if (key.toString().equals(lootKey))
 		{
@@ -319,6 +371,11 @@ class MonsterCard extends JPanel
 		String value = line.getTotalValue() > 0
 			? "<br><font color='#FFC640'>" + Formatting.withCommas(line.getTotalValue()) + " gp</font>"
 			: "";
+		if (line.isRare())
+		{
+			// Rare drops get a gold border and are sorted first.
+			slot.setBorder(BorderFactory.createLineBorder(Theme.GOLD, 1));
+		}
 		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value
 			+ "<br><font color='#888888'>Right-click to ignore</font></html>");
 
@@ -340,5 +397,10 @@ class MonsterCard extends JPanel
 		slot.setHorizontalAlignment(JLabel.CENTER);
 		slot.setVerticalAlignment(JLabel.CENTER);
 		return slot;
+	}
+
+	private static String kills(int count)
+	{
+		return Formatting.withCommas(count) + (count == 1 ? " kill" : " kills");
 	}
 }

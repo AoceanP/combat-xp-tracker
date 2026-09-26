@@ -39,6 +39,7 @@ import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
 import javax.swing.border.Border;
+import net.runelite.api.Experience;
 import net.runelite.api.Skill;
 import net.runelite.client.game.SkillIconManager;
 
@@ -67,6 +68,7 @@ class GoalCard extends JPanel
 	private final JLabel rateLabel = Theme.label("", Theme.MUTED);
 	private final JLabel etaLabel = Theme.label("", Theme.MUTED);
 	private final JLabel remainingLabel = Theme.label("", Theme.SUBTLE);
+	private final JLabel nextLevelLabel = Theme.label("", Theme.SUBTLE);
 	private final JLabel sessionLabel = Theme.label("", Theme.SUBTLE);
 	private final GoalProgressBar bar = new GoalProgressBar();
 	private final JPanel[] tintedPanels;
@@ -107,12 +109,15 @@ class GoalCard extends JPanel
 		top.add(text, BorderLayout.CENTER);
 
 		JPanel footer = row(remainingLabel, sessionLabel);
+		JPanel bottom = new JPanel(new BorderLayout(0, 2));
+		bottom.add(footer, BorderLayout.NORTH);
+		bottom.add(nextLevelLabel, BorderLayout.SOUTH);
 
 		content.add(top, BorderLayout.NORTH);
 		content.add(bar, BorderLayout.CENTER);
-		content.add(footer, BorderLayout.SOUTH);
+		content.add(bottom, BorderLayout.SOUTH);
 
-		tintedPanels = new JPanel[]{content, top, text, titleRow, rateRow, footer};
+		tintedPanels = new JPanel[]{content, top, text, titleRow, rateRow, footer, bottom};
 		setCardBackground(Theme.CARD);
 
 		add(content, BorderLayout.NORTH);
@@ -303,10 +308,23 @@ class GoalCard extends JPanel
 		shownOnce = true;
 
 		int actionsLeft = progress.getActionsLeftToGoal();
+		// Combat goals: kills of the monster you're fighting, from its hitpoints.
+		String target = plugin.getLastTargetName();
+		double xpPerKill = target == null ? -1
+			: KillXp.perKill(skill, plugin.getAttackStyle(), plugin.getLastTargetHitpoints());
+		int killsLeft = KillXp.killsLeft(progress.getXpRemainingToGoal(), xpPerKill);
 		if (!xpKnown || reached)
 		{
 			remainingLabel.setText("");
 			remainingLabel.setToolTipText(null);
+		}
+		else if (killsLeft > 0)
+		{
+			remainingLabel.setText(Formatting.compactXp(progress.getXpRemainingToGoal()) + " xp, ~"
+				+ Formatting.compactXp(killsLeft) + " kills");
+			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left"
+				+ "<br>About " + Formatting.withCommas(killsLeft) + " more " + target + " kills"
+				+ "<br>(" + plugin.getLastTargetHitpoints() + " hitpoints each, at your current attack style)</html>");
 		}
 		else if (actionsLeft > 0)
 		{
@@ -324,6 +342,8 @@ class GoalCard extends JPanel
 			remainingLabel.setText(Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left");
 			remainingLabel.setToolTipText(null);
 		}
+		updateNextLevel(progress, reached);
+
 		int gained = progress.getSessionXpGained();
 		sessionLabel.setText(gained > 0 ? "+" + Formatting.compactXp(gained) + " session" : "");
 
@@ -335,5 +355,25 @@ class GoalCard extends JPanel
 			p.setToolTipText(tooltip);
 		}
 		bar.setToolTipText(tooltip);
+	}
+
+	/**
+	 * "Next level (88) in 12m", when that's sooner than the goal and the setting is on.
+	 */
+	private void updateNextLevel(SkillProgress progress, boolean reached)
+	{
+		Goal goal = progress.getGoal();
+		int level = progress.getCurrentLevel();
+		int rate = progress.getXpPerHour(config.xpRateMode());
+		boolean show = config.showNextLevelTime() && !reached && progress.isXpKnown() && goal != null
+			&& level < Experience.MAX_VIRT_LEVEL && level + 1 < goal.getTargetLevel() && rate > 0;
+		if (!show)
+		{
+			nextLevelLabel.setVisible(false);
+			return;
+		}
+		int xpToNext = Experience.getXpForLevel(level + 1) - progress.getCurrentXp();
+		nextLevelLabel.setText("Next level (" + (level + 1) + ") in " + Formatting.duration(xpToNext / (double) rate));
+		nextLevelLabel.setVisible(true);
 	}
 }

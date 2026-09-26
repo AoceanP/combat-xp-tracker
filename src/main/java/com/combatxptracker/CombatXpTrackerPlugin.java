@@ -77,6 +77,7 @@ import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
+import net.runelite.client.game.NPCManager;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -115,6 +116,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final int SAVE_INTERVAL_TICKS = 50;
 
 	private static final String MONSTERS_KEY = "monsters";
+
+	/**
+	 * A task that disappears with at most this many kills left finished through kills.
+	 * One that disappears with more was cancelled or skipped.
+	 */
+	private static final int TASK_FINISH_MAX_REMAINING = 10;
 
 	/** The option some bosses use to hand out their reward, e.g. the Royal Titans. */
 	private static final String LOOT_OPTION = "Loot";
@@ -160,6 +167,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	private MaxHitCalculator maxHitCalculator;
 
 	@Inject
+	private NPCManager npcManager;
+
+	@Inject
 	private Notifier notifier;
 
 	@Inject
@@ -181,7 +191,12 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	// Client-thread only.
 	private boolean panelDirty;
-	private CombatStyle.AttackStyle attackStyle;
+	// Written on the client thread, read by goal cards for "kills left".
+	private volatile CombatStyle.AttackStyle attackStyle;
+	// The last monster the player hit and its hitpoints, for "kills left" on goals.
+	private volatile String lastTargetName;
+	private volatile int lastTargetHitpoints;
+	private final SlayerTaskSession taskSession = new SlayerTaskSession();
 	private CombatStyle lastXpStyle;
 	private int lastXpStyleTick;
 	private String maxHitKey;
@@ -271,6 +286,9 @@ public class CombatXpTrackerPlugin extends Plugin
 		monsterTracker.reset();
 		sessionMonsters.reset();
 		lastGroupKillTick.clear();
+		taskSession.clear();
+		lastTargetName = null;
+		lastTargetHitpoints = 0;
 		slayerTaskName = null;
 		slayerTaskRemaining = 0;
 		maxHitResult = null;
@@ -443,11 +461,24 @@ public class CombatXpTrackerPlugin extends Plugin
 		Actor target = event.getActor();
 		if (target instanceof NPC)
 		{
-			String name = BossGroups.trackedName(cleanName(target.getName()));
+			NPC npc = (NPC) target;
+			String rawName = cleanName(npc.getName());
+			String name = BossGroups.trackedName(rawName);
 			CombatStyle style = resolveHitStyle();
 			monsterTracker.recordHit(name, damage, style, now);
 			sessionMonsters.recordHit(name, damage, style, now);
-			engagedNpcs.put((NPC) target, client.getTickCount());
+			engagedNpcs.put(npc, client.getTickCount());
+
+			Integer hitpoints = npcManager.getHealth(npc.getId());
+			if (rawName != null && hitpoints != null && hitpoints > 0)
+			{
+				lastTargetName = rawName;
+				lastTargetHitpoints = hitpoints;
+			}
+			if (taskSession.isTaskMonster(rawName))
+			{
+				taskSession.recordHit(damage, now);
+			}
 		}
 
 		panelDirty = true;
@@ -501,6 +532,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		String tracked = BossGroups.trackedName(npcName);
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
+		if (taskSession.isTaskMonster(npcName))
+		{
+			taskSession.recordKill(now);
+		}
 		panelDirty = true;
 	}
 
@@ -562,6 +597,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			long now = System.currentTimeMillis();
 			monsterTracker.recordLoot(name, drops, now);
 			sessionMonsters.recordLoot(name, drops, now);
+			recordTaskLoot(name, drops, now);
 			panelDirty = true;
 		}
 	}
@@ -624,8 +660,25 @@ public class CombatXpTrackerPlugin extends Plugin
 			String tracked = BossGroups.trackedName(name);
 			monsterTracker.recordLoot(tracked, drops, now);
 			sessionMonsters.recordLoot(tracked, drops, now);
+			recordTaskLoot(name, drops, now);
 		}
 		panelDirty = true;
+	}
+
+	private void recordTaskLoot(String npcName, List<MonsterTracker.Drop> drops, long now)
+	{
+		if (!taskSession.isTaskMonster(npcName))
+		{
+			return;
+		}
+		long ge = 0;
+		long ha = 0;
+		for (MonsterTracker.Drop d : drops)
+		{
+			ge += d.totalValue(LootPrice.GRAND_EXCHANGE);
+			ha += d.totalValue(LootPrice.HIGH_ALCHEMY);
+		}
+		taskSession.recordLoot(ge, ha, now);
 	}
 
 	/**
@@ -732,6 +785,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		int remaining = task == null ? 0 : client.getVarpValue(VarPlayerID.SLAYER_COUNT);
 		if (!java.util.Objects.equals(task, slayerTaskName) || remaining != slayerTaskRemaining)
 		{
+			onSlayerTaskUpdate(slayerTaskName, slayerTaskRemaining, task, remaining);
 			slayerTaskName = task;
 			slayerTaskRemaining = remaining;
 			panelDirty = true;
@@ -750,6 +804,37 @@ public class CombatXpTrackerPlugin extends Plugin
 			maxHitKey = key;
 			maxHitResult = result;
 			panelDirty = true;
+		}
+	}
+
+	/**
+	 * Starts tracking a new task, and posts the summary when one finishes.
+	 */
+	private void onSlayerTaskUpdate(String oldTask, int oldRemaining, String newTask, int newRemaining)
+	{
+		boolean finished = oldTask != null && newTask == null
+			// A task that ran out through kills, not one cancelled at a slayer master.
+			&& oldRemaining <= TASK_FINISH_MAX_REMAINING && taskSession.isActive() && taskSession.getKills() > 0;
+		if (finished && config.taskSummary())
+		{
+			String message = new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append(taskSession.summary(config.lootPrice()))
+				.build();
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(message)
+				.build());
+		}
+
+		if (newTask == null)
+		{
+			taskSession.clear();
+		}
+		else if (!newTask.equals(oldTask) || newRemaining > oldRemaining || !taskSession.isActive())
+		{
+			// A new task (a different monster, or the count went up again).
+			taskSession.start(newTask);
 		}
 	}
 
@@ -1018,6 +1103,24 @@ public class CombatXpTrackerPlugin extends Plugin
 	 * Remembers whether a monster card is collapsed, so it stays that way after a
 	 * restart.
 	 */
+	public boolean isPinned(String monsterName)
+	{
+		return MonsterTracker.parseNames(config.pinnedMonsters()).contains(monsterName.toLowerCase());
+	}
+
+	/**
+	 * Pins a monster to the top of the Monsters tab, whatever the sort order.
+	 */
+	public void setPinned(String monsterName, boolean pinned)
+	{
+		Set<String> names = MonsterTracker.parseNames(config.pinnedMonsters());
+		boolean changed = pinned ? names.add(monsterName.toLowerCase()) : names.remove(monsterName.toLowerCase());
+		if (changed)
+		{
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "pinnedMonsters", String.join(", ", names));
+		}
+	}
+
 	public void setCollapsed(String monsterName, boolean collapsed)
 	{
 		Set<String> names = MonsterTracker.parseNames(config.collapsedMonsters());
@@ -1139,6 +1242,27 @@ public class CombatXpTrackerPlugin extends Plugin
 	public String getSlayerTaskName()
 	{
 		return slayerTaskName;
+	}
+
+	/**
+	 * @return the selected attack style, or null before it's known
+	 */
+	public CombatStyle.AttackStyle getAttackStyle()
+	{
+		return attackStyle;
+	}
+
+	/**
+	 * @return the last monster the player hit, or null
+	 */
+	public String getLastTargetName()
+	{
+		return lastTargetName;
+	}
+
+	public int getLastTargetHitpoints()
+	{
+		return lastTargetHitpoints;
 	}
 
 	public int getSlayerTaskRemaining()

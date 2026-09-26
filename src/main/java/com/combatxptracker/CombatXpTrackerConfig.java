@@ -114,6 +114,18 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showNextLevelTime",
+		name = "Show time to next level",
+		description = "Adds how long until your next level to each goal, as well as the time to the goal itself.",
+		position = 5,
+		section = goalsSection
+	)
+	default boolean showNextLevelTime()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "goalChatMessage",
 		name = "Chat message when a goal is reached",
 		description = "Adds a message to your chatbox when you reach a goal. Only you can see it.",
@@ -250,6 +262,43 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "rareDropValue",
+		name = "Rare drop value (gp)",
+		description = "Items worth at least this much each get a gold border in the loot grid, "
+			+ "and each monster shows how many kills since its last one (the dry streak).",
+		position = 10,
+		section = combatSection
+	)
+	@Range(min = 1_000)
+	default int rareDropValue()
+	{
+		return 1_000_000;
+	}
+
+	@ConfigItem(
+		keyName = "taskSummary",
+		name = "Slayer task summary",
+		description = "When a slayer task is finished, adds a chat message with its kills, time, loot, GP/hr and biggest hit.",
+		position = 11,
+		section = combatSection
+	)
+	default boolean taskSummary()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "pinnedMonsters",
+		name = "Pinned monsters",
+		description = "Monsters pinned to the top of the Monsters tab. Set by right-clicking a monster.",
+		hidden = true
+	)
+	default String pinnedMonsters()
+	{
+		return "";
+	}
+
+	@ConfigItem(
 		keyName = "collapsedMonsters",
 		name = "Collapsed monsters",
 		description = "Monster cards collapsed in the panel. Set by clicking a card's header.",
@@ -309,5 +358,53 @@ public interface CombatXpTrackerConfig extends Config
 	default int combinedDropWindowMillis()
 	{
 		return 600;
+	}
+
+	@ConfigItem(
+		keyName = "overlayShowDamage",
+		name = "Overlay: average and biggest hit",
+		description = "Show your average and biggest hit on the on-screen overlay.",
+		position = 4,
+		section = overlaySection
+	)
+	default boolean overlayShowDamage()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "overlayShowMaxHit",
+		name = "Overlay: max hit",
+		description = "Show your max hit (and special attack max hit) on the on-screen overlay.",
+		position = 5,
+		section = overlaySection
+	)
+	default boolean overlayShowMaxHit()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "overlayShowTask",
+		name = "Overlay: slayer task",
+		description = "Show your slayer task's kills left on the on-screen overlay.",
+		position = 6,
+		section = overlaySection
+	)
+	default boolean overlayShowTask()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "overlayShowGoals",
+		name = "Overlay: goals",
+		description = "Show each goal's XP/hr and progress on the on-screen overlay.",
+		position = 7,
+		section = overlaySection
+	)
+	default boolean overlayShowGoals()
+	{
+		return true;
 	}
 }

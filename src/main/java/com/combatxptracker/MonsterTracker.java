@@ -27,6 +27,7 @@ package com.combatxptracker;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -48,6 +49,42 @@ import java.util.regex.Pattern;
  */
 public class MonsterTracker
 {
+	/**
+	 * Items worth at least this much each are remembered with the kill they dropped on,
+	 * so the dry streak works for any "rare drop value" the player picks above it.
+	 */
+	static final long RARE_RECORD_FLOOR = 10_000;
+	/** How many valuable drops are remembered per monster. */
+	static final int MAX_RARE_RECORDS = 100;
+
+	/**
+	 * A valuable item and the kill number it dropped on.
+	 */
+	static final class RareDrop
+	{
+		int kill;
+		int itemId;
+		long unitPrice;
+		long haPrice;
+
+		RareDrop()
+		{
+		}
+
+		RareDrop(int kill, int itemId, long unitPrice, long haPrice)
+		{
+			this.kill = kill;
+			this.itemId = itemId;
+			this.unitPrice = unitPrice;
+			this.haPrice = haPrice;
+		}
+
+		long value(LootPrice mode)
+		{
+			return mode == LootPrice.HIGH_ALCHEMY ? haPrice : unitPrice;
+		}
+	}
+
 	/**
 	 * One item stack from a drop, already resolved to a name and price on the client
 	 * thread (item compositions can only be read there).
@@ -77,6 +114,11 @@ public class MonsterTracker
 			this.unitPrice = unitPrice;
 			this.haPrice = haPrice;
 		}
+
+		public long totalValue(LootPrice mode)
+		{
+			return (mode == LootPrice.HIGH_ALCHEMY ? haPrice : unitPrice) * quantity;
+		}
 	}
 
 	/**
@@ -90,13 +132,14 @@ public class MonsterTracker
 		private final long unitPrice;
 		private final long haPrice;
 		private final LootPrice priceMode;
+		private final boolean rare;
 
 		LootLine(int itemId, String name, long quantity, long unitPrice, long haPrice)
 		{
-			this(itemId, name, quantity, unitPrice, haPrice, LootPrice.GRAND_EXCHANGE);
+			this(itemId, name, quantity, unitPrice, haPrice, LootPrice.GRAND_EXCHANGE, false);
 		}
 
-		private LootLine(int itemId, String name, long quantity, long unitPrice, long haPrice, LootPrice priceMode)
+		private LootLine(int itemId, String name, long quantity, long unitPrice, long haPrice, LootPrice priceMode, boolean rare)
 		{
 			this.itemId = itemId;
 			this.name = name;
@@ -104,11 +147,21 @@ public class MonsterTracker
 			this.unitPrice = unitPrice;
 			this.haPrice = haPrice;
 			this.priceMode = priceMode;
+			this.rare = rare;
 		}
 
-		LootLine priced(LootPrice mode)
+		LootLine priced(LootPrice mode, long rareValue)
 		{
-			return new LootLine(itemId, name, quantity, unitPrice, haPrice, mode);
+			long each = mode == LootPrice.HIGH_ALCHEMY ? haPrice : unitPrice;
+			return new LootLine(itemId, name, quantity, unitPrice, haPrice, mode, each >= rareValue);
+		}
+
+		/**
+		 * Whether one of this item is worth at least the "rare drop value" setting.
+		 */
+		public boolean isRare()
+		{
+			return rare;
 		}
 
 		public int getItemId()
@@ -156,13 +209,15 @@ public class MonsterTracker
 		private final long lootValue;
 		private final long activeMillis;
 		private final long lastActivityMillis;
+		private final int killsSinceRare;
+		private final boolean everHadRare;
 
 		Snapshot(Entry e)
 		{
-			this(e, LootPrice.GRAND_EXCHANGE, name -> false);
+			this(e, LootPrice.GRAND_EXCHANGE, name -> false, Long.MAX_VALUE);
 		}
 
-		Snapshot(Entry e, LootPrice price, Predicate<String> ignoredItem)
+		Snapshot(Entry e, LootPrice price, Predicate<String> ignoredItem, long rareValue)
 		{
 			name = e.name;
 			kills = e.kills;
@@ -176,11 +231,13 @@ public class MonsterTracker
 			{
 				if (!ignoredItem.test(line.getName()))
 				{
-					lines.add(line.priced(price));
+					lines.add(line.priced(price, rareValue));
 				}
 			}
-			// Most valuable first, like the core Loot Tracker.
-			lines.sort((a, b) -> Long.compare(b.getTotalValue(), a.getTotalValue()));
+			// Rare drops first, then most valuable, like the core Loot Tracker.
+			lines.sort((a, b) -> a.rare != b.rare
+				? (a.rare ? -1 : 1)
+				: Long.compare(b.getTotalValue(), a.getTotalValue()));
 			loot = Collections.unmodifiableList(lines);
 			long value = 0;
 			for (LootLine line : lines)
@@ -190,6 +247,37 @@ public class MonsterTracker
 			lootValue = value;
 			activeMillis = e.activity.getActiveMillis();
 			lastActivityMillis = e.activity.getLastMillis();
+
+			int lastRareKill = -1;
+			for (RareDrop r : e.rareDrops)
+			{
+				if (r.value(price) >= rareValue && !ignoredItem.test(nameOf(e, r.itemId)))
+				{
+					lastRareKill = Math.max(lastRareKill, r.kill);
+				}
+			}
+			everHadRare = lastRareKill >= 0;
+			killsSinceRare = everHadRare ? e.kills - lastRareKill : e.kills;
+		}
+
+		private static String nameOf(Entry e, int itemId)
+		{
+			LootLine line = e.loot.get(itemId);
+			return line == null ? null : line.getName();
+		}
+
+		/**
+		 * Kills since the last drop worth at least the rare drop value, or all kills if
+		 * there hasn't been one.
+		 */
+		public int getKillsSinceRare()
+		{
+			return killsSinceRare;
+		}
+
+		public boolean hasEverDroppedRare()
+		{
+			return everHadRare;
 		}
 
 		public String getName()
@@ -283,6 +371,7 @@ public class MonsterTracker
 		CombatStyle biggestHitStyle;
 		Map<CombatStyle, Integer> biggestByStyle;
 		List<SavedLoot> loot;
+		List<RareDrop> rareDrops;
 		long activeMillis;
 		long lastActivityMillis = -1;
 	}
@@ -306,6 +395,7 @@ public class MonsterTracker
 		CombatStyle biggestHitStyle;
 		final Map<CombatStyle, Integer> biggestByStyle = new EnumMap<>(CombatStyle.class);
 		final Map<Integer, LootLine> loot = new LinkedHashMap<>();
+		final List<RareDrop> rareDrops = new ArrayList<>();
 		final ActivityTimer activity = new ActivityTimer();
 
 		Entry(String name)
@@ -368,6 +458,14 @@ public class MonsterTracker
 			long qty = d.quantity + (existing == null ? 0 : existing.quantity);
 			// Keep the latest price so the total tracks the current market.
 			e.loot.put(d.itemId, new LootLine(d.itemId, d.name, qty, d.unitPrice, d.haPrice));
+			if (d.unitPrice >= RARE_RECORD_FLOOR || d.haPrice >= RARE_RECORD_FLOOR)
+			{
+				e.rareDrops.add(new RareDrop(e.kills, d.itemId, d.unitPrice, d.haPrice));
+				if (e.rareDrops.size() > MAX_RARE_RECORDS)
+				{
+					e.rareDrops.remove(0);
+				}
+			}
 		}
 		e.activity.mark(nowMillis);
 		revision++;
@@ -387,10 +485,18 @@ public class MonsterTracker
 	 */
 	public synchronized List<Snapshot> snapshot(LootPrice price, Predicate<String> ignoredItem)
 	{
+		return snapshot(price, ignoredItem, Long.MAX_VALUE);
+	}
+
+	/**
+	 * @param rareValue items worth at least this much each count as rare drops
+	 */
+	public synchronized List<Snapshot> snapshot(LootPrice price, Predicate<String> ignoredItem, long rareValue)
+	{
 		List<Snapshot> out = new ArrayList<>(entries.size());
 		for (Entry e : entries.values())
 		{
-			out.add(new Snapshot(e, price, ignoredItem));
+			out.add(new Snapshot(e, price, ignoredItem, rareValue));
 		}
 		out.sort(MonsterSort.RECENT.comparator());
 		return out;
@@ -447,6 +553,10 @@ public class MonsterTracker
 
 	private static void mergeInto(Entry target, Entry source)
 	{
+		for (RareDrop r : source.rareDrops)
+		{
+			target.rareDrops.add(new RareDrop(r.kill + target.kills, r.itemId, r.unitPrice, r.haPrice));
+		}
 		target.kills += source.kills;
 		target.hits += source.hits;
 		target.totalDamage += source.totalDamage;
@@ -524,6 +634,7 @@ public class MonsterTracker
 				l.haPrice = line.haPrice;
 				s.loot.add(l);
 			}
+			s.rareDrops = new ArrayList<>(e.rareDrops);
 			s.activeMillis = e.activity.getActiveMillis();
 			s.lastActivityMillis = e.activity.getLastMillis();
 			out.add(s);
@@ -572,6 +683,16 @@ public class MonsterTracker
 						}
 					}
 				}
+				if (s.rareDrops != null)
+				{
+					for (RareDrop r : s.rareDrops)
+					{
+						if (r != null)
+						{
+							e.rareDrops.add(r);
+						}
+					}
+				}
 				e.activity.restore(s.activeMillis, s.lastActivityMillis);
 				entries.put(e.name, e);
 			}
@@ -586,6 +707,15 @@ public class MonsterTracker
 	 */
 	public static List<Snapshot> view(List<Snapshot> all, MonsterSort sort, Set<String> hiddenLowercase)
 	{
+		return view(all, sort, hiddenLowercase, Collections.emptySet());
+	}
+
+	/**
+	 * Like {@link #view(List, MonsterSort, Set)}, with pinned monsters first (in the
+	 * chosen order among themselves).
+	 */
+	public static List<Snapshot> view(List<Snapshot> all, MonsterSort sort, Set<String> hiddenLowercase, Set<String> pinnedLowercase)
+	{
 		List<Snapshot> out = new ArrayList<>(all.size());
 		for (Snapshot s : all)
 		{
@@ -594,7 +724,10 @@ public class MonsterTracker
 				out.add(s);
 			}
 		}
-		out.sort((sort == null ? MonsterSort.RECENT : sort).comparator());
+		Comparator<Snapshot> order = (sort == null ? MonsterSort.RECENT : sort).comparator();
+		Comparator<Snapshot> pinnedFirst = Comparator.comparing(
+			(Snapshot s) -> !pinnedLowercase.contains(s.getName().toLowerCase(Locale.ROOT)));
+		out.sort(pinnedFirst.thenComparing(order));
 		return out;
 	}
 

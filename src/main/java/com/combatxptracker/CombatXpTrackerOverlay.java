@@ -48,6 +48,7 @@ import net.runelite.client.ui.overlay.components.TitleComponent;
 public class CombatXpTrackerOverlay extends OverlayPanel
 {
 	private static final Color GOAL_REACHED = new Color(96, 220, 140);
+	private static final Color SPEC_COLOR = new Color(255, 198, 64);
 
 	private final Client client;
 	private final CombatXpTrackerPlugin plugin;
@@ -77,18 +78,21 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			.color(config.goalBarColor())
 			.build());
 
-		HitStats hitStats = plugin.getHitStats();
-		panelComponent.getChildren().add(LineComponent.builder()
-			.left("Avg hit:")
-			.right(String.format(Locale.US, "%.1f", hitStats.getAverageDamage()))
-			.build());
-		panelComponent.getChildren().add(LineComponent.builder()
-			.left("Biggest hit:")
-			.right(String.valueOf(hitStats.getMaxHit()))
-			.build());
+		if (config.overlayShowDamage())
+		{
+			HitStats hitStats = plugin.getHitStats();
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("Avg hit:")
+				.right(String.format(Locale.US, "%.1f", hitStats.getAverageDamage()))
+				.build());
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("Biggest hit:")
+				.right(String.valueOf(hitStats.getMaxHit()))
+				.build());
+		}
 
 		MaxHitCalculator.Result maxHit = plugin.getMaxHitResult();
-		if (config.showMeleeMaxHit() && maxHit != null && maxHit.getMaxHit() >= 0)
+		if (config.overlayShowMaxHit() && config.showMeleeMaxHit() && maxHit != null && maxHit.getMaxHit() >= 0)
 		{
 			String right = String.valueOf(maxHit.getMaxHit());
 			if (maxHit.isTargetOnTask() && maxHit.getOnTaskMaxHit() >= 0)
@@ -100,10 +104,33 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 				.right(right)
 				.rightColor(maxHit.getStyle().getColor())
 				.build());
+			if (maxHit.getSpecMaxHit() >= 0)
+			{
+				SpecialAttack spec = maxHit.getSpec();
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left("Spec max:")
+					.right(spec.getHits() > 1 ? spec.getHits() + " x " + maxHit.getSpecMaxHit() : String.valueOf(maxHit.getSpecMaxHit()))
+					.rightColor(SPEC_COLOR)
+					.build());
+			}
+		}
+
+		String task = plugin.getSlayerTaskName();
+		if (config.overlayShowTask() && task != null && plugin.getSlayerTaskRemaining() > 0)
+		{
+			panelComponent.getChildren().add(LineComponent.builder()
+				.left("Task:")
+				.right(Formatting.withCommas(plugin.getSlayerTaskRemaining()) + " " + task)
+				.rightColor(GOAL_REACHED)
+				.build());
 		}
 
 		for (Map.Entry<Skill, SkillProgress> entry : plugin.getSkillProgress().entrySet())
 		{
+			if (!config.overlayShowGoals())
+			{
+				break;
+			}
 			Skill skill = entry.getKey();
 			SkillProgress progress = entry.getValue();
 			if (!progress.isGoalSet() || progress.isDismissedFromOverlay())

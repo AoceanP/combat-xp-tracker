@@ -89,6 +89,8 @@ public class MaxHitCalculator
 		private final String note;
 		private final String slayerTask;
 		private final boolean targetIsOnTask;
+		private SpecialAttack spec;
+		private int specMaxHit = -1;
 
 		Result(CombatStyle style, int maxHit, int onTaskMaxHit, int vsUndeadMaxHit, String undeadSource,
 			String setup, String note, String slayerTask, boolean targetIsOnTask)
@@ -168,6 +170,29 @@ public class MaxHitCalculator
 		}
 
 		/**
+		 * @return the wielded weapon's special attack, or null
+		 */
+		public SpecialAttack getSpec()
+		{
+			return spec;
+		}
+
+		/**
+		 * @return the max hit of one hit of the special attack, or -1 without one
+		 */
+		public int getSpecMaxHit()
+		{
+			return specMaxHit;
+		}
+
+		Result withSpec(SpecialAttack spec, int specMaxHit)
+		{
+			this.spec = spec;
+			this.specMaxHit = specMaxHit;
+			return this;
+		}
+
+		/**
 		 * Every field, so two results that would display the same compare equal. The
 		 * plugin uses this to only refresh the panel when something visible changed.
 		 */
@@ -175,7 +200,7 @@ public class MaxHitCalculator
 		public String toString()
 		{
 			return style + "|" + maxHit + "|" + onTaskMaxHit + "|" + vsUndeadMaxHit + "|" + undeadSource
-				+ "|" + setup + "|" + note + "|" + slayerTask + "|" + targetIsOnTask;
+				+ "|" + setup + "|" + note + "|" + slayerTask + "|" + targetIsOnTask + "|" + spec + "|" + specMaxHit;
 		}
 	}
 
@@ -249,8 +274,16 @@ public class MaxHitCalculator
 			prayer == MeleeMaxHit.StrengthPrayer.NONE ? null : prayer.getDisplayName(),
 			signed(gear.meleeStrength) + " str",
 			voidMelee ? "Void" : null);
-		return new Result(CombatStyle.MELEE, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
+		Result result = new Result(CombatStyle.MELEE, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
 			setup, null, task, targetOnTask);
+
+		SpecialAttack spec = SpecialAttack.fromWeaponName(gear.weaponName);
+		if (spec != null)
+		{
+			int prayerMissing = client.getRealSkillLevel(Skill.PRAYER) - client.getBoostedSkillLevel(Skill.PRAYER);
+			result.withSpec(spec, spec.maxHit(max, prayerMissing));
+		}
+		return result;
 	}
 
 	private Result ranged(Gear gear, CombatStyle.AttackStyle attackStyle, String task, boolean targetOnTask)
