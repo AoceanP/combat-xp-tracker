@@ -30,6 +30,7 @@ import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -53,6 +54,7 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Skill;
 import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
@@ -90,8 +92,8 @@ import net.runelite.client.util.Text;
 
 @PluginDescriptor(
 	name = "Combat & XP Tracker",
-	description = "Skill goals with XP/hr, damage and max hit tracking, and per-monster hits and drops",
-	tags = {"combat", "damage", "dps", "xp", "experience", "tracker", "goals", "loot", "max hit", "slayer"}
+	description = "Skill goals with XP/hr, kills to level, damage and max hit tracking, per-monster hits and drops, and boss kill summaries",
+	tags = {"combat", "damage", "dps", "xp", "experience", "tracker", "goals", "loot", "max hit", "slayer", "kills to level", "boss"}
 )
 public class CombatXpTrackerPlugin extends Plugin
 {
@@ -127,6 +129,15 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String LOOT_OPTION = "Loot";
 	/** How long (3.6s) to wait after a "Loot" click for the reward to arrive. */
 	private static final int LOOT_WINDOW_TICKS = 6;
+	// A boss kill and its kill count message arrive close together. Multi-NPC bosses (the
+	// Royal Titans) send the message when the last one dies, so allow a while after the first.
+	private static final int KILL_COUNT_WINDOW_TICKS = 100;
+	private static final int KILL_COUNT_EARLY_TICKS = 10;
+	// Fights you haven't hit for this long are over.
+	private static final int FIGHT_TIMEOUT_TICKS = 200;
+	// Order of the "Kills to level" rows.
+	private static final Skill[] FORECAST_SKILLS = {Skill.ATTACK, Skill.STRENGTH, Skill.DEFENCE, Skill.RANGED,
+		Skill.MAGIC, Skill.HITPOINTS, Skill.SLAYER};
 
 	// Skill name embedded in the stats tab's own menu options, e.g.
 	// "View <col=ff981f>Attack</col> guide". The core XP Tracker reads it the same way.
@@ -197,6 +208,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	private volatile String lastTargetName;
 	private volatile int lastTargetHitpoints;
 	private final SlayerTaskSession taskSession = new SlayerTaskSession();
+	private final XpPerKill xpPerKill = new XpPerKill();
+	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
+	private String xpTarget;
+	// Boss fight logs by fight key (a boss group, or one NPC), for the kill summary.
+	private final Map<String, BossFight> fights = new HashMap<>();
+	private BossFight pendingKillFight;
+	private String pendingKillKey;
+	private int pendingKillTick;
+	private int lastKillCount = -1;
+	private int lastKillCountTick;
 	private CombatStyle lastXpStyle;
 	private int lastXpStyleTick;
 	private String maxHitKey;
@@ -287,6 +308,9 @@ public class CombatXpTrackerPlugin extends Plugin
 		sessionMonsters.reset();
 		lastGroupKillTick.clear();
 		taskSession.clear();
+		xpPerKill.clear();
+		xpTarget = null;
+		clearFights();
 		lastTargetName = null;
 		lastTargetHitpoints = 0;
 		slayerTaskName = null;
@@ -322,6 +346,8 @@ public class CombatXpTrackerPlugin extends Plugin
 			countedKills.clear();
 			pendingLootNpc = null;
 			pendingLootBefore = null;
+			clearFights();
+			xpPerKill.clearPending();
 			if (config.resetHitsOnLogout())
 			{
 				// Only this session's stats; what's remembered all-time is kept.
@@ -368,6 +394,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		refreshCombatState();
 		pruneKillTracking();
+		pruneFights();
 		if (pendingLootNpc != null && client.getTickCount() - pendingLootTick > LOOT_WINDOW_TICKS)
 		{
 			// Nothing arrived (e.g. "Loot" gave nothing, or the inventory was full).
@@ -426,6 +453,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 		if (hadBaseline && delta > 0)
 		{
+			recordKillXp(skill, delta);
 			CombatStyle style = CombatStyle.fromXpSkill(skill);
 			if (style != null)
 			{
@@ -468,8 +496,20 @@ public class CombatXpTrackerPlugin extends Plugin
 			monsterTracker.recordHit(name, damage, style, now);
 			sessionMonsters.recordHit(name, damage, style, now);
 			engagedNpcs.put(npc, client.getTickCount());
+			if (name != null && !name.equals(xpTarget))
+			{
+				// XP pooled so far was for another monster.
+				xpPerKill.clearPending();
+				xpTarget = name;
+			}
 
 			Integer hitpoints = npcManager.getHealth(npc.getId());
+			if (name != null)
+			{
+				int tick = client.getTickCount();
+				fights.computeIfAbsent(fightKey(npc, rawName), k -> new BossFight(name, tick))
+					.recordHit(npc.getIndex(), hitpoints == null ? 0 : hitpoints, damage, tick);
+			}
 			if (rawName != null && hitpoints != null && hitpoints > 0)
 			{
 				lastTargetName = rawName;
@@ -505,7 +545,130 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			countedKills.put(npc, client.getTickCount());
 			countKill(name, System.currentTimeMillis());
+			if (BossGroups.countsAsKill(name))
+			{
+				String key = fightKey(npc, name);
+				BossFight fight = fights.get(key);
+				if (fight != null && pendingKillFight == null)
+				{
+					pendingKillFight = fight;
+					pendingKillKey = key;
+					pendingKillTick = client.getTickCount();
+					postKillSummaryIfReady();
+				}
+			}
 		}
+	}
+
+	/**
+	 * Kill count messages mark a boss kill: "Your Vorkath kill count is: 124."
+	 */
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (event.getType() != ChatMessageType.GAMEMESSAGE)
+		{
+			return;
+		}
+		int killCount = BossFight.parseKillCount(Text.removeTags(event.getMessage()));
+		if (killCount > 0)
+		{
+			lastKillCount = killCount;
+			lastKillCountTick = client.getTickCount();
+			postKillSummaryIfReady();
+		}
+	}
+
+	/**
+	 * Posts the boss kill summary once both the kill and its kill count message are in,
+	 * whichever came first.
+	 */
+	private void postKillSummaryIfReady()
+	{
+		if (pendingKillFight == null || lastKillCount <= 0)
+		{
+			return;
+		}
+		int gap = lastKillCountTick - pendingKillTick;
+		if (gap < -KILL_COUNT_EARLY_TICKS || gap > KILL_COUNT_WINDOW_TICKS)
+		{
+			return;
+		}
+		if (config.killSummary())
+		{
+			String message = new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append(pendingKillFight.summary(lastKillCount, Math.max(pendingKillTick, lastKillCountTick)))
+				.build();
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(message)
+				.build());
+		}
+		fights.remove(pendingKillKey);
+		pendingKillFight = null;
+		pendingKillKey = null;
+		lastKillCount = -1;
+	}
+
+	/**
+	 * Members of a boss group share one fight (both Royal Titans); anything else is one NPC.
+	 */
+	private static String fightKey(NPC npc, String npcName)
+	{
+		BossGroups group = BossGroups.of(npcName);
+		return group != null ? "group:" + group.name() : "npc:" + npc.getIndex();
+	}
+
+	private void pruneFights()
+	{
+		int tick = client.getTickCount();
+		fights.values().removeIf(fight -> tick - fight.getLastHitTick() > FIGHT_TIMEOUT_TICKS);
+		if (pendingKillFight != null && tick - pendingKillTick > KILL_COUNT_WINDOW_TICKS)
+		{
+			// No kill count message came: not a boss. Forget it.
+			fights.remove(pendingKillKey);
+			pendingKillFight = null;
+			pendingKillKey = null;
+		}
+		if (lastKillCount > 0 && tick - lastKillCountTick > KILL_COUNT_EARLY_TICKS && pendingKillFight == null)
+		{
+			lastKillCount = -1;
+		}
+	}
+
+	private void clearFights()
+	{
+		fights.clear();
+		pendingKillFight = null;
+		pendingKillKey = null;
+		lastKillCount = -1;
+	}
+
+	/**
+	 * Pools a combat XP drop for the next kill. XP in a skill the current style doesn't
+	 * train (e.g. Magic from High Alchemy while meleeing) isn't from the fight.
+	 */
+	private void recordKillXp(Skill skill, int delta)
+	{
+		CombatStyle.AttackStyle style = attackStyle;
+		CombatStyle trained = style == null ? null : style.getStyle();
+		if (trained != null)
+		{
+			if ((skill == Skill.ATTACK || skill == Skill.STRENGTH) && trained != CombatStyle.MELEE)
+			{
+				return;
+			}
+			if (skill == Skill.RANGED && trained != CombatStyle.RANGED)
+			{
+				return;
+			}
+			if (skill == Skill.MAGIC && trained != CombatStyle.MAGIC)
+			{
+				return;
+			}
+		}
+		xpPerKill.recordXp(skill, delta);
 	}
 
 	/**
@@ -532,6 +695,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		String tracked = BossGroups.trackedName(npcName);
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
+		xpPerKill.recordKill(tracked);
 		if (taskSession.isTaskMonster(npcName))
 		{
 			taskSession.recordKill(now);
@@ -1055,6 +1219,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	public void resetTracker(boolean allTimeToo)
 	{
+		xpPerKill.clear();
 		hitStats.reset();
 		combinedDropTracker.reset();
 		sessionMonsters.reset();
@@ -1281,5 +1446,111 @@ public class CombatXpTrackerPlugin extends Plugin
 	public MaxHitCalculator.Result getMaxHitResult()
 	{
 		return maxHitResult;
+	}
+
+	/**
+	 * XP a skill gets per kill of the monster you last hit: measured from your XP drops once
+	 * you've killed one, before that estimated from its hitpoints. -1 when unknown or the
+	 * skill gets none (Slayer only counts on task).
+	 */
+	public double getXpPerKill(Skill skill)
+	{
+		String target = lastTargetName;
+		if (target == null)
+		{
+			return -1;
+		}
+		String tracked = BossGroups.trackedName(target);
+		double measured = xpPerKill.average(tracked, skill);
+		if (measured >= 0)
+		{
+			return measured > 0 ? measured : -1;
+		}
+		if (skill == Skill.SLAYER && !isTargetOnTask())
+		{
+			return -1;
+		}
+		return KillXp.perKill(skill, attackStyle, lastTargetHitpoints);
+	}
+
+	/**
+	 * @return how many kills of the last target the XP per kill is measured over
+	 */
+	public int getMeasuredKills()
+	{
+		String target = lastTargetName;
+		return target == null ? 0 : xpPerKill.kills(BossGroups.trackedName(target));
+	}
+
+	public boolean isTargetOnTask()
+	{
+		String task = slayerTaskName;
+		String target = lastTargetName;
+		if (task == null || target == null)
+		{
+			return false;
+		}
+		if (SlayerTaskMatcher.matches(task, target))
+		{
+			return true;
+		}
+		BossGroups group = BossGroups.of(target);
+		return group != null && SlayerTaskMatcher.matches(task, group.getDisplayName());
+	}
+
+	/**
+	 * Kills of the last target to each combat skill's next level, in skill order.
+	 */
+	public List<LevelForecast.Row> getKillsToLevel()
+	{
+		if (lastTargetName == null)
+		{
+			return Collections.emptyList();
+		}
+		int measured = getMeasuredKills();
+		List<LevelForecast.Row> rows = new ArrayList<>();
+		for (Skill skill : FORECAST_SKILLS)
+		{
+			SkillProgress progress = skillProgress.get(skill);
+			if (progress == null || !progress.isXpKnown())
+			{
+				continue;
+			}
+			LevelForecast.Row row = LevelForecast.killsToLevel(skill, progress.getCurrentXp(), getXpPerKill(skill),
+				xpPerKill.average(BossGroups.trackedName(lastTargetName), skill) > 0 ? measured : 0);
+			if (row != null)
+			{
+				rows.add(row);
+			}
+		}
+		return rows;
+	}
+
+	/**
+	 * What the rest of the slayer task gives each skill, when you're fighting the task's
+	 * monster. Empty otherwise.
+	 */
+	public List<LevelForecast.TaskGain> getTaskForecast()
+	{
+		int remaining = slayerTaskRemaining;
+		if (remaining <= 0 || !isTargetOnTask())
+		{
+			return Collections.emptyList();
+		}
+		List<LevelForecast.TaskGain> gains = new ArrayList<>();
+		for (Skill skill : FORECAST_SKILLS)
+		{
+			SkillProgress progress = skillProgress.get(skill);
+			if (progress == null || !progress.isXpKnown())
+			{
+				continue;
+			}
+			LevelForecast.TaskGain gain = LevelForecast.taskGain(skill, progress.getCurrentXp(), getXpPerKill(skill), remaining);
+			if (gain != null && gain.getXp() > 0)
+			{
+				gains.add(gain);
+			}
+		}
+		return gains;
 	}
 }

@@ -308,10 +308,9 @@ class GoalCard extends JPanel
 		shownOnce = true;
 
 		int actionsLeft = progress.getActionsLeftToGoal();
-		// Combat goals: kills of the monster you're fighting, from its hitpoints.
+		// Combat goals: kills of the monster you're fighting, at your measured XP per kill.
 		String target = plugin.getLastTargetName();
-		double xpPerKill = target == null ? -1
-			: KillXp.perKill(skill, plugin.getAttackStyle(), plugin.getLastTargetHitpoints());
+		double xpPerKill = target == null ? -1 : plugin.getXpPerKill(skill);
 		int killsLeft = KillXp.killsLeft(progress.getXpRemainingToGoal(), xpPerKill);
 		if (!xpKnown || reached)
 		{
@@ -324,7 +323,7 @@ class GoalCard extends JPanel
 				+ Formatting.compactXp(killsLeft) + " kills");
 			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left"
 				+ "<br>About " + Formatting.withCommas(killsLeft) + " more " + target + " kills"
-				+ "<br>(" + plugin.getLastTargetHitpoints() + " hitpoints each, at your current attack style)</html>");
+				+ "<br>(about " + Formatting.withCommas(Math.round(xpPerKill)) + " xp each)</html>");
 		}
 		else if (actionsLeft > 0)
 		{

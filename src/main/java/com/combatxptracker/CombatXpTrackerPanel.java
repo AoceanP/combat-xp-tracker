@@ -100,6 +100,8 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final JLabel fourthValue = tileValue();
 	private final JLabel fourthCaption = Theme.label("", Theme.MUTED);
 	private final JPanel maxHitDetails = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
+	// "Kills to level" and "Rest of task" rows under the max hit.
+	private final JPanel levelDetails = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
 
 	// Goals tab
 	private final JPanel goalsList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
@@ -198,12 +200,14 @@ class CombatXpTrackerPanel extends PluginPanel
 		tiles.add(tile(fourthValue, fourthCaption));
 
 		maxHitDetails.setOpaque(false);
+		levelDetails.setOpaque(false);
 
 		JPanel card = new JPanel(new BorderLayout(0, 6));
 		card.setBackground(Theme.CARD);
 		card.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
 		card.add(tiles, BorderLayout.NORTH);
 		card.add(maxHitDetails, BorderLayout.CENTER);
+		card.add(levelDetails, BorderLayout.SOUTH);
 		return card;
 	}
 
@@ -434,6 +438,7 @@ class CombatXpTrackerPanel extends PluginPanel
 	void refresh()
 	{
 		updateCombatCard();
+		updateLevelDetails();
 		updateGoals();
 		updateMonsters();
 		revalidate();
@@ -473,7 +478,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		fourthValue.setForeground(style.getColor());
 		fourthValue.setText(max.getMaxHit() >= 0 ? String.valueOf(max.getMaxHit()) : "-");
 		fourthValue.setToolTipText("<html>" + style.getDisplayName() + " max hit for your current attack style, gear, "
-			+ "levels and prayers.<br>Special attacks and weapon passives aren't included.</html>");
+			+ "levels and prayers.<br>Special attacks and bonuses against certain monsters are shown below.</html>");
 
 		String text = max.getNote() != null ? max.getNote() : max.getSetup();
 		if (text != null && !text.isEmpty())
@@ -505,6 +510,66 @@ class CombatXpTrackerPanel extends PluginPanel
 			maxHitDetails.add(detailRow("Vs undead (" + max.getUndeadSource() + ")", max.getVsUndeadMaxHit(),
 				false, "Salve amulet bonus against undead. It doesn't stack with the Slayer helm."));
 		}
+		for (MaxHitCalculator.Extra extra : max.getExtras())
+		{
+			maxHitDetails.add(detailRow(extra.getLabel(), extra.getMaxHit(), extra.isHighlight(), extra.getTooltip()));
+		}
+	}
+
+	/**
+	 * Kills of the monster you're fighting to each skill's next level, and what the rest
+	 * of your slayer task gives.
+	 */
+	private void updateLevelDetails()
+	{
+		levelDetails.removeAll();
+		String target = plugin.getLastTargetName();
+		if (!config.killsToLevel() || target == null)
+		{
+			levelDetails.setVisible(false);
+			return;
+		}
+
+		List<LevelForecast.Row> rows = plugin.getKillsToLevel();
+		if (!rows.isEmpty())
+		{
+			JLabel header = Theme.label("<html><div style='width:175px'>Kills to level: " + target + "</div></html>", Theme.SUBTLE);
+			header.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
+			levelDetails.add(header);
+			for (LevelForecast.Row row : rows)
+			{
+				String skillName = Formatting.capitalize(row.getSkill().getName());
+				String source = row.getMeasuredKills() > 0
+					? "measured over your last " + row.getMeasuredKills() + (row.getMeasuredKills() == 1 ? " kill" : " kills")
+					: "estimated from its hitpoints until you kill one";
+				levelDetails.add(detailRow(skillName + " " + row.getNextLevel(),
+					Formatting.withCommas(row.getKills()) + (row.getKills() == 1 ? " kill" : " kills"), false,
+					"<html>About " + Formatting.withCommas(Math.round(row.getXpPerKill())) + " " + skillName + " xp per kill,<br>"
+						+ source + "</html>"));
+			}
+		}
+
+		List<LevelForecast.TaskGain> gains = plugin.getTaskForecast();
+		if (!gains.isEmpty())
+		{
+			int left = plugin.getSlayerTaskRemaining();
+			StringBuilder text = new StringBuilder("<html><div style='width:175px'>Rest of task (")
+				.append(Formatting.withCommas(left)).append(left == 1 ? " kill" : " kills").append("):");
+			for (LevelForecast.TaskGain gain : gains)
+			{
+				text.append("<br>").append(Formatting.capitalize(gain.getSkill().getName()))
+					.append(" +").append(Formatting.compactXp(gain.getXp())).append(" xp");
+				if (gain.getLevelAfter() > gain.getLevelNow())
+				{
+					text.append(" &rarr; ").append(gain.getLevelAfter());
+				}
+			}
+			JLabel label = Theme.label(text.append("</div></html>").toString(), Theme.MUTED);
+			label.setBorder(BorderFactory.createEmptyBorder(2, 2, 0, 2));
+			label.setToolTipText("What finishing your slayer task at this monster will give, at your current XP per kill");
+			levelDetails.add(label);
+		}
+		levelDetails.setVisible(levelDetails.getComponentCount() > 0);
 	}
 
 	private static JPanel detailRow(String label, int value, boolean highlight, String tooltip)

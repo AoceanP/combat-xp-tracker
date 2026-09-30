@@ -27,6 +27,7 @@ package com.combatxptracker;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import javax.inject.Inject;
@@ -99,6 +100,14 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 			{
 				right = maxHit.getOnTaskMaxHit() + " (task)";
 			}
+			for (MaxHitCalculator.Extra extra : maxHit.getExtras())
+			{
+				if (extra.isHighlight())
+				{
+					// Fighting a dragon with a Dragon hunter lance, etc.
+					right = extra.getMaxHit() + " (bane)";
+				}
+			}
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(maxHit.getStyle().getDisplayName() + " max:")
 				.right(right)
@@ -123,6 +132,18 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 				.right(Formatting.withCommas(plugin.getSlayerTaskRemaining()) + " " + task)
 				.rightColor(GOAL_REACHED)
 				.build());
+		}
+
+		if (config.overlayShowKillsToLevel() && config.killsToLevel())
+		{
+			LevelForecast.Row row = primaryRow(plugin.getKillsToLevel());
+			if (row != null)
+			{
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left(Formatting.capitalize(row.getSkill().getName()) + " " + row.getNextLevel() + ":")
+					.right(Formatting.withCommas(row.getKills()) + (row.getKills() == 1 ? " kill" : " kills"))
+					.build());
+			}
 		}
 
 		for (Map.Entry<Skill, SkillProgress> entry : plugin.getSkillProgress().entrySet())
@@ -168,5 +189,20 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 		}
 
 		return super.render(graphics);
+	}
+
+	/**
+	 * The skill your attack style trains, rather than Hitpoints or Slayer which always come along.
+	 */
+	private static LevelForecast.Row primaryRow(List<LevelForecast.Row> rows)
+	{
+		for (LevelForecast.Row row : rows)
+		{
+			if (row.getSkill() != Skill.HITPOINTS && row.getSkill() != Skill.SLAYER)
+			{
+				return row;
+			}
+		}
+		return rows.isEmpty() ? null : rows.get(0);
 	}
 }

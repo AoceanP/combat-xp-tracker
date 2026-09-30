@@ -24,6 +24,8 @@
  */
 package com.combatxptracker;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import javax.inject.Inject;
@@ -91,6 +93,7 @@ public class MaxHitCalculator
 		private final boolean targetIsOnTask;
 		private SpecialAttack spec;
 		private int specMaxHit = -1;
+		private final List<Extra> extras = new ArrayList<>();
 
 		Result(CombatStyle style, int maxHit, int onTaskMaxHit, int vsUndeadMaxHit, String undeadSource,
 			String setup, String note, String slayerTask, boolean targetIsOnTask)
@@ -193,6 +196,20 @@ public class MaxHitCalculator
 		}
 
 		/**
+		 * Extra max hits against certain monsters, e.g. "Vs dragons (Dragon hunter lance)".
+		 */
+		public List<Extra> getExtras()
+		{
+			return Collections.unmodifiableList(extras);
+		}
+
+		Result withExtra(Extra extra)
+		{
+			extras.add(extra);
+			return this;
+		}
+
+		/**
 		 * Every field, so two results that would display the same compare equal. The
 		 * plugin uses this to only refresh the panel when something visible changed.
 		 */
@@ -200,7 +217,56 @@ public class MaxHitCalculator
 		public String toString()
 		{
 			return style + "|" + maxHit + "|" + onTaskMaxHit + "|" + vsUndeadMaxHit + "|" + undeadSource
-				+ "|" + setup + "|" + note + "|" + slayerTask + "|" + targetIsOnTask + "|" + spec + "|" + specMaxHit;
+				+ "|" + setup + "|" + note + "|" + slayerTask + "|" + targetIsOnTask + "|" + spec + "|" + specMaxHit
+				+ "|" + extras;
+		}
+	}
+
+	/**
+	 * One "Vs ..." row: a max hit against a kind of monster.
+	 */
+	public static final class Extra
+	{
+		private final String label;
+		private final int maxHit;
+		private final boolean highlight;
+		private final String tooltip;
+
+		Extra(String label, int maxHit, boolean highlight, String tooltip)
+		{
+			this.label = label;
+			this.maxHit = maxHit;
+			this.highlight = highlight;
+			this.tooltip = tooltip;
+		}
+
+		public String getLabel()
+		{
+			return label;
+		}
+
+		public int getMaxHit()
+		{
+			return maxHit;
+		}
+
+		/**
+		 * @return whether the current target is this kind of monster
+		 */
+		public boolean isHighlight()
+		{
+			return highlight;
+		}
+
+		public String getTooltip()
+		{
+			return tooltip;
+		}
+
+		@Override
+		public String toString()
+		{
+			return label + "=" + maxHit + (highlight ? "*" : "");
 		}
 	}
 
@@ -227,6 +293,19 @@ public class MaxHitCalculator
 		boolean salve;
 		boolean salveImbued;
 		boolean salveEnchanted;
+		boolean obsidianHelm;
+		boolean obsidianBody;
+		boolean obsidianLegs;
+		boolean berserkerNecklace;
+		int inquisitorPieces;
+		boolean crystalHelm;
+		boolean crystalBody;
+		boolean crystalLegs;
+
+		boolean obsidianSet()
+		{
+			return obsidianHelm && obsidianBody && obsidianLegs;
+		}
 	}
 
 	/**
@@ -261,6 +340,22 @@ public class MaxHitCalculator
 		int styleBonus = attackStyle != null ? attackStyle.getMeleeStrengthBonus() : 0;
 
 		int max = MeleeMaxHit.maxHit(client.getBoostedSkillLevel(Skill.STRENGTH), prayer, styleBonus, voidMelee, gear.meleeStrength);
+		String weapon = gear.weaponName;
+		boolean obsidian = GearBonus.isObsidianWeapon(weapon) && (gear.obsidianSet() || gear.berserkerNecklace);
+		if (obsidian)
+		{
+			max = GearBonus.obsidian(max, gear.obsidianSet(), gear.berserkerNecklace);
+		}
+		boolean inquisitor = gear.inquisitorPieces > 0 && GearBonus.isCrushWeapon(weapon);
+		if (inquisitor)
+		{
+			max = GearBonus.inquisitor(max, gear.inquisitorPieces);
+		}
+		boolean wilderness = GearBonus.isWildernessWeapon(weapon) && inWilderness();
+		if (wilderness)
+		{
+			max = GearBonus.wilderness(max);
+		}
 		int onTask = gear.slayerHeadgear && task != null ? MeleeMaxHit.TargetBonus.SLAYER_HELM.apply(max) : -1;
 
 		MeleeMaxHit.TargetBonus salve = null;
@@ -273,9 +368,13 @@ public class MaxHitCalculator
 		String setup = join(attackStyle != null ? attackStyle.getName() : "No style",
 			prayer == MeleeMaxHit.StrengthPrayer.NONE ? null : prayer.getDisplayName(),
 			signed(gear.meleeStrength) + " str",
-			voidMelee ? "Void" : null);
+			voidMelee ? "Void" : null,
+			obsidian ? obsidianLabel(gear) : null,
+			inquisitor ? "Inquisitor" : null,
+			wilderness ? "Wilderness" : null);
 		Result result = new Result(CombatStyle.MELEE, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
 			setup, null, task, targetOnTask);
+		addBane(result, weapon, max);
 
 		SpecialAttack spec = SpecialAttack.fromWeaponName(gear.weaponName);
 		if (spec != null)
@@ -304,6 +403,17 @@ public class MaxHitCalculator
 
 		int max = RangedMaxHit.maxHit(client.getBoostedSkillLevel(Skill.RANGED), prayer,
 			attackStyle.getRangedStrengthBonus(), voidSet, gear.rangedStrength);
+		String weapon = gear.weaponName;
+		boolean crystal = GearBonus.isCrystalBow(weapon) && (gear.crystalHelm || gear.crystalBody || gear.crystalLegs);
+		if (crystal)
+		{
+			max = GearBonus.crystal(max, gear.crystalHelm, gear.crystalBody, gear.crystalLegs);
+		}
+		boolean wilderness = GearBonus.isWildernessWeapon(weapon) && inWilderness();
+		if (wilderness)
+		{
+			max = GearBonus.wilderness(max);
+		}
 		// Only the imbued mask/helm and Salve work for ranged.
 		int onTask = gear.slayerHeadgearImbued && task != null ? RangedMaxHit.TargetBonus.SLAYER_HELM_I.apply(max) : -1;
 
@@ -317,9 +427,19 @@ public class MaxHitCalculator
 		String setup = join(attackStyle.getName(),
 			prayer == RangedMaxHit.RangedPrayer.NONE ? null : prayer.getDisplayName(),
 			signed(gear.rangedStrength) + " rstr",
-			voidSet == RangedMaxHit.VoidSet.ELITE ? "Elite Void" : voidSet == RangedMaxHit.VoidSet.VOID ? "Void" : null);
-		return new Result(CombatStyle.RANGED, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
+			voidSet == RangedMaxHit.VoidSet.ELITE ? "Elite Void" : voidSet == RangedMaxHit.VoidSet.VOID ? "Void" : null,
+			crystal ? "Crystal armour" : null,
+			wilderness ? "Wilderness" : null);
+		Result result = new Result(CombatStyle.RANGED, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
 			setup, null, task, targetOnTask);
+		addBane(result, weapon, max);
+		if (weapon.startsWith("twisted bow"))
+		{
+			result.withExtra(new Extra("Vs 250+ Magic (Twisted bow)", GearBonus.twistedBow(max, 250), false,
+				"The Twisted bow hits harder the higher the target's Magic level. This is its most outside the "
+					+ "Chambers of Xeric (" + GearBonus.twistedBowPercent(250) + "%). Against low-Magic monsters it hits less."));
+		}
+		return result;
 	}
 
 	private Result magic(Gear gear, CombatStyle.AttackStyle attackStyle, String task, boolean targetOnTask)
@@ -462,6 +582,70 @@ public class MaxHitCalculator
 			gear.slayerHeadgear = true;
 			gear.slayerHeadgearImbued = name.contains("(i)");
 		}
+		else if (name.startsWith("obsidian helmet"))
+		{
+			gear.obsidianHelm = true;
+		}
+		else if (name.startsWith("obsidian platebody"))
+		{
+			gear.obsidianBody = true;
+		}
+		else if (name.startsWith("obsidian platelegs"))
+		{
+			gear.obsidianLegs = true;
+		}
+		else if (name.startsWith("berserker necklace"))
+		{
+			gear.berserkerNecklace = true;
+		}
+		else if (name.startsWith("inquisitor's great helm") || name.startsWith("inquisitor's hauberk")
+			|| name.startsWith("inquisitor's plateskirt"))
+		{
+			gear.inquisitorPieces++;
+		}
+		else if (!name.contains("inactive") && name.startsWith("crystal helm"))
+		{
+			gear.crystalHelm = true;
+		}
+		else if (!name.contains("inactive") && name.startsWith("crystal body"))
+		{
+			gear.crystalBody = true;
+		}
+		else if (!name.contains("inactive") && name.startsWith("crystal legs"))
+		{
+			gear.crystalLegs = true;
+		}
+	}
+
+	private static String obsidianLabel(Gear gear)
+	{
+		if (gear.obsidianSet() && gear.berserkerNecklace)
+		{
+			return "Obsidian + Berserker";
+		}
+		return gear.berserkerNecklace ? "Berserker" : "Obsidian";
+	}
+
+	/**
+	 * Adds a "Vs dragons" / "Vs demons" / "Vs kalphites" row for bane weapons.
+	 */
+	private void addBane(Result result, String weaponName, int maxHit)
+	{
+		GearBonus.Bane bane = GearBonus.Bane.fromWeaponName(weaponName);
+		if (bane == null)
+		{
+			return;
+		}
+		boolean onTarget = bane.matches(currentTargetName());
+		result.withExtra(new Extra("Vs " + bane.getTargets() + " (" + bane.getDisplayName() + ")", bane.apply(maxHit), onTarget,
+			onTarget ? "Your current target is one of the " + bane.getTargets() + " this weapon is strong against"
+				: bane.getDisplayName() + " hits harder against " + bane.getTargets()
+				+ ". Stacks with the Slayer helm and Salve bonuses."));
+	}
+
+	private boolean inWilderness()
+	{
+		return client.getVarbitValue(VarbitID.INSIDE_WILDERNESS) == 1;
 	}
 
 	private MagicMaxHit.Spell autocastSpell()

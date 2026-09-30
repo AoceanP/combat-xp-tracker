@@ -143,7 +143,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "showMeleeMaxHit",
 		name = "Show max hit",
 		description = "Shows your max hit for the style you're using (melee, ranged or magic) from your gear, levels, prayers, "
-			+ "attack style, Void, Salve amulet and Slayer helm. Special attacks and weapon passives aren't included.",
+			+ "attack style, Void, Salve amulet and Slayer helm, plus obsidian, Inquisitor's, crystal armour, wilderness "
+			+ "weapons, and separate rows for weapons strong against dragons, demons or kalphites.",
 		position = 0,
 		section = combatSection
 	)
@@ -288,6 +289,32 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "killSummary",
+		name = "Boss kill summary",
+		description = "When you kill a boss (anything the game gives a kill count for), adds a chat message with the fight time, "
+			+ "your damage and its share of the boss's hitpoints, and your biggest hit.",
+		position = 12,
+		section = combatSection
+	)
+	default boolean killSummary()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "killsToLevel",
+		name = "Kills to next level",
+		description = "Shows how many more kills of the monster you're fighting each combat skill needs for its next level, "
+			+ "and what the rest of your slayer task will give. Uses your real XP per kill once you've killed one.",
+		position = 13,
+		section = combatSection
+	)
+	default boolean killsToLevel()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "pinnedMonsters",
 		name = "Pinned monsters",
 		description = "Monsters pinned to the top of the Monsters tab. Set by right-clicking a monster.",
@@ -406,5 +433,17 @@ public interface CombatXpTrackerConfig extends Config
 	default boolean overlayShowGoals()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "overlayShowKillsToLevel",
+		name = "Overlay: kills to level",
+		description = "Show kills to the next level in the skill you're training on the on-screen overlay.",
+		position = 8,
+		section = overlaySection
+	)
+	default boolean overlayShowKillsToLevel()
+	{
+		return false;
 	}
 }

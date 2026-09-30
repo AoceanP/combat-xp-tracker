@@ -7,10 +7,16 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Goals can be a level from 2 to 126 (virtual levels past 99 work) or an XP amount up to 200M: `99`, `126`, `13.03m`, `200m`, `500k`
 - A light blue progress bar fills from the XP you had when you set the goal, so it never resets on level-up
 - XP/hr, time left, time to your next level, XP left and XP gained this session for every goal
-- Kills left for combat goals, worked out from the hitpoints of the monster you're fighting (a rough hits/actions estimate otherwise)
+- Kills left for combat goals, at your real XP per kill of the monster you're fighting (a rough hits/actions estimate otherwise)
 - XP/hr can be the last few seconds (reacts fast) or the whole session with breaks left out (steadier)
 - A notification and a chat message when you reach a goal
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
+
+## Kills to level
+- Under the max hit: how many more kills of the monster you're fighting each combat skill needs for its next level
+- Uses your real XP per kill, measured from your XP drops once you've killed one, so it works for magic and burst spells too. Before the first kill it's estimated from the monster's hitpoints
+- On a slayer task, what the rest of the task will give: XP in each skill and the level you'll reach
+- Optional overlay line for the skill you're training
 
 ## Max hit
 - Your max hit for the style you're using: melee, ranged or magic
@@ -19,7 +25,8 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Magic: your autocast spell or a powered staff (tridents, Sanguinesti, Tumeken's shadow, Warped sceptre), magic damage gear, magic prayers and Elite Void
 - Separate max hits for your slayer task (Black mask / Slayer helmet) and against undead (Salve amulet), highlighted when your current target is on task
 - Special attack max hit for your weapon: Armadyl, Bandos, Saradomin, Zamorak and Ancient godswords, Dragon dagger, warhammer, longsword and mace, halberds, Abyssal dagger and bludgeon, and more
-- Special attacks and weapon passives aren't included
+- Gear bonuses: obsidian armour and Berserker necklace with obsidian weapons, Inquisitor's armour with crush weapons, crystal armour with the Bow of faerdhinen or crystal bow, and charged wilderness weapons in the Wilderness
+- Extra rows for weapons strong against certain monsters, highlighted when you're fighting one: Dragon hunter lance and crossbow (dragons), Arclight, Emberlight, Silverlight and Darklight (demons), Keris (kalphites), and the Twisted bow against high-Magic monsters
 
 ## Monsters
 - Every monster you fight, like the Loot Tracker: kills, hits, average hit, biggest hit and which combat style dealt it
@@ -30,6 +37,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Kills per hour and GP per hour, counting only time spent fighting
 - Your slayer task on the matching card: kills left and roughly how long at your kill rate
 - A chat summary when you finish a slayer task: kills, time, loot, GP/hr and biggest hit
+- A chat summary when you kill a boss: fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop
 - Pin monsters to the top of the list
 - Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
@@ -39,5 +47,5 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - **Copy** puts a text summary of your session (XP, hits, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
 
 ## Overlays
-- Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, goals)
+- Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)
 - One infobox per goal with its progress
