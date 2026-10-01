@@ -198,9 +198,10 @@ class GoalProgressBar extends JComponent
 				FontMetrics fm = g2.getFontMetrics();
 				int tx = (w - fm.stringWidth(text)) / 2;
 				int ty = (h - fm.getHeight()) / 2 + fm.getAscent();
-				g2.setColor(new Color(0, 0, 0, 200));
+				boolean light = Theme.current().isLight();
+				g2.setColor(light ? new Color(255, 255, 255, 200) : new Color(0, 0, 0, 200));
 				g2.drawString(text, tx + 1, ty + 1);
-				g2.setColor(Color.WHITE);
+				g2.setColor(light ? Theme.TEXT : Color.WHITE);
 				g2.drawString(text, tx, ty);
 			}
 		}

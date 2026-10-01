@@ -25,6 +25,7 @@
 package com.combatxptracker;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
@@ -44,6 +45,7 @@ import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
@@ -54,6 +56,8 @@ import javax.swing.ScrollPaneConstants;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
+import javax.swing.border.Border;
+import javax.swing.border.CompoundBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import net.runelite.api.Experience;
@@ -104,14 +108,18 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final JPanel levelDetails = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
 
 	// Goals tab
-	private final JPanel goalsList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
+	private final DragReorder.ListPanel goalsList = new DragReorder.ListPanel(new DynamicGridLayout(0, 1, 0, 0));
 	private final JPanel goalsEmpty;
 	private final JLabel sessionLabel = Theme.label("", Theme.MUTED);
 	private final Map<Skill, GoalCard> goalCards = new EnumMap<>(Skill.class);
 	private List<Skill> shownGoals = new ArrayList<>();
 
 	// Monsters tab
-	private final JPanel monstersList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
+	private final DragReorder.ListPanel monstersList = new DragReorder.ListPanel(new DynamicGridLayout(0, 1, 0, 0));
+	// How many cards at the top of the Monsters list are pinned, the only ones that can be dragged.
+	private int pinnedShown;
+	private List<String> shownMonsterNames = new ArrayList<>();
+	private SlayerView slayerView;
 	private final JPanel monstersEmpty;
 	private final JLabel killsValue = tileValue();
 	private final JLabel lootValue = tileValue();
@@ -217,14 +225,18 @@ class CombatXpTrackerPanel extends PluginPanel
 		display.setOpaque(false);
 
 		MaterialTabGroup tabGroup = new MaterialTabGroup(display);
-		tabGroup.setLayout(new GridLayout(1, 2, 4, 0));
+		tabGroup.setLayout(new GridLayout(1, 3, 4, 0));
 		tabGroup.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
 		tabGroup.setOpaque(false);
 
-		MaterialTab goalsTab = new MaterialTab("Goals", tabGroup, buildGoalsView());
-		MaterialTab monstersTab = new MaterialTab("Monsters", tabGroup, buildMonstersView());
+		MaterialTab goalsTab = narrowTab("Goals", tabGroup, buildGoalsView());
+		MaterialTab monstersTab = narrowTab("Monsters", tabGroup, buildMonstersView());
+		slayerView = new SlayerView(plugin, config);
+		MaterialTab slayerTab = narrowTab("Slayer", tabGroup, slayerView);
 		tabGroup.addTab(goalsTab);
 		tabGroup.addTab(monstersTab);
+		tabGroup.addTab(slayerTab);
+
 		tabGroup.select(goalsTab);
 
 		JPanel wrapper = new JPanel(new BorderLayout());
@@ -232,6 +244,37 @@ class CombatXpTrackerPanel extends PluginPanel
 		wrapper.add(tabGroup, BorderLayout.NORTH);
 		wrapper.add(display, BorderLayout.CENTER);
 		return wrapper;
+	}
+
+	/**
+	 * A centred tab with less side padding than RuneLite's default, so three fit the
+	 * sidebar without "Monsters" being cut off. RuneLite sets the border again on every click.
+	 */
+	private static MaterialTab narrowTab(String name, MaterialTabGroup group, JComponent content)
+	{
+		MaterialTab tab = new MaterialTab(name, group, content)
+		{
+			@Override
+			public void setBorder(Border border)
+			{
+				boolean selected = border instanceof CompoundBorder;
+				Border padding = BorderFactory.createEmptyBorder(5, 2, selected ? 4 : 5, 2);
+				super.setBorder(selected
+					? new CompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.TAB_UNDERLINE), padding)
+					: padding);
+			}
+
+			@Override
+			public void setForeground(Color colour)
+			{
+				// RuneLite paints tab text white (selected, hover) or grey; follow the theme so
+				// it stays readable on light themes.
+				super.setForeground(Color.GRAY.equals(colour) ? Theme.MUTED : Color.WHITE.equals(colour) ? Theme.TEXT : colour);
+			}
+		};
+		// Text tabs are left-aligned by default; centred looks even across the three.
+		tab.setHorizontalAlignment(SwingConstants.CENTER);
+		return tab;
 	}
 
 	private JPanel buildGoalsView()
@@ -441,6 +484,10 @@ class CombatXpTrackerPanel extends PluginPanel
 		updateLevelDetails();
 		updateGoals();
 		updateMonsters();
+		if (slayerView != null)
+		{
+			slayerView.update();
+		}
 		revalidate();
 		repaint();
 	}
@@ -490,6 +537,12 @@ class CombatXpTrackerPanel extends PluginPanel
 			maxHitDetails.add(setupLabel);
 		}
 
+		if (config.showEffectiveLevels() && max.getEffectiveLevels() != null)
+		{
+			maxHitDetails.add(detailRow("Effective", max.getEffectiveLevels(), false,
+				"<html>Effective levels: your levels with prayer, attack style, the hidden +8 and Void included.<br>"
+					+ "Accuracy and max hit are worked out from these. Atk = Attack, Str = Strength, Rng = Ranged, Mag = Magic.</html>"));
+		}
 		if (max.getSpecMaxHit() >= 0)
 		{
 			SpecialAttack spec = max.getSpec();
@@ -580,7 +633,7 @@ class CombatXpTrackerPanel extends PluginPanel
 	private static JPanel detailRow(String label, String value, boolean highlight, String tooltip)
 	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.setBackground(highlight ? Theme.darken(Theme.SUCCESS, 0.72f) : Theme.HEADER);
+		row.setBackground(highlight ? Theme.highlight(Theme.SUCCESS, 0.72f) : Theme.HEADER);
 		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
 		row.setToolTipText(tooltip);
 		row.add(Theme.label(label, highlight ? Theme.SUCCESS : Theme.MUTED), BorderLayout.CENTER);
@@ -609,13 +662,21 @@ class CombatXpTrackerPanel extends PluginPanel
 			}
 		}
 
+		// The order you dragged them into; new goals go last.
+		List<Skill> order = plugin.getGoalOrder();
+		active.sort(java.util.Comparator.comparingInt(skill ->
+		{
+			int index = order.indexOf(skill);
+			return index >= 0 ? index : order.size() + skill.ordinal();
+		}));
+
 		if (!active.equals(shownGoals))
 		{
+			goalsList.setLineColour(Theme.accent(config.goalBarColor()));
 			goalsList.removeAll();
 			for (Skill skill : active)
 			{
-				goalsList.add(goalCards.computeIfAbsent(skill,
-					s -> new GoalCard(s, plugin, config, skillIconManager, this)));
+				goalsList.add(goalCards.computeIfAbsent(skill, this::newGoalCard));
 			}
 			goalCards.keySet().retainAll(active);
 			shownGoals = active;
@@ -629,6 +690,43 @@ class CombatXpTrackerPanel extends PluginPanel
 		goalsEmpty.setVisible(active.isEmpty());
 		int session = totalSessionXp();
 		sessionLabel.setText(session > 0 ? "+" + Formatting.withCommas(session) + " xp this session" : "");
+	}
+
+	private GoalCard newGoalCard(Skill skill)
+	{
+		GoalCard card = new GoalCard(skill, plugin, config, skillIconManager, this);
+		DragReorder.attach(card, goalsList, () -> true, () -> shownGoals.size(), this::moveGoal, card.getDragHandles());
+		return card;
+	}
+
+	private void moveGoal(int from, int to)
+	{
+		List<Skill> order = new ArrayList<>(shownGoals);
+		if (from < 0 || from >= order.size() || to < 0 || to >= order.size())
+		{
+			return;
+		}
+		order.add(to, order.remove(from));
+		plugin.setGoalOrder(order);
+	}
+
+	private MonsterCard newMonsterCard(String name)
+	{
+		MonsterCard card = new MonsterCard(name, itemManager, plugin);
+		DragReorder.attach(card, monstersList, () -> plugin.isPinned(name), () -> pinnedShown, this::movePinned,
+			card.getDragHandle());
+		return card;
+	}
+
+	private void movePinned(int from, int to)
+	{
+		if (from < 0 || from >= pinnedShown || to < 0 || to >= pinnedShown)
+		{
+			return;
+		}
+		List<String> order = new ArrayList<>(shownMonsterNames.subList(0, pinnedShown));
+		order.add(to, order.remove(from));
+		plugin.setPinnedOrder(order);
 	}
 
 	private void updateMonsters()
@@ -685,7 +783,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			MonsterCard card = monsterCards.get(s.getName());
 			if (card == null)
 			{
-				card = new MonsterCard(s.getName(), itemManager, plugin);
+				card = newMonsterCard(s.getName());
 			}
 			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
 				pinned.contains(s.getName().toLowerCase()));
@@ -696,6 +794,17 @@ class CombatXpTrackerPanel extends PluginPanel
 		}
 		monsterCards.clear();
 		monsterCards.putAll(keep);
+		shownMonsterNames = new ArrayList<>();
+		pinnedShown = 0;
+		for (MonsterTracker.Snapshot s : shown)
+		{
+			shownMonsterNames.add(s.getName());
+			if (pinned.contains(s.getName().toLowerCase()))
+			{
+				pinnedShown++;
+			}
+		}
+		monstersList.setLineColour(Theme.GOLD);
 
 		killsValue.setText(Formatting.withCommas(kills));
 		lootValue.setText(QuantityFormatter.quantityToStackSize(loot));
@@ -782,7 +891,7 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private void styleRangeTab(JLabel tab, boolean selected)
 	{
-		tab.setBackground(selected ? Theme.darken(config.goalBarColor(), 0.55f) : Theme.CARD);
+		tab.setBackground(selected ? Theme.highlight(Theme.accent(config.goalBarColor()), 0.55f) : Theme.CARD);
 		tab.setForeground(selected ? Theme.TEXT : Theme.MUTED);
 	}
 

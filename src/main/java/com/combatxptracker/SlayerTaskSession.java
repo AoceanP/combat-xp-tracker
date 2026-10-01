@@ -40,6 +40,12 @@ final class SlayerTaskSession
 	private long lootGe;
 	private long lootHa;
 	private int biggestHit = -1;
+	private int superiors;
+	private int slayerXp;
+	private int combatXp;
+	private int assigned;
+	private String master;
+	private String location;
 	private final ActivityTimer activity = new ActivityTimer();
 
 	void start(String taskName)
@@ -49,7 +55,68 @@ final class SlayerTaskSession
 		lootGe = 0;
 		lootHa = 0;
 		biggestHit = -1;
+		superiors = 0;
+		slayerXp = 0;
+		combatXp = 0;
+		assigned = 0;
+		master = null;
+		location = null;
 		activity.reset();
+	}
+
+	/**
+	 * Task details read from the game when it was assigned.
+	 */
+	void setDetails(int assignedAmount, String masterName, String taskLocation)
+	{
+		assigned = assignedAmount;
+		master = masterName;
+		location = taskLocation;
+	}
+
+	void recordSuperior()
+	{
+		superiors++;
+	}
+
+	void recordXp(boolean slayer, int delta)
+	{
+		if (slayer)
+		{
+			slayerXp += delta;
+		}
+		else
+		{
+			combatXp += delta;
+		}
+	}
+
+	int getSuperiors()
+	{
+		return superiors;
+	}
+
+	/**
+	 * The task log entry for this task, when it's finished.
+	 */
+	SlayerTaskRecord toRecord(long endMillis, int points)
+	{
+		SlayerTaskRecord r = new SlayerTaskRecord();
+		r.task = task;
+		r.master = master;
+		r.location = location;
+		r.assigned = assigned;
+		r.kills = kills;
+		r.endMillis = endMillis;
+		r.activeMillis = activity.getActiveMillis();
+		r.slayerXp = slayerXp;
+		r.combatXp = combatXp;
+		r.lootGe = lootGe;
+		r.lootHa = lootHa;
+		r.biggestHit = biggestHit;
+		r.superiors = superiors;
+		r.points = points;
+		return r;
 	}
 
 	void clear()
@@ -73,7 +140,8 @@ final class SlayerTaskSession
 	}
 
 	/**
-	 * @return whether this NPC is part of the task, by its name or its boss group's
+	 * @return whether this NPC is part of the task, by its name, its boss group's, or for a
+	 * superior (e.g. Night beast) the monster it replaces (Dark beast)
 	 */
 	boolean isTaskMonster(String npcName)
 	{
@@ -82,6 +150,11 @@ final class SlayerTaskSession
 			return false;
 		}
 		if (SlayerTaskMatcher.matches(task, npcName))
+		{
+			return true;
+		}
+		String normal = SuperiorMonsters.normalFor(npcName);
+		if (normal != null && SlayerTaskMatcher.matches(task, normal))
 		{
 			return true;
 		}
@@ -135,6 +208,10 @@ final class SlayerTaskSession
 		if (biggestHit >= 0)
 		{
 			sb.append(String.format(Locale.US, ", biggest hit %d", biggestHit));
+		}
+		if (superiors > 0)
+		{
+			sb.append(", ").append(superiors).append(superiors == 1 ? " superior" : " superiors");
 		}
 		return sb.append('.').toString();
 	}

@@ -37,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
@@ -52,8 +53,10 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
+import net.runelite.api.Player;
 import net.runelite.api.Skill;
 import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -92,8 +95,8 @@ import net.runelite.client.util.Text;
 
 @PluginDescriptor(
 	name = "Combat & XP Tracker",
-	description = "Skill goals with XP/hr, kills to level, damage and max hit tracking, per-monster hits and drops, and boss kill summaries",
-	tags = {"combat", "damage", "dps", "xp", "experience", "tracker", "goals", "loot", "max hit", "slayer", "kills to level", "boss"}
+	description = "Skill goals with XP/hr, kills to level, damage and max hit tracking, per-monster hits and drops, boss kill summaries, a Slayer tab and an attack timer",
+	tags = {"combat", "damage", "dps", "xp", "experience", "tracker", "goals", "loot", "max hit", "slayer", "kills to level", "boss", "slayer points", "superior", "attack timer"}
 )
 public class CombatXpTrackerPlugin extends Plugin
 {
@@ -118,6 +121,14 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final int SAVE_INTERVAL_TICKS = 50;
 
 	private static final String MONSTERS_KEY = "monsters";
+	private static final String SLAYER_LOG_KEY = "slayerLog";
+	// The streak and points update a moment after the task count reaches 0.
+	private static final int TASK_RECORD_DELAY_TICKS = 2;
+	// Next-task odds are re-read this often, to pick up new levels and unlocks.
+	private static final int ODDS_REFRESH_TICKS = 100;
+	private static final String BLOCKED_KEY_PREFIX = "blockedTasks.";
+	// Eating/drinking and shield blocks: animations that aren't attacks.
+	private static final Set<Integer> NON_ATTACK_ANIMATIONS = Set.of(829, 424, 1156, 388, 403, 404, 410, 420, 425);
 
 	/**
 	 * A task that disappears with at most this many kills left finished through kills.
@@ -175,6 +186,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	private CombatXpTrackerOverlay overlay;
 
 	@Inject
+	private AttackTimerOverlay attackTimerOverlay;
+
+	@Inject
+	private SlayerGameData slayerGameData;
+
+	@Inject
 	private MaxHitCalculator maxHitCalculator;
 
 	@Inject
@@ -209,6 +226,21 @@ public class CombatXpTrackerPlugin extends Plugin
 	private volatile int lastTargetHitpoints;
 	private final SlayerTaskSession taskSession = new SlayerTaskSession();
 	private final XpPerKill xpPerKill = new XpPerKill();
+	private final SlayerLog slayerLog = new SlayerLog();
+	private int savedSlayerLogRevision = -1;
+	// Read from the game each tick, for the Slayer tab.
+	private volatile SlayerStatus slayerStatus = SlayerStatus.NONE;
+	// A finished task waiting a moment for the game to update the streak and points.
+	private SlayerTaskRecord pendingTaskRecord;
+	private SlayerPoints.Master pendingTaskMaster;
+	private int pendingTaskRecordTicks;
+	private final AttackTimer attackTimer = new AttackTimer();
+	// Task guide and next-task odds for the Slayer tab, read from the game's tables.
+	private volatile SlayerGuide slayerGuide = SlayerGuide.NONE;
+	private volatile TaskOdds taskOdds = TaskOdds.NONE;
+	private String oddsKey;
+	private int oddsAgeTicks;
+	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
 	// Boss fight logs by fight key (a boss group, or one NPC), for the kill summary.
@@ -263,18 +295,10 @@ public class CombatXpTrackerPlugin extends Plugin
 			skillProgress.put(skill, progress);
 		}
 
-		panel = new CombatXpTrackerPanel(this, config, skillIconManager, itemManager);
-
-		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/com/combatxptracker/icon.png");
-		navButton = NavigationButton.builder()
-			.tooltip("Combat & XP Tracker")
-			.icon(icon)
-			.priority(6)
-			.panel(panel)
-			.build();
-
-		clientToolbar.addNavigation(navButton);
+		Theme.apply(config.panelTheme());
+		buildPanel();
 		overlayManager.add(overlay);
+		overlayManager.add(attackTimerOverlay);
 		syncInfoBoxes();
 
 		// Turned on while already logged in: GameStateChanged and RuneScapeProfileChanged
@@ -284,6 +308,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			clientThread.invokeLater(() ->
 			{
 				loadMonsters();
+				loadSlayerLog();
 				onLoggedIn();
 			});
 		}
@@ -293,6 +318,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	protected void shutDown()
 	{
 		saveMonsters();
+		saveSlayerLog();
+		overlayManager.remove(attackTimerOverlay);
+		attackTimer.reset();
+		slayerLog.importState(null);
+		savedSlayerLogRevision = -1;
+		slayerStatus = SlayerStatus.NONE;
+		slayerGuide = SlayerGuide.NONE;
+		taskOdds = TaskOdds.NONE;
+		oddsKey = null;
+		pendingTaskRecord = null;
 		engagedNpcs.clear();
 		countedKills.clear();
 		pendingLootNpc = null;
@@ -348,6 +383,8 @@ public class CombatXpTrackerPlugin extends Plugin
 			pendingLootBefore = null;
 			clearFights();
 			xpPerKill.clearPending();
+			attackTimer.reset();
+			saveSlayerLog();
 			if (config.resetHitsOnLogout())
 			{
 				// Only this session's stats; what's remembered all-time is kept.
@@ -366,6 +403,9 @@ public class CombatXpTrackerPlugin extends Plugin
 		// Each account keeps its own Monsters tab. The previous account's stats were
 		// already saved on logout.
 		loadMonsters();
+		loadSlayerLog();
+		// Another account's blocked tasks.
+		oddsKey = null;
 		refreshPanelNow();
 	}
 
@@ -380,11 +420,53 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			syncInfoBoxes();
 		}
+		if ("panelTheme".equals(event.getKey()))
+		{
+			SwingUtilities.invokeLater(this::rebuildPanelForTheme);
+			return;
+		}
 		if ("rememberMonsters".equals(event.getKey()))
 		{
 			// Turning it off forgets what was saved; turning it on saves right away.
 			savedMonsterRevision = -1;
 			clientThread.invokeLater(this::saveMonsters);
+		}
+		refreshPanelNow();
+	}
+
+	/**
+	 * Creates the sidebar panel and its toolbar button.
+	 */
+	private void buildPanel()
+	{
+		panel = new CombatXpTrackerPanel(this, config, skillIconManager, itemManager);
+		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/com/combatxptracker/icon.png");
+		navButton = NavigationButton.builder()
+			.tooltip("Combat & XP Tracker")
+			.icon(icon)
+			.priority(6)
+			.panel(panel)
+			.build();
+		clientToolbar.addNavigation(navButton);
+	}
+
+	/**
+	 * A new theme: components take their colours when they're created, so the panel is
+	 * built again, and reopened if it was open.
+	 */
+	private void rebuildPanelForTheme()
+	{
+		if (panel == null)
+		{
+			return;
+		}
+		boolean wasOpen = panel.isShowing();
+		clientToolbar.removeNavigation(navButton);
+		Theme.apply(config.panelTheme());
+		buildPanel();
+		if (wasOpen)
+		{
+			clientToolbar.openPanel(navButton);
 		}
 		refreshPanelNow();
 	}
@@ -395,6 +477,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		refreshCombatState();
 		pruneKillTracking();
 		pruneFights();
+		finishPendingTaskRecord();
 		if (pendingLootNpc != null && client.getTickCount() - pendingLootTick > LOOT_WINDOW_TICKS)
 		{
 			// Nothing arrived (e.g. "Loot" gave nothing, or the inventory was full).
@@ -405,6 +488,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			ticksSinceSave = 0;
 			saveMonsters();
+			saveSlayerLog();
 		}
 		// Panel updates are batched to at most one per tick. Hitsplats and XP drops can
 		// fire several times a tick in combat, and refreshing on each made the panel flicker.
@@ -454,6 +538,16 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (hadBaseline && delta > 0)
 		{
 			recordKillXp(skill, delta);
+			if (taskSession.isActive() && XpPerKill.COMBAT_SKILLS.contains(skill))
+			{
+				taskSession.recordXp(skill == Skill.SLAYER, delta);
+			}
+			if (skill != Skill.HITPOINTS && skill != Skill.SLAYER && XpPerKill.COMBAT_SKILLS.contains(skill)
+				&& isFromCurrentStyle(skill))
+			{
+				// Combat XP comes the moment you attack.
+				attackTimer.onAttackSignal(client.getTickCount(), attackSpeedTicks);
+			}
 			CombatStyle style = CombatStyle.fromXpSkill(skill);
 			if (style != null)
 			{
@@ -566,11 +660,26 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
+		if (event.getType() != ChatMessageType.GAMEMESSAGE && event.getType() != ChatMessageType.SPAM)
+		{
+			return;
+		}
+		String text = Text.removeTags(event.getMessage());
+		if (SuperiorMonsters.SPAWN_MESSAGE.equals(text))
+		{
+			if (taskSession.isActive())
+			{
+				taskSession.recordSuperior();
+			}
+			notifier.notify(config.superiorNotification(), "A superior foe has appeared!");
+			panelDirty = true;
+			return;
+		}
 		if (event.getType() != ChatMessageType.GAMEMESSAGE)
 		{
 			return;
 		}
-		int killCount = BossFight.parseKillCount(Text.removeTags(event.getMessage()));
+		int killCount = BossFight.parseKillCount(text);
 		if (killCount > 0)
 		{
 			lastKillCount = killCount;
@@ -651,24 +760,65 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void recordKillXp(Skill skill, int delta)
 	{
+		if (isFromCurrentStyle(skill))
+		{
+			xpPerKill.recordXp(skill, delta);
+		}
+	}
+
+	/**
+	 * Whether XP in this skill can come from the selected attack style. Magic XP while
+	 * meleeing is from something else, like High Alchemy.
+	 */
+	private boolean isFromCurrentStyle(Skill skill)
+	{
 		CombatStyle.AttackStyle style = attackStyle;
 		CombatStyle trained = style == null ? null : style.getStyle();
-		if (trained != null)
+		if (trained == null)
 		{
-			if ((skill == Skill.ATTACK || skill == Skill.STRENGTH) && trained != CombatStyle.MELEE)
-			{
-				return;
-			}
-			if (skill == Skill.RANGED && trained != CombatStyle.RANGED)
-			{
-				return;
-			}
-			if (skill == Skill.MAGIC && trained != CombatStyle.MAGIC)
-			{
-				return;
-			}
+			return true;
 		}
-		xpPerKill.recordXp(skill, delta);
+		if (skill == Skill.ATTACK || skill == Skill.STRENGTH)
+		{
+			return trained == CombatStyle.MELEE;
+		}
+		if (skill == Skill.RANGED)
+		{
+			return trained == CombatStyle.RANGED;
+		}
+		if (skill == Skill.MAGIC)
+		{
+			return trained == CombatStyle.MAGIC;
+		}
+		return true;
+	}
+
+	/**
+	 * The player starting an attack animation while fighting something.
+	 */
+	@Subscribe
+	public void onAnimationChanged(AnimationChanged event)
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null || event.getActor() != local)
+		{
+			return;
+		}
+		int animation = local.getAnimation();
+		if (animation == -1 || NON_ATTACK_ANIMATIONS.contains(animation) || local.getInteracting() == null)
+		{
+			return;
+		}
+		attackTimer.onAttackSignal(client.getTickCount(), attackSpeedTicks);
+	}
+
+	/**
+	 * @return ticks until the player's next attack (0 = ready), or -1 when not fighting.
+	 * Client thread only (the overlay).
+	 */
+	int getTicksUntilAttack()
+	{
+		return attackTimer.ticksLeft(client.getTickCount(), attackSpeedTicks);
 	}
 
 	/**
@@ -945,8 +1095,16 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 
 		attackStyle = maxHitCalculator.readAttackStyle();
+		attackSpeedTicks = maxHitCalculator.attackSpeed(attackStyle);
 		String task = maxHitCalculator.readSlayerTaskName();
 		int remaining = task == null ? 0 : client.getVarpValue(VarPlayerID.SLAYER_COUNT);
+		SlayerStatus status = maxHitCalculator.readSlayerStatus(task, remaining);
+		if (!status.toString().equals(slayerStatus.toString()))
+		{
+			slayerStatus = status;
+			panelDirty = true;
+		}
+		refreshSlayerGuide(status);
 		if (!java.util.Objects.equals(task, slayerTaskName) || remaining != slayerTaskRemaining)
 		{
 			onSlayerTaskUpdate(slayerTaskName, slayerTaskRemaining, task, remaining);
@@ -979,6 +1137,12 @@ public class CombatXpTrackerPlugin extends Plugin
 		boolean finished = oldTask != null && newTask == null
 			// A task that ran out through kills, not one cancelled at a slayer master.
 			&& oldRemaining <= TASK_FINISH_MAX_REMAINING && taskSession.isActive() && taskSession.getKills() > 0;
+		if (finished && config.slayerLog())
+		{
+			pendingTaskRecord = taskSession.toRecord(System.currentTimeMillis(), -1);
+			pendingTaskMaster = slayerStatus.getMaster();
+			pendingTaskRecordTicks = TASK_RECORD_DELAY_TICKS;
+		}
 		if (finished && config.taskSummary())
 		{
 			String message = new ChatMessageBuilder()
@@ -999,6 +1163,9 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			// A new task (a different monster, or the count went up again).
 			taskSession.start(newTask);
+			SlayerStatus status = slayerStatus;
+			SlayerPoints.Master master = status.getMaster();
+			taskSession.setDetails(status.getAssigned(), master == null ? null : master.getDisplayName(), status.getLocation());
 		}
 	}
 
@@ -1552,5 +1719,245 @@ public class CombatXpTrackerPlugin extends Plugin
 			}
 		}
 		return gains;
+	}
+
+	// ---- Slayer tab -----------------------------------------------------------------------
+
+	/**
+	 * The task guide every tick (what you carry changes), the odds when the master changes
+	 * or every so often.
+	 */
+	private void refreshSlayerGuide(SlayerStatus status)
+	{
+		SlayerGuide guide = slayerGameData.guide(status.getMaster(), status.getTask(), status.getLocation());
+		if (!guide.toString().equals(slayerGuide.toString()))
+		{
+			slayerGuide = guide;
+			panelDirty = true;
+		}
+
+		String key = String.valueOf(status.getMaster());
+		if (!key.equals(oddsKey) || ++oddsAgeTicks >= ODDS_REFRESH_TICKS)
+		{
+			oddsKey = key;
+			oddsAgeTicks = 0;
+			TaskOdds odds = slayerGameData.odds(status.getMaster(), blockedTasks(status.getMaster()));
+			if (!odds.toString().equals(taskOdds.toString()))
+			{
+				taskOdds = odds;
+				panelDirty = true;
+			}
+		}
+	}
+
+	/**
+	 * Tasks the player marked as blocked with a master, saved per account.
+	 */
+	private Set<String> blockedTasks(SlayerPoints.Master master)
+	{
+		if (master == null || configManager.getRSProfileKey() == null)
+		{
+			return Collections.emptySet();
+		}
+		return MonsterTracker.parseNames(configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP,
+			BLOCKED_KEY_PREFIX + master.name().toLowerCase(Locale.ROOT)));
+	}
+
+	/**
+	 * Marks or unmarks a task as blocked with the current master, from the Slayer tab.
+	 */
+	public void setTaskBlocked(String task, boolean blocked)
+	{
+		clientThread.invokeLater(() ->
+		{
+			SlayerPoints.Master master = slayerStatus.getMaster();
+			if (master == null || configManager.getRSProfileKey() == null)
+			{
+				return;
+			}
+			Set<String> tasks = new java.util.LinkedHashSet<>(blockedTasks(master));
+			if (blocked)
+			{
+				tasks.add(task.toLowerCase(Locale.ROOT));
+			}
+			else
+			{
+				tasks.remove(task.toLowerCase(Locale.ROOT));
+			}
+			configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP,
+				BLOCKED_KEY_PREFIX + master.name().toLowerCase(Locale.ROOT), String.join(", ", tasks));
+			// Re-read the odds on the next tick.
+			oddsKey = null;
+		});
+	}
+
+	public SlayerGuide getSlayerGuide()
+	{
+		return slayerGuide;
+	}
+
+	public TaskOdds getTaskOdds()
+	{
+		return taskOdds;
+	}
+
+	/**
+	 * Adds the finished task to the log once the game has updated the streak, so its points
+	 * can be worked out.
+	 */
+	private void finishPendingTaskRecord()
+	{
+		if (pendingTaskRecord == null || --pendingTaskRecordTicks > 0)
+		{
+			return;
+		}
+		SlayerStatus status = slayerStatus;
+		SlayerPoints.Master master = pendingTaskMaster;
+		if (master != null && status.getStreak() > 0)
+		{
+			pendingTaskRecord.points = SlayerPoints.pointsFor(master, status.getStreak(), status.hasEliteDiary(master));
+		}
+		slayerLog.add(pendingTaskRecord);
+		pendingTaskRecord = null;
+		saveSlayerLog();
+		panelDirty = true;
+	}
+
+	private void loadSlayerLog()
+	{
+		SlayerTaskRecord[] saved = null;
+		if (configManager.getRSProfileKey() != null)
+		{
+			String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, SLAYER_LOG_KEY);
+			if (json != null && !json.isEmpty())
+			{
+				try
+				{
+					saved = gson.fromJson(json, SlayerTaskRecord[].class);
+				}
+				catch (JsonParseException e)
+				{
+					saved = null;
+				}
+			}
+		}
+		slayerLog.importState(saved);
+		savedSlayerLogRevision = slayerLog.getRevision();
+	}
+
+	private void saveSlayerLog()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return;
+		}
+		int revision = slayerLog.getRevision();
+		if (revision == savedSlayerLogRevision)
+		{
+			return;
+		}
+		savedSlayerLogRevision = revision;
+		if (slayerLog.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, SLAYER_LOG_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, SLAYER_LOG_KEY,
+			gson.toJson(slayerLog.exportState()));
+	}
+
+	public SlayerStatus getSlayerStatus()
+	{
+		return slayerStatus;
+	}
+
+	public List<SlayerTaskRecord> getSlayerTasks()
+	{
+		return slayerLog.getTasks();
+	}
+
+	public int getSlayerLogRevision()
+	{
+		return slayerLog.getRevision();
+	}
+
+	/**
+	 * @return superiors seen during the current task (0 without a task)
+	 */
+	public int getCurrentTaskSuperiors()
+	{
+		return taskSession.isActive() ? taskSession.getSuperiors() : 0;
+	}
+
+	public int getCurrentTaskKills()
+	{
+		return taskSession.isActive() ? taskSession.getKills() : 0;
+	}
+
+	public void removeTaskRecord(SlayerTaskRecord record)
+	{
+		clientThread.invokeLater(() ->
+		{
+			slayerLog.remove(record);
+			saveSlayerLog();
+			refreshPanelNow();
+		});
+	}
+
+	public void clearSlayerLog()
+	{
+		clientThread.invokeLater(() ->
+		{
+			slayerLog.clear();
+			saveSlayerLog();
+			refreshPanelNow();
+		});
+	}
+
+	// ---- Reordering -----------------------------------------------------------------------
+
+	/**
+	 * The order goals are shown in, from dragging them. Skills not listed go last.
+	 */
+	public List<Skill> getGoalOrder()
+	{
+		List<Skill> order = new ArrayList<>();
+		for (String name : config.goalOrder().split(","))
+		{
+			for (Skill skill : Skill.values())
+			{
+				if (skill.getName().equalsIgnoreCase(name.trim()) && !order.contains(skill))
+				{
+					order.add(skill);
+				}
+			}
+		}
+		return order;
+	}
+
+	public void setGoalOrder(List<Skill> order)
+	{
+		List<String> names = new ArrayList<>();
+		for (Skill skill : order)
+		{
+			names.add(skill.getName());
+		}
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "goalOrder", String.join(",", names));
+		refreshPanelNow();
+	}
+
+	/**
+	 * Sets the order of pinned monsters, from dragging them. Pinned monsters not in the
+	 * list (e.g. filtered out by a search) keep their place after these.
+	 */
+	public void setPinnedOrder(List<String> names)
+	{
+		Set<String> order = new java.util.LinkedHashSet<>();
+		for (String name : names)
+		{
+			order.add(name.toLowerCase(Locale.ROOT));
+		}
+		order.addAll(MonsterTracker.parseNames(config.pinnedMonsters()));
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "pinnedMonsters", String.join(", ", order));
 	}
 }

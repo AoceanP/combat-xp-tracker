@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -711,8 +712,8 @@ public class MonsterTracker
 	}
 
 	/**
-	 * Like {@link #view(List, MonsterSort, Set)}, with pinned monsters first (in the
-	 * chosen order among themselves).
+	 * Like {@link #view(List, MonsterSort, Set)}, with pinned monsters first, in the order
+	 * they're pinned in (the set's iteration order, which the player sets by dragging).
 	 */
 	public static List<Snapshot> view(List<Snapshot> all, MonsterSort sort, Set<String> hiddenLowercase, Set<String> pinnedLowercase)
 	{
@@ -725,9 +726,25 @@ public class MonsterTracker
 			}
 		}
 		Comparator<Snapshot> order = (sort == null ? MonsterSort.RECENT : sort).comparator();
-		Comparator<Snapshot> pinnedFirst = Comparator.comparing(
-			(Snapshot s) -> !pinnedLowercase.contains(s.getName().toLowerCase(Locale.ROOT)));
-		out.sort(pinnedFirst.thenComparing(order));
+		Map<String, Integer> pinRank = new HashMap<>();
+		for (String name : pinnedLowercase)
+		{
+			pinRank.putIfAbsent(name, pinRank.size());
+		}
+		out.sort((a, b) ->
+		{
+			Integer ra = pinRank.get(a.getName().toLowerCase(Locale.ROOT));
+			Integer rb = pinRank.get(b.getName().toLowerCase(Locale.ROOT));
+			if (ra != null && rb != null)
+			{
+				return Integer.compare(ra, rb);
+			}
+			if (ra != null || rb != null)
+			{
+				return ra != null ? -1 : 1;
+			}
+			return order.compare(a, b);
+		});
 		return out;
 	}
 

@@ -69,6 +69,9 @@ public class MaxHitCalculator
 
 	private final Client client;
 	private final ItemManager itemManager;
+	// The Konar area name for the last area id read, so the table isn't read every tick.
+	private int cachedAreaId = -1;
+	private String cachedAreaName;
 
 	@Inject
 	public MaxHitCalculator(Client client, ItemManager itemManager)
@@ -94,6 +97,7 @@ public class MaxHitCalculator
 		private SpecialAttack spec;
 		private int specMaxHit = -1;
 		private final List<Extra> extras = new ArrayList<>();
+		private String effectiveLevels;
 
 		Result(CombatStyle style, int maxHit, int onTaskMaxHit, int vsUndeadMaxHit, String undeadSource,
 			String setup, String note, String slayerTask, boolean targetIsOnTask)
@@ -210,6 +214,20 @@ public class MaxHitCalculator
 		}
 
 		/**
+		 * e.g. "Attack 128, Strength 152", or null.
+		 */
+		public String getEffectiveLevels()
+		{
+			return effectiveLevels;
+		}
+
+		Result withEffectiveLevels(String text)
+		{
+			effectiveLevels = text;
+			return this;
+		}
+
+		/**
 		 * Every field, so two results that would display the same compare equal. The
 		 * plugin uses this to only refresh the panel when something visible changed.
 		 */
@@ -218,7 +236,7 @@ public class MaxHitCalculator
 		{
 			return style + "|" + maxHit + "|" + onTaskMaxHit + "|" + vsUndeadMaxHit + "|" + undeadSource
 				+ "|" + setup + "|" + note + "|" + slayerTask + "|" + targetIsOnTask + "|" + spec + "|" + specMaxHit
-				+ "|" + extras;
+				+ "|" + extras + "|" + effectiveLevels;
 		}
 	}
 
@@ -375,6 +393,12 @@ public class MaxHitCalculator
 		Result result = new Result(CombatStyle.MELEE, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
 			setup, null, task, targetOnTask);
 		addBane(result, weapon, max);
+		String styleName = attackStyle != null ? attackStyle.getName() : "";
+		int attackStyleBonus = "Accurate".equals(styleName) ? 3 : "Controlled".equals(styleName) ? 1 : 0;
+		int effAttack = EffectiveLevels.attack(client.getBoostedSkillLevel(Skill.ATTACK), meleeAccuracyPrayer(),
+			attackStyleBonus, voidMelee);
+		int effStrength = MeleeMaxHit.effectiveStrength(client.getBoostedSkillLevel(Skill.STRENGTH), prayer, styleBonus, voidMelee);
+		result.withEffectiveLevels("Atk " + effAttack + ", Str " + effStrength);
 
 		SpecialAttack spec = SpecialAttack.fromWeaponName(gear.weaponName);
 		if (spec != null)
@@ -433,6 +457,11 @@ public class MaxHitCalculator
 		Result result = new Result(CombatStyle.RANGED, max, onTask, vsUndead, salve == null ? null : salve.getDisplayName(),
 			setup, null, task, targetOnTask);
 		addBane(result, weapon, max);
+		int effAccuracy = EffectiveLevels.attack(client.getBoostedSkillLevel(Skill.RANGED), rangedAccuracyPrayer(),
+			"Accurate".equals(attackStyle.getName()) ? 3 : 0, voidSet != RangedMaxHit.VoidSet.NONE);
+		int effRangedStrength = RangedMaxHit.effectiveRangedStrength(client.getBoostedSkillLevel(Skill.RANGED), prayer,
+			attackStyle.getRangedStrengthBonus(), voidSet);
+		result.withEffectiveLevels("Rng " + effAccuracy + ", Str " + effRangedStrength);
 		if (weapon.startsWith("twisted bow"))
 		{
 			result.withExtra(new Extra("Vs 250+ Magic (Twisted bow)", GearBonus.twistedBow(max, 250), false,
@@ -489,8 +518,12 @@ public class MaxHitCalculator
 			prayer == MagicMaxHit.MagicPrayer.NONE ? null : prayer.getDisplayName(),
 			"+" + formatPercent(shownBonus) + " dmg",
 			eliteVoid ? "Elite Void" : null);
+		boolean voidMage = (gear.voidTop || gear.eliteTop) && (gear.voidRobe || gear.eliteRobe) && gear.voidGloves && gear.mageHelm;
+		int magicStyleBonus = staff != null && attackStyle != null && "Accurate".equals(attackStyle.getName()) ? 2 : 0;
+		int effMagic = EffectiveLevels.magic(magicLevel, magicAccuracyPrayer(), magicStyleBonus, voidMage);
 		return new Result(CombatStyle.MAGIC, max, onTask, vsUndead,
-			salve == MagicMaxHit.Salve.NONE ? null : salve.getDisplayName(), setup, null, task, targetOnTask);
+			salve == MagicMaxHit.Salve.NONE ? null : salve.getDisplayName(), setup, null, task, targetOnTask)
+			.withEffectiveLevels("Mag " + effMagic);
 	}
 
 	private Gear readGear()
@@ -662,6 +695,44 @@ public class MaxHitCalculator
 	private boolean isActive(Prayer prayer)
 	{
 		return client.getVarbitValue(prayer.getVarbit()) == 1;
+	}
+
+	private EffectiveLevels.AccuracyPrayer meleeAccuracyPrayer()
+	{
+		return firstActive(EffectiveLevels.AccuracyPrayer.PIETY, Prayer.PIETY, EffectiveLevels.AccuracyPrayer.CHIVALRY, Prayer.CHIVALRY,
+			EffectiveLevels.AccuracyPrayer.INCREDIBLE_REFLEXES, Prayer.INCREDIBLE_REFLEXES,
+			EffectiveLevels.AccuracyPrayer.IMPROVED_REFLEXES, Prayer.IMPROVED_REFLEXES,
+			EffectiveLevels.AccuracyPrayer.CLARITY_OF_THOUGHT, Prayer.CLARITY_OF_THOUGHT);
+	}
+
+	private EffectiveLevels.AccuracyPrayer rangedAccuracyPrayer()
+	{
+		return firstActive(EffectiveLevels.AccuracyPrayer.RIGOUR, Prayer.RIGOUR, EffectiveLevels.AccuracyPrayer.DEADEYE, Prayer.DEADEYE,
+			EffectiveLevels.AccuracyPrayer.EAGLE_EYE, Prayer.EAGLE_EYE, EffectiveLevels.AccuracyPrayer.HAWK_EYE, Prayer.HAWK_EYE,
+			EffectiveLevels.AccuracyPrayer.SHARP_EYE, Prayer.SHARP_EYE);
+	}
+
+	private EffectiveLevels.AccuracyPrayer magicAccuracyPrayer()
+	{
+		return firstActive(EffectiveLevels.AccuracyPrayer.AUGURY, Prayer.AUGURY,
+			EffectiveLevels.AccuracyPrayer.MYSTIC_VIGOUR, Prayer.MYSTIC_VIGOUR,
+			EffectiveLevels.AccuracyPrayer.MYSTIC_MIGHT, Prayer.MYSTIC_MIGHT, EffectiveLevels.AccuracyPrayer.MYSTIC_LORE, Prayer.MYSTIC_LORE,
+			EffectiveLevels.AccuracyPrayer.MYSTIC_WILL, Prayer.MYSTIC_WILL);
+	}
+
+	/**
+	 * The first active prayer of (bonus, prayer) pairs, strongest first.
+	 */
+	private EffectiveLevels.AccuracyPrayer firstActive(Object... pairs)
+	{
+		for (int i = 0; i + 1 < pairs.length; i += 2)
+		{
+			if (isActive((Prayer) pairs[i + 1]))
+			{
+				return (EffectiveLevels.AccuracyPrayer) pairs[i];
+			}
+		}
+		return EffectiveLevels.AccuracyPrayer.NONE;
 	}
 
 	private MeleeMaxHit.StrengthPrayer meleePrayer()
@@ -875,6 +946,80 @@ public class MaxHitCalculator
 
 		Object[] name = client.getDBTableField(taskRow, DBTableID.SlayerTask.COL_NAME_UPPERCASE, 0);
 		return name.length > 0 && name[0] instanceof String ? (String) name[0] : null;
+	}
+
+	/**
+	 * Ticks between attacks with the wielded weapon and the selected style.
+	 */
+	public int attackSpeed(CombatStyle.AttackStyle style)
+	{
+		int speed = 0;
+		String name = "";
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		Item weapon = worn == null ? null : worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
+		if (weapon != null && weapon.getId() > 0)
+		{
+			ItemStats stats = itemManager.getItemStats(weapon.getId());
+			if (stats != null && stats.getEquipment() != null)
+			{
+				speed = stats.getEquipment().getAspeed();
+			}
+			name = itemManager.getItemComposition(weapon.getId()).getName().toLowerCase(Locale.ROOT);
+		}
+		boolean poweredStaff = MagicMaxHit.PoweredStaff.fromWeaponName(name) != null;
+		boolean harmonised = name.startsWith("harmonised nightmare staff") && client.getVarbitValue(VarbitID.SPELLBOOK) == 0;
+		return AttackTimer.ticksBetweenAttacks(speed, style, poweredStaff, harmonised);
+	}
+
+	/**
+	 * Slayer master, points, streak and task details, for the Slayer tab.
+	 */
+	public SlayerStatus readSlayerStatus(String task, int remaining)
+	{
+		SlayerPoints.Master master = SlayerPoints.Master.fromId(client.getVarbitValue(VarbitID.SLAYER_MASTER));
+		int streak;
+		if (master == SlayerPoints.Master.KRYSTILIA)
+		{
+			streak = client.getVarbitValue(VarbitID.SLAYER_WILDERNESS_TASKS_COMPLETED);
+		}
+		else if (master == SlayerPoints.Master.MORTIMER)
+		{
+			streak = client.getVarpValue(VarPlayerID.SLAYER_MORTIMER_TASKS_COMPLETED);
+		}
+		else
+		{
+			streak = client.getVarbitValue(VarbitID.SLAYER_TASKS_COMPLETED);
+		}
+		int assigned = task == null ? 0 : client.getVarpValue(VarPlayerID.SLAYER_COUNT_ORIGINAL);
+		String location = task == null ? null : readTaskLocation();
+		return new SlayerStatus(master, client.getVarbitValue(VarbitID.SLAYER_POINTS), streak, task, remaining, assigned,
+			location, client.getVarbitValue(VarbitID.WESTERN_DIARY_ELITE_COMPLETE) == 1,
+			client.getVarbitValue(VarbitID.KOUREND_DIARY_ELITE_COMPLETE) == 1);
+	}
+
+	/**
+	 * Where a Konar task must be done, from the game's slayer area table (like the core
+	 * Slayer plugin), or null.
+	 */
+	private String readTaskLocation()
+	{
+		int areaId = client.getVarpValue(VarPlayerID.SLAYER_AREA);
+		if (areaId <= 0)
+		{
+			return null;
+		}
+		if (areaId != cachedAreaId)
+		{
+			cachedAreaId = areaId;
+			cachedAreaName = null;
+			List<Integer> rows = client.getDBRowsByValue(DBTableID.SlayerArea.ID, DBTableID.SlayerArea.COL_AREA_ID, 0, areaId);
+			if (!rows.isEmpty())
+			{
+				Object[] name = client.getDBTableField(rows.get(0), DBTableID.SlayerArea.COL_AREA_NAME_IN_HELPER, 0);
+				cachedAreaName = name.length > 0 && name[0] instanceof String ? (String) name[0] : null;
+			}
+		}
+		return cachedAreaName;
 	}
 
 	private static String join(String... parts)

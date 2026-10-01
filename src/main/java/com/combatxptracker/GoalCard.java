@@ -33,6 +33,7 @@ import java.awt.image.BufferedImage;
 import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JColorChooser;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
@@ -155,6 +156,17 @@ class GoalCard extends JPanel
 		bar.setComponentPopupMenu(menu);
 	}
 
+	/**
+	 * The parts of the card you can press to drag it into a new place.
+	 */
+	JComponent[] getDragHandles()
+	{
+		JComponent[] handles = new JComponent[tintedPanels.length + 1];
+		System.arraycopy(tintedPanels, 0, handles, 0, tintedPanels.length);
+		handles[tintedPanels.length] = bar;
+		return handles;
+	}
+
 	private static JPanel row(JLabel left, JLabel right)
 	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
@@ -175,7 +187,7 @@ class GoalCard extends JPanel
 
 	private void updateBorder()
 	{
-		Color stripe = accent != null ? accent : config.goalBarColor();
+		Color stripe = accent != null ? accent : Theme.accent(config.goalBarColor());
 		Border inner = BorderFactory.createEmptyBorder(7, 8, 7, 8);
 		content.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createMatteBorder(0, 3, 0, 0, stripe), inner));
@@ -194,7 +206,7 @@ class GoalCard extends JPanel
 		{
 			Color current = plugin.getSkillColor(skill);
 			Color chosen = JColorChooser.showDialog(owner, "Bar colour for " + Formatting.capitalize(skill.getName()),
-				current != null ? current : config.goalBarColor());
+				current != null ? current : Theme.accent(config.goalBarColor()));
 			if (chosen != null)
 			{
 				plugin.setSkillColor(skill, chosen);
@@ -256,7 +268,7 @@ class GoalCard extends JPanel
 		}
 
 		accent = plugin.getSkillColor(skill);
-		Color fill = accent != null ? accent : config.goalBarColor();
+		Color fill = accent != null ? accent : Theme.accent(config.goalBarColor());
 		bar.setFillColor(fill);
 		updateBorder();
 

@@ -46,6 +46,13 @@ public interface CombatXpTrackerConfig extends Config
 	String goalsSection = "goals";
 
 	@ConfigSection(
+		name = "Appearance",
+		description = "How the sidebar looks",
+		position = -1
+	)
+	String appearanceSection = "appearance";
+
+	@ConfigSection(
 		name = "Combat",
 		description = "Damage, max hit and per-monster tracking",
 		position = 1
@@ -92,7 +99,8 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "goalBarColor",
 		name = "Goal bar colour",
-		description = "Fill colour of the goal progress bars. Right-click a goal in the panel to give one skill its own colour.",
+		description = "Fill colour of the goal progress bars. Left at the default, each theme uses its own accent colour. "
+			+ "Right-click a goal in the panel to give one skill its own colour.",
 		position = 2,
 		section = goalsSection
 	)
@@ -315,6 +323,68 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "slayerLog",
+		name = "Slayer task log",
+		description = "Keeps a log of your finished slayer tasks (kills, time, XP, loot, superiors, points) in the Slayer tab, "
+			+ "saved separately for each account.",
+		position = 14,
+		section = combatSection
+	)
+	default boolean slayerLog()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "superiorNotification",
+		name = "Notify on superior spawn",
+		description = "Sends a RuneLite notification when a superior slayer monster appears. RuneLite's own Slayer plugin "
+			+ "can do this too, so it's off by default.",
+		position = 15,
+		section = combatSection
+	)
+	default Notification superiorNotification()
+	{
+		return Notification.OFF;
+	}
+
+	@ConfigItem(
+		keyName = "showEffectiveLevels",
+		name = "Show effective levels",
+		description = "Shows your effective Attack and Strength (or Ranged, or Magic) under the max hit: your level with "
+			+ "prayer, attack style, the hidden +8 and Void included. It's what accuracy and max hit are worked out from.",
+		position = 16,
+		section = combatSection
+	)
+	default boolean showEffectiveLevels()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "panelTheme",
+		name = "Theme",
+		description = "Colours of the sidebar. Dark is the original look.",
+		position = 0,
+		section = appearanceSection
+	)
+	default PanelTheme panelTheme()
+	{
+		return PanelTheme.DARK;
+	}
+
+	@ConfigItem(
+		keyName = "goalOrder",
+		name = "Goal order",
+		description = "The order of your goals. Set by dragging them in the panel.",
+		hidden = true
+	)
+	default String goalOrder()
+	{
+		return "";
+	}
+
+	@ConfigItem(
 		keyName = "pinnedMonsters",
 		name = "Pinned monsters",
 		description = "Monsters pinned to the top of the Monsters tab. Set by right-clicking a monster.",
@@ -445,5 +515,31 @@ public interface CombatXpTrackerConfig extends Config
 	default boolean overlayShowKillsToLevel()
 	{
 		return false;
+	}
+
+	@ConfigItem(
+		keyName = "attackTimer",
+		name = "Attack timer",
+		description = "While fighting, shows the ticks until your next attack above your character, from your weapon's "
+			+ "attack speed. It turns green at 0 when you can attack.",
+		position = 9,
+		section = overlaySection
+	)
+	default boolean attackTimer()
+	{
+		return true;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "attackTimerColour",
+		name = "Attack timer colour",
+		description = "Colour of the attack timer while counting down.",
+		position = 10,
+		section = overlaySection
+	)
+	default Color attackTimerColour()
+	{
+		return Color.WHITE;
 	}
 }

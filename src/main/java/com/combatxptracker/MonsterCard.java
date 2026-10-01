@@ -25,7 +25,6 @@
 package com.combatxptracker;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -36,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
@@ -392,7 +392,7 @@ class MonsterCard extends JPanel
 	{
 		JLabel slot = new JLabel();
 		slot.setOpaque(true);
-		slot.setBackground(new Color(36, 36, 36));
+		slot.setBackground(Theme.SLOT);
 		slot.setPreferredSize(ITEM_SIZE);
 		slot.setHorizontalAlignment(JLabel.CENTER);
 		slot.setVerticalAlignment(JLabel.CENTER);
@@ -402,5 +402,13 @@ class MonsterCard extends JPanel
 	private static String kills(int count)
 	{
 		return Formatting.withCommas(count) + (count == 1 ? " kill" : " kills");
+	}
+
+	/**
+	 * The header, which drags the card when it's pinned.
+	 */
+	JComponent getDragHandle()
+	{
+		return header;
 	}
 }

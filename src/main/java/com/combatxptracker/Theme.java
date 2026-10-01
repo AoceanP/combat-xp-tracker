@@ -35,24 +35,88 @@ import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 
 /**
- * Colours and small shared widgets for the sidebar, built on RuneLite's own
- * {@link ColorScheme} so the panel sits naturally next to the core plugins.
+ * Colours and small shared widgets for the sidebar. The default Dark theme is built on
+ * RuneLite's own {@link ColorScheme} so the panel sits naturally next to the core plugins;
+ * {@link #apply} switches to another {@link PanelTheme}. The panel is rebuilt after a
+ * switch, since components pick their colours up when they're created.
  */
 final class Theme
 {
-	static final Color BACKGROUND = ColorScheme.DARK_GRAY_COLOR;
-	static final Color CARD = ColorScheme.DARKER_GRAY_COLOR;
-	static final Color CARD_HOVER = ColorScheme.DARKER_GRAY_HOVER_COLOR;
-	static final Color HEADER = new Color(24, 24, 24);
-	static final Color TRACK = new Color(17, 17, 17);
-	static final Color BORDER = new Color(52, 52, 52);
+	static Color BACKGROUND = ColorScheme.DARK_GRAY_COLOR;
+	static Color CARD = ColorScheme.DARKER_GRAY_COLOR;
+	static Color CARD_HOVER = ColorScheme.DARKER_GRAY_HOVER_COLOR;
+	static Color HEADER = new Color(24, 24, 24);
+	static Color TRACK = new Color(17, 17, 17);
+	static Color BORDER = new Color(52, 52, 52);
 
-	static final Color TEXT = Color.WHITE;
-	static final Color MUTED = new Color(168, 168, 168);
-	static final Color SUBTLE = new Color(118, 118, 118);
+	static Color TEXT = Color.WHITE;
+	static Color MUTED = new Color(168, 168, 168);
+	static Color SUBTLE = new Color(118, 118, 118);
 
-	static final Color GOLD = new Color(255, 198, 64);
-	static final Color SUCCESS = new Color(96, 220, 140);
+	static Color GOLD = new Color(255, 198, 64);
+	static Color SUCCESS = new Color(96, 220, 140);
+
+	/**
+	 * The theme's own accent, used where the player hasn't picked a goal bar colour.
+	 */
+	static Color ACCENT = new Color(79, 195, 247);
+	/**
+	 * The underline of the selected tab: RuneLite's orange in Dark, the accent otherwise.
+	 */
+	static Color TAB_UNDERLINE = ColorScheme.BRAND_ORANGE;
+	/**
+	 * The background of an empty loot slot.
+	 */
+	static Color SLOT = new Color(36, 36, 36);
+
+	private static PanelTheme current = PanelTheme.DARK;
+
+	static synchronized void apply(PanelTheme theme)
+	{
+		PanelTheme t = theme == null ? PanelTheme.DARK : theme;
+		current = t;
+		BACKGROUND = t.background;
+		CARD = t.card;
+		CARD_HOVER = t.cardHover;
+		HEADER = t.header;
+		TRACK = t.track;
+		BORDER = t.border;
+		TEXT = t.text;
+		MUTED = t.muted;
+		SUBTLE = t.subtle;
+		GOLD = t.gold;
+		SUCCESS = t.success;
+		ACCENT = t.accent;
+		TAB_UNDERLINE = t == PanelTheme.DARK ? ColorScheme.BRAND_ORANGE : t.accent;
+		SLOT = t == PanelTheme.DARK ? new Color(36, 36, 36) : t.cardHover;
+	}
+
+	static PanelTheme current()
+	{
+		return current;
+	}
+
+	/**
+	 * A soft background behind a highlighted row in the colour: darker on dark themes,
+	 * lighter on light ones (Armadyl).
+	 */
+	static Color highlight(Color c, float amount)
+	{
+		return current.isLight() ? lighten(c, Math.min(0.9f, amount + 0.1f)) : darken(c, amount);
+	}
+
+	/**
+	 * The colour for goal bars, tabs and highlights: the player's goal bar colour if they
+	 * changed it from the default, otherwise the theme's accent.
+	 */
+	static Color accent(Color goalBarSetting)
+	{
+		if (goalBarSetting == null || goalBarSetting.equals(PanelTheme.DARK.accent))
+		{
+			return ACCENT;
+		}
+		return goalBarSetting;
+	}
 
 	private Theme()
 	{

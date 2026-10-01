@@ -11,6 +11,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - XP/hr can be the last few seconds (reacts fast) or the whole session with breaks left out (steadier)
 - A notification and a chat message when you reach a goal
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
+- Drag goals up or down to put them in your own order
 
 ## Kills to level
 - Under the max hit: how many more kills of the monster you're fighting each combat skill needs for its next level
@@ -25,6 +26,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Magic: your autocast spell or a powered staff (tridents, Sanguinesti, Tumeken's shadow, Warped sceptre), magic damage gear, magic prayers and Elite Void
 - Separate max hits for your slayer task (Black mask / Slayer helmet) and against undead (Salve amulet), highlighted when your current target is on task
 - Special attack max hit for your weapon: Armadyl, Bandos, Saradomin, Zamorak and Ancient godswords, Dragon dagger, warhammer, longsword and mace, halberds, Abyssal dagger and bludgeon, and more
+- Effective levels: your Attack and Strength (or Ranged, or Magic) with prayer, style, the hidden +8 and Void, which accuracy and max hit are built on
 - Gear bonuses: obsidian armour and Berserker necklace with obsidian weapons, Inquisitor's armour with crush weapons, crystal armour with the Bow of faerdhinen or crystal bow, and charged wilderness weapons in the Wilderness
 - Extra rows for weapons strong against certain monsters, highlighted when you're fighting one: Dragon hunter lance and crossbow (dragons), Arclight, Emberlight, Silverlight and Darklight (demons), Keris (kalphites), and the Twisted bow against high-Magic monsters
 
@@ -39,9 +41,22 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - A chat summary when you finish a slayer task: kills, time, loot, GP/hr and biggest hit
 - A chat summary when you kill a boss: fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop
-- Pin monsters to the top of the list
+- Pin monsters to the top of the list, and drag pinned monsters into your own order
 - Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
 - Search, sort, hide monsters, ignore items (right-click an item), and collapsed cards stay collapsed
+
+## Slayer
+A **Slayer** tab with everything about your slayer progress:
+- Your master, Slayer points, task streak, current task (left / assigned) and Konar's location
+- Task guide: every place your task can be done, with the game's own directions, and what to bring (nose peg, earmuffs, rock hammer, mirror shield and so on), warning you if it isn't in your gear or inventory. Locations are read live from the game, so they stay up to date
+- Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
+- Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
+- What your next task is worth, when the next x5 bonus task comes, and the next big bonus (50th, 100th, 250th, 1,000th task) with how many points each master would give for it, so you can save it for the best one
+- Superiors: how many appeared this task and across your logged tasks, and how often. An optional notification when one spawns
+- A task log of every finished task, saved per account: kills, time, Slayer XP, loot, superiors, points earned and biggest hit, with XP/hr and GP/hr on hover. Right-click a task to remove it
+
+## Themes
+Twelve colour themes for the sidebar in the settings: Dark (the original, and the default), Classic, Midnight, Abyssal, Zamorak, Saradomin, Guthix, Armadyl (light), Bandos, Dragonfire, Frostbite and Venom. Each theme has its own accent colour, unless you've picked your own goal bar colour.
 
 ## Session summary
 - **Copy** puts a text summary of your session (XP, hits, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
@@ -49,3 +64,4 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 ## Overlays
 - Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)
 - One infobox per goal with its progress
+- Attack timer: while fighting, the ticks until your next attack show above your character, turning green when you can attack. It uses your weapon's attack speed (Rapid, spells and powered staves included) and can be turned off
