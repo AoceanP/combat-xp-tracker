@@ -58,6 +58,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
@@ -65,10 +66,12 @@ import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatColorType;
@@ -127,6 +130,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	// Next-task odds are re-read this often, to pick up new levels and unlocks.
 	private static final int ODDS_REFRESH_TICKS = 100;
 	private static final String BLOCKED_KEY_PREFIX = "blockedTasks.";
+	private static final String AREAS_KEY = "slayerAreas";
+	private static final String BANK_KEY = "bankItems";
 	// Eating/drinking and shield blocks: animations that aren't attacks.
 	private static final Set<Integer> NON_ATTACK_ANIMATIONS = Set.of(829, 424, 1156, 388, 403, 404, 410, 420, 425);
 
@@ -240,6 +245,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	private volatile TaskOdds taskOdds = TaskOdds.NONE;
 	private String oddsKey;
 	private int oddsAgeTicks;
+	// Where slayer areas are, learned from where the player fights (per account).
+	private final SlayerAreaMemory areaMemory = new SlayerAreaMemory();
+	private int savedAreaRevision = -1;
+	// Lower-case names of what was in the bank when it was last open, or null if never seen.
+	private volatile Set<String> bankNames;
+	private String savedBank;
+	// "Where to get a task", when the player asked for one.
+	private volatile TaskSources taskSources = TaskSources.NONE;
+	// Every task name, for picking one to look up. Read once.
+	private volatile List<String> allTaskNames = Collections.emptyList();
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
@@ -309,6 +324,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			{
 				loadMonsters();
 				loadSlayerLog();
+				loadSlayerExtras();
 				onLoggedIn();
 			});
 		}
@@ -319,6 +335,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		saveMonsters();
 		saveSlayerLog();
+		saveAreaMemory();
 		overlayManager.remove(attackTimerOverlay);
 		attackTimer.reset();
 		slayerLog.importState(null);
@@ -327,6 +344,12 @@ public class CombatXpTrackerPlugin extends Plugin
 		slayerGuide = SlayerGuide.NONE;
 		taskOdds = TaskOdds.NONE;
 		oddsKey = null;
+		areaMemory.importState(null);
+		savedAreaRevision = -1;
+		bankNames = null;
+		savedBank = null;
+		taskSources = TaskSources.NONE;
+		allTaskNames = Collections.emptyList();
 		pendingTaskRecord = null;
 		engagedNpcs.clear();
 		countedKills.clear();
@@ -385,6 +408,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			xpPerKill.clearPending();
 			attackTimer.reset();
 			saveSlayerLog();
+			saveAreaMemory();
 			if (config.resetHitsOnLogout())
 			{
 				// Only this session's stats; what's remembered all-time is kept.
@@ -404,8 +428,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		// already saved on logout.
 		loadMonsters();
 		loadSlayerLog();
+		loadSlayerExtras();
 		// Another account's blocked tasks.
 		oddsKey = null;
+		taskSources = TaskSources.NONE;
 		refreshPanelNow();
 	}
 
@@ -424,6 +450,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			SwingUtilities.invokeLater(this::rebuildPanelForTheme);
 			return;
+		}
+		if ("checkBank".equals(event.getKey()) && !config.checkBank())
+		{
+			clientThread.invokeLater(this::forgetBank);
 		}
 		if ("rememberMonsters".equals(event.getKey()))
 		{
@@ -489,6 +519,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			ticksSinceSave = 0;
 			saveMonsters();
 			saveSlayerLog();
+			saveAreaMemory();
 		}
 		// Panel updates are batched to at most one per tick. Hitsplats and XP drops can
 		// fire several times a tick in combat, and refreshing on each made the panel flicker.
@@ -805,11 +836,26 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 		int animation = local.getAnimation();
-		if (animation == -1 || NON_ATTACK_ANIMATIONS.contains(animation) || local.getInteracting() == null)
+		if (animation == -1 || NON_ATTACK_ANIMATIONS.contains(animation))
 		{
 			return;
 		}
-		attackTimer.onAttackSignal(client.getTickCount(), attackSpeedTicks);
+		attackTimer.onAttackAnimation(client.getTickCount(), local.getInteracting() != null, attackSpeedTicks);
+	}
+
+	/**
+	 * Confirms an attack animation that started before the player had a target.
+	 */
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		Player local = client.getLocalPlayer();
+		if (local != null)
+		{
+			int animation = local.getAnimation();
+			attackTimer.confirmPending(client.getTickCount(), local.getInteracting() != null,
+				animation != -1 && !NON_ATTACK_ANIMATIONS.contains(animation), attackSpeedTicks);
+		}
 	}
 
 	/**
@@ -849,6 +895,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (taskSession.isTaskMonster(npcName))
 		{
 			taskSession.recordKill(now);
+			learnTaskArea();
 		}
 		panelDirty = true;
 	}
@@ -881,6 +928,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		if (event.getContainerId() == InventoryID.BANK)
+		{
+			rememberBank();
+			return;
+		}
 		if (event.getContainerId() != InventoryID.INV || pendingLootNpc == null)
 		{
 			return;
@@ -1729,7 +1781,15 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void refreshSlayerGuide(SlayerStatus status)
 	{
-		SlayerGuide guide = slayerGameData.guide(status.getMaster(), status.getTask(), status.getLocation());
+		SlayerGuide guide = slayerGameData.guide(status.getMaster(), status.getTask(), status.getLocation(),
+			config.checkBank() ? bankNames : null);
+		if (status.getLocation() != null && taskSession.isActive() && !status.getLocation().equals(taskSession.getArea()))
+		{
+			// Konar says where.
+			taskSession.setArea(status.getLocation());
+			panelDirty = true;
+		}
+
 		if (!guide.toString().equals(slayerGuide.toString()))
 		{
 			slayerGuide = guide;
@@ -1741,6 +1801,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			oddsKey = key;
 			oddsAgeTicks = 0;
+			if (allTaskNames.isEmpty())
+			{
+				allTaskNames = Collections.unmodifiableList(slayerGameData.taskNames());
+			}
 			TaskOdds odds = slayerGameData.odds(status.getMaster(), blockedTasks(status.getMaster()));
 			if (!odds.toString().equals(taskOdds.toString()))
 			{
@@ -1794,6 +1858,246 @@ public class CombatXpTrackerPlugin extends Plugin
 	public SlayerGuide getSlayerGuide()
 	{
 		return slayerGuide;
+	}
+
+	// ---- Slayer areas ------------------------------------------------------------------------
+
+	/**
+	 * A task monster died: remember which area this map region belongs to, or pick the area
+	 * if this region is already known.
+	 */
+	private void learnTaskArea()
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null || player.getLocalLocation() == null)
+		{
+			return;
+		}
+		WorldPoint where = WorldPoint.fromLocalInstance(client, player.getLocalLocation());
+		int region = where == null ? -1 : where.getRegionID();
+		if (taskSession.getArea() == null)
+		{
+			String known = areaMemory.areaFor(region, slayerGameData.currentAreas());
+			if (known == null)
+			{
+				return;
+			}
+			taskSession.setArea(known);
+		}
+		areaMemory.learn(region, taskSession.getArea(),
+			client.getVarbitValue(VarbitID.MULTIWAY_INDICATOR) != 0,
+			client.getVarbitValue(VarbitID.INSIDE_WILDERNESS) != 0);
+	}
+
+	/**
+	 * The player marked (or unmarked, with null) the area they're doing their task in.
+	 */
+	public void setTaskArea(String area)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!taskSession.isActive())
+			{
+				return;
+			}
+			if (area == null)
+			{
+				// Wrong area: forget where it was learned, so it isn't picked again.
+				areaMemory.forget(taskSession.getArea());
+			}
+			// Regions are learned from the next task kills, not from where the player is now
+			// (they may be at the bank).
+			taskSession.setArea(area);
+			refreshPanelNow();
+		});
+	}
+
+	/**
+	 * @return the area the current task is being done in, or null
+	 */
+	public String getTaskArea()
+	{
+		return taskSession.isActive() ? taskSession.getArea() : null;
+	}
+
+	public boolean isMultiArea(String area)
+	{
+		return areaMemory.isMulti(area);
+	}
+
+	public boolean isWildernessArea(String area)
+	{
+		return areaMemory.isWilderness(area);
+	}
+
+	public int getAreaRevision()
+	{
+		return areaMemory.getRevision();
+	}
+
+	private void saveAreaMemory()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return;
+		}
+		int revision = areaMemory.getRevision();
+		if (revision == savedAreaRevision)
+		{
+			return;
+		}
+		savedAreaRevision = revision;
+		if (areaMemory.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, AREAS_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, AREAS_KEY, gson.toJson(areaMemory.exportState()));
+	}
+
+	/**
+	 * The current account's learned areas and remembered bank.
+	 */
+	private void loadSlayerExtras()
+	{
+		SlayerAreaMemory.Saved saved = null;
+		String bank = null;
+		if (configManager.getRSProfileKey() != null)
+		{
+			String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, AREAS_KEY);
+			if (json != null && !json.isEmpty())
+			{
+				try
+				{
+					saved = gson.fromJson(json, SlayerAreaMemory.Saved.class);
+				}
+				catch (JsonParseException e)
+				{
+					saved = null;
+				}
+			}
+			bank = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, BANK_KEY);
+		}
+		areaMemory.importState(saved);
+		savedAreaRevision = areaMemory.getRevision();
+		savedBank = bank;
+		bankNames = null;
+		if (bank != null && config.checkBank())
+		{
+			String loaded = bank;
+			// Item names are read on the client thread.
+			clientThread.invokeLater(() ->
+			{
+				if (loaded.equals(savedBank))
+				{
+					bankNames = slayerGameData.itemNames(parseIds(loaded));
+					panelDirty = true;
+				}
+			});
+		}
+	}
+
+	// ---- Bank ---------------------------------------------------------------------------------
+
+	/**
+	 * The bank changed while open: remember what's in it, for the task guide's "In bank".
+	 */
+	private void rememberBank()
+	{
+		if (!config.checkBank())
+		{
+			return;
+		}
+		Set<Integer> ids = slayerGameData.bankItemIds();
+		if (ids == null)
+		{
+			return;
+		}
+		StringBuilder sb = new StringBuilder();
+		for (int id : ids)
+		{
+			if (sb.length() > 0)
+			{
+				sb.append(',');
+			}
+			sb.append(id);
+		}
+		String value = sb.toString();
+		if (value.equals(savedBank))
+		{
+			return;
+		}
+		savedBank = value;
+		bankNames = slayerGameData.itemNames(ids);
+		if (configManager.getRSProfileKey() != null)
+		{
+			configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, BANK_KEY, value);
+		}
+		panelDirty = true;
+	}
+
+	/**
+	 * Forgets the remembered bank, when the setting is turned off.
+	 */
+	private void forgetBank()
+	{
+		bankNames = null;
+		savedBank = null;
+		if (configManager.getRSProfileKey() != null)
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, BANK_KEY);
+		}
+	}
+
+	static List<Integer> parseIds(String csv)
+	{
+		List<Integer> ids = new ArrayList<>();
+		for (String part : csv.split(","))
+		{
+			try
+			{
+				ids.add(Integer.parseInt(part.trim()));
+			}
+			catch (NumberFormatException e)
+			{
+				// Skip anything unreadable.
+			}
+		}
+		return ids;
+	}
+
+	// ---- Where to get a task -------------------------------------------------------------------
+
+	/**
+	 * Works out every master's chance of giving a task, for the Slayer tab. Null closes it.
+	 */
+	public void showTaskSources(String task)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (task == null || client.getGameState() != GameState.LOGGED_IN)
+			{
+				taskSources = TaskSources.NONE;
+			}
+			else
+			{
+				taskSources = TaskSources.of(task, slayerGameData.allOdds(this::blockedTasks));
+			}
+			refreshPanelNow();
+		});
+	}
+
+	public TaskSources getTaskSources()
+	{
+		return taskSources;
+	}
+
+	/**
+	 * Every task any master gives, empty until logged in with a slayer master.
+	 */
+	public List<String> getAllTaskNames()
+	{
+		return allTaskNames;
 	}
 
 	public TaskOdds getTaskOdds()

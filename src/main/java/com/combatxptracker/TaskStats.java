@@ -85,6 +85,11 @@ final class TaskStats
 		return ActivityTimer.perHour(loot, activeMillis);
 	}
 
+	double getKillsPerHour()
+	{
+		return ActivityTimer.perHour(kills, activeMillis);
+	}
+
 	/**
 	 * One entry per task monster, in the log's order (newest first).
 	 */
@@ -105,6 +110,29 @@ final class TaskStats
 			s.loot += r.loot(price);
 		}
 		return new ArrayList<>(byTask.values());
+	}
+
+	/**
+	 * One task's log entries grouped by the area they were done in (entries without an area
+	 * are left out). Each entry's name is the area.
+	 */
+	static Map<String, TaskStats> byArea(List<SlayerTaskRecord> records, String task, LootPrice price)
+	{
+		Map<String, TaskStats> byArea = new LinkedHashMap<>();
+		for (SlayerTaskRecord r : records)
+		{
+			if (r.task == null || r.area == null || !r.task.equalsIgnoreCase(task))
+			{
+				continue;
+			}
+			TaskStats s = byArea.computeIfAbsent(r.area.toLowerCase(Locale.ROOT), k -> new TaskStats(r.area));
+			s.times++;
+			s.kills += r.kills;
+			s.activeMillis += r.activeMillis;
+			s.slayerXp += r.slayerXp;
+			s.loot += r.loot(price);
+		}
+		return byArea;
 	}
 
 	/**

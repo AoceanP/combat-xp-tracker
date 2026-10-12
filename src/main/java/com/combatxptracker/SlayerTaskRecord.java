@@ -33,6 +33,9 @@ final class SlayerTaskRecord
 	String task;
 	String master;
 	String location;
+	// Where it was done: Konar's area, the area the player marked, or one learned from the
+	// map region. Null if unknown.
+	String area;
 	int assigned;
 	int kills;
 	long endMillis;

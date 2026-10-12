@@ -26,11 +26,15 @@ package com.combatxptracker;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Function;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
@@ -107,8 +111,9 @@ class SlayerGameData
 	 * Where the current task can be done with this master, and what to bring.
 	 *
 	 * @param assignedArea Konar's chosen area name, or null
+	 * @param bankNames lower-case names of what was in the bank, or null if it hasn't been seen
 	 */
-	SlayerGuide guide(SlayerPoints.Master master, String taskName, String assignedArea)
+	SlayerGuide guide(SlayerPoints.Master master, String taskName, String assignedArea, Set<String> bankNames)
 	{
 		if (taskName == null)
 		{
@@ -127,9 +132,18 @@ class SlayerGameData
 		for (TaskRequirements.Need need : TaskRequirements.forTask(taskName))
 		{
 			boolean unlocked = need.getUnlockVarbit() >= 0 && client.getVarbitValue(need.getUnlockVarbit()) == 1;
-			needs.add(new SlayerGuide.NeedStatus(need.getLabel(), unlocked || need.isMetBy(carried), need.isInfoOnly()));
+			needs.add(new SlayerGuide.NeedStatus(need.getLabel(), unlocked || need.isMetBy(carried), need.isInfoOnly(),
+				bankNames != null && need.isMetBy(bankNames)));
 		}
-		return new SlayerGuide(taskName, areas, needs);
+		return new SlayerGuide(taskName, areas, needs, bankNames != null);
+	}
+
+	/**
+	 * The current task's areas, as last read for the guide.
+	 */
+	List<SlayerGuide.Area> currentAreas()
+	{
+		return areas;
 	}
 
 	private List<SlayerGuide.Area> readAreas(SlayerPoints.Master master, int taskRow, String assignedArea)
@@ -178,6 +192,41 @@ class SlayerGameData
 					names.add(itemManager.getItemComposition(item.getId()).getName().toLowerCase(Locale.ROOT));
 				}
 			}
+		}
+		return names;
+	}
+
+	/**
+	 * What's in the bank right now (canonical ids, placeholders left out), or null if the
+	 * bank isn't open.
+	 */
+	Set<Integer> bankItemIds()
+	{
+		ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+		if (bank == null)
+		{
+			return null;
+		}
+		Set<Integer> ids = new TreeSet<>();
+		for (Item item : bank.getItems())
+		{
+			if (item.getId() > 0 && item.getQuantity() > 0)
+			{
+				ids.add(itemManager.canonicalize(item.getId()));
+			}
+		}
+		return ids;
+	}
+
+	/**
+	 * Lower-case names of the given items.
+	 */
+	Set<String> itemNames(Iterable<Integer> ids)
+	{
+		Set<String> names = new HashSet<>();
+		for (int id : ids)
+		{
+			names.add(itemManager.getItemComposition(id).getName().toLowerCase(Locale.ROOT));
 		}
 		return names;
 	}
@@ -237,6 +286,39 @@ class SlayerGameData
 				unavailable(row, taskRow, combatLevel, unlocksKnown)));
 		}
 		return TaskOdds.compute(master.getDisplayName(), options, blockedLowercase, unlocksKnown);
+	}
+
+	/**
+	 * Every master's odds, for "where to get a task".
+	 *
+	 * @param blocked each master's blocked tasks (lower case)
+	 */
+	Map<SlayerPoints.Master, TaskOdds> allOdds(Function<SlayerPoints.Master, Set<String>> blocked)
+	{
+		Map<SlayerPoints.Master, TaskOdds> all = new EnumMap<>(SlayerPoints.Master.class);
+		for (SlayerPoints.Master master : SlayerPoints.Master.values())
+		{
+			all.put(master, odds(master, blocked.apply(master)));
+		}
+		return all;
+	}
+
+	/**
+	 * Every task any master assigns, sorted by name.
+	 */
+	List<String> taskNames()
+	{
+		Set<String> names = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+		for (int row : tableRows(DBTableID.SlayerMasterTask.ID))
+		{
+			int taskRow = intField(row, DBTableID.SlayerMasterTask.COL_TASK, -1);
+			String name = taskRow < 0 ? null : stringField(taskRow, DBTableID.SlayerTask.COL_NAME_UPPERCASE);
+			if (name != null && intField(row, DBTableID.SlayerMasterTask.COL_WEIGHT, 0) > 0)
+			{
+				names.add(name);
+			}
+		}
+		return new ArrayList<>(names);
 	}
 
 	/**

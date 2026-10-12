@@ -32,7 +32,7 @@ import java.util.List;
  */
 final class SlayerGuide
 {
-	static final SlayerGuide NONE = new SlayerGuide(null, Collections.emptyList(), Collections.emptyList());
+	static final SlayerGuide NONE = new SlayerGuide(null, Collections.emptyList(), Collections.emptyList(), false);
 
 	/**
 	 * A place the task can be done, with the game's own directions hint.
@@ -86,12 +86,20 @@ final class SlayerGuide
 		private final String label;
 		private final boolean met;
 		private final boolean infoOnly;
+		// Not carried, but in the bank the last time it was opened.
+		private final boolean inBank;
 
 		NeedStatus(String label, boolean met, boolean infoOnly)
+		{
+			this(label, met, infoOnly, false);
+		}
+
+		NeedStatus(String label, boolean met, boolean infoOnly, boolean inBank)
 		{
 			this.label = label;
 			this.met = met;
 			this.infoOnly = infoOnly;
+			this.inBank = !met && inBank;
 		}
 
 		String getLabel()
@@ -109,22 +117,38 @@ final class SlayerGuide
 			return infoOnly;
 		}
 
+		/**
+		 * @return whether it isn't carried but is in the bank
+		 */
+		boolean isInBank()
+		{
+			return inBank;
+		}
+
 		@Override
 		public String toString()
 		{
-			return label + (met ? "+" : "-");
+			return label + (met ? "+" : inBank ? "b" : "-");
 		}
 	}
 
 	private final String task;
 	private final List<Area> areas;
 	private final List<NeedStatus> needs;
+	// Whether the bank has been seen, so "Missing" can mean "you don't own one".
+	private final boolean bankKnown;
 
 	SlayerGuide(String task, List<Area> areas, List<NeedStatus> needs)
+	{
+		this(task, areas, needs, false);
+	}
+
+	SlayerGuide(String task, List<Area> areas, List<NeedStatus> needs, boolean bankKnown)
 	{
 		this.task = task;
 		this.areas = areas;
 		this.needs = needs;
+		this.bankKnown = bankKnown;
 	}
 
 	String getTask()
@@ -142,8 +166,13 @@ final class SlayerGuide
 		return needs;
 	}
 
+	boolean isBankKnown()
+	{
+		return bankKnown;
+	}
+
 	/**
-	 * @return how many required items are missing
+	 * @return how many required items aren't carried (including ones in the bank)
 	 */
 	int missingCount()
 	{
@@ -158,9 +187,25 @@ final class SlayerGuide
 		return missing;
 	}
 
+	/**
+	 * @return how many required items aren't carried but are in the bank
+	 */
+	int inBankCount()
+	{
+		int inBank = 0;
+		for (NeedStatus n : needs)
+		{
+			if (n.inBank && !n.infoOnly)
+			{
+				inBank++;
+			}
+		}
+		return inBank;
+	}
+
 	@Override
 	public String toString()
 	{
-		return task + "|" + areas + "|" + needs;
+		return task + "|" + areas + "|" + needs + "|" + bankKnown;
 	}
 }

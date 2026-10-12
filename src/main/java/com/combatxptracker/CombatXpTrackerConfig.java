@@ -349,6 +349,19 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "checkBank",
+		name = "Check bank for task items",
+		description = "Remembers what's in your bank when you open it, so the Slayer tab's task guide can say whether an "
+			+ "item you need is in your bank or you don't own one. Saved on your computer only, per account.",
+		position = 15,
+		section = combatSection
+	)
+	default boolean checkBank()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "showEffectiveLevels",
 		name = "Show effective levels",
 		description = "Shows your effective Attack and Strength (or Ranged, or Magic) under the max hit: your level with "

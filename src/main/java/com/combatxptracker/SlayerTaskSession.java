@@ -46,6 +46,7 @@ final class SlayerTaskSession
 	private int assigned;
 	private String master;
 	private String location;
+	private String area;
 	private final ActivityTimer activity = new ActivityTimer();
 
 	void start(String taskName)
@@ -61,6 +62,7 @@ final class SlayerTaskSession
 		assigned = 0;
 		master = null;
 		location = null;
+		area = null;
 		activity.reset();
 	}
 
@@ -72,6 +74,19 @@ final class SlayerTaskSession
 		assigned = assignedAmount;
 		master = masterName;
 		location = taskLocation;
+	}
+
+	/**
+	 * Where the task is being done, or null if unknown.
+	 */
+	void setArea(String areaName)
+	{
+		area = areaName;
+	}
+
+	String getArea()
+	{
+		return area;
 	}
 
 	void recordSuperior()
@@ -105,6 +120,7 @@ final class SlayerTaskSession
 		r.task = task;
 		r.master = master;
 		r.location = location;
+		r.area = area;
 		r.assigned = assigned;
 		r.kills = kills;
 		r.endMillis = endMillis;

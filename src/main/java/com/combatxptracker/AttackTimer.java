@@ -51,6 +51,8 @@ final class AttackTimer
 	static final int IDLE_TICKS = 16;
 
 	private int lastAttackTick = -1;
+	// An attack animation that started before the game said who the player is fighting.
+	private int pendingAnimationTick = -1;
 
 	/**
 	 * @param weaponSpeed        the weapon's attack speed in ticks, or 0 when unarmed
@@ -94,6 +96,45 @@ final class AttackTimer
 	}
 
 	/**
+	 * The player started an animation that could be an attack. On the first attack of a fight
+	 * the game can send the animation a moment before it says who the player is fighting, so
+	 * without a target yet it's held until {@link #confirmPending} sees one.
+	 */
+	void onAttackAnimation(int tick, boolean hasTarget, int speed)
+	{
+		if (hasTarget)
+		{
+			onAttackSignal(tick, speed);
+			pendingAnimationTick = -1;
+		}
+		else
+		{
+			pendingAnimationTick = tick;
+		}
+	}
+
+	/**
+	 * Checked every client frame: a held animation counts as the attack (on the tick it
+	 * started) once the player has a target, if that happens within the next tick.
+	 */
+	void confirmPending(int tick, boolean hasTarget, boolean animating, int speed)
+	{
+		if (pendingAnimationTick < 0)
+		{
+			return;
+		}
+		if (tick > pendingAnimationTick + 1 || tick < pendingAnimationTick || !animating)
+		{
+			pendingAnimationTick = -1;
+		}
+		else if (hasTarget)
+		{
+			onAttackSignal(pendingAnimationTick, speed);
+			pendingAnimationTick = -1;
+		}
+	}
+
+	/**
 	 * @return ticks until the next attack (0 = ready now), or -1 when not fighting
 	 */
 	int ticksLeft(int tick, int speed)
@@ -108,5 +149,6 @@ final class AttackTimer
 	void reset()
 	{
 		lastAttackTick = -1;
+		pendingAnimationTick = -1;
 	}
 }

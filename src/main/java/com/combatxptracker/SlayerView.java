@@ -29,8 +29,11 @@ import java.awt.Color;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
@@ -62,6 +65,7 @@ class SlayerView extends JPanel
 	private final JPanel statusCard = card();
 	private final JPanel guideCard = card();
 	private final JPanel oddsCard = card();
+	private final JPanel sourcesCard = card();
 	private final JPanel rankCard = card();
 	private final JPanel pointsCard = card();
 	private final JPanel superiorCard = card();
@@ -99,6 +103,7 @@ class SlayerView extends JPanel
 		add(holder(guideCard));
 		add(pointsCard);
 		add(holder(oddsCard));
+		add(holder(sourcesCard));
 		add(superiorCard);
 		add(holder(rankCard));
 		add(logHeader);
@@ -115,8 +120,10 @@ class SlayerView extends JPanel
 		LootPrice price = config.lootPrice();
 		SlayerGuide guide = plugin.getSlayerGuide();
 		TaskOdds odds = plugin.getTaskOdds();
+		TaskSources sources = plugin.getTaskSources();
+		String taskArea = plugin.getTaskArea();
 		String key = status + "|" + plugin.getSlayerLogRevision() + "|" + taskSuperiors + "|" + taskKills + "|" + price
-			+ "|" + guide + "|" + odds;
+			+ "|" + guide + "|" + odds + "|" + sources + "|" + taskArea + "|" + plugin.getAreaRevision();
 		if (key.equals(viewKey))
 		{
 			return;
@@ -126,9 +133,10 @@ class SlayerView extends JPanel
 		List<SlayerTaskRecord> tasks = plugin.getSlayerTasks();
 		List<TaskStats> history = TaskStats.group(tasks, price);
 		updateStatus(status);
-		updateGuide(guide);
+		updateGuide(guide, tasks, price, taskArea);
 		updatePoints(status);
 		updateOdds(odds, history);
+		updateSources(sources);
 		updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null);
 		updateRanking(history);
 		updateLog(tasks, price);
@@ -152,7 +160,9 @@ class SlayerView extends JPanel
 		{
 			String left = Formatting.withCommas(status.getRemaining())
 				+ (status.getAssigned() > 0 ? " / " + Formatting.withCommas(status.getAssigned()) : "");
-			statusCard.add(row("Task", status.getTask(), Theme.SUCCESS, "Your current task"));
+			JPanel taskRow = row("Task", status.getTask(), Theme.SUCCESS, "Your current task. Right-click to see where else to get it.");
+			taskRow.setComponentPopupMenu(findMenu(status.getTask()));
+			statusCard.add(taskRow);
 			statusCard.add(row("Left", left, Theme.SUCCESS, "Kills left out of the number assigned"));
 			if (status.getLocation() != null)
 			{
@@ -168,7 +178,7 @@ class SlayerView extends JPanel
 	/**
 	 * Where the task can be done and what to bring.
 	 */
-	private void updateGuide(SlayerGuide guide)
+	private void updateGuide(SlayerGuide guide, List<SlayerTaskRecord> tasks, LootPrice price, String taskArea)
 	{
 		guideCard.removeAll();
 		if (guide.getTask() == null || (guide.getAreas().isEmpty() && guide.getNeeds().isEmpty()))
@@ -182,44 +192,179 @@ class SlayerView extends JPanel
 		if (!guide.getAreas().isEmpty())
 		{
 			guideCard.add(Theme.label("Where to go", Theme.MUTED));
-			for (SlayerGuide.Area area : guide.getAreas())
+			Map<String, TaskStats> rates = TaskStats.byArea(tasks, guide.getTask(), price);
+			List<SlayerGuide.Area> areas = sortAreas(guide.getAreas(), rates);
+			TaskStats best = bestArea(rates);
+			boolean konar = false;
+			for (SlayerGuide.Area area : areas)
 			{
-				JPanel row = new JPanel(new DynamicGridLayout(0, 1, 0, 1));
-				row.setBackground(area.isAssigned() ? Theme.highlight(Theme.SUCCESS, 0.72f) : Theme.HEADER);
-				row.setBorder(BorderFactory.createEmptyBorder(3, 7, 4, 7));
-				row.add(Theme.boldLabel(area.getName() + (area.isAssigned() ? " (Konar's pick)" : ""),
-					area.isAssigned() ? Theme.SUCCESS : Theme.TEXT));
-				if (area.getHint() != null)
-				{
-					JLabel hint = Theme.label("<html><div style='width:130px'>" + area.getHint() + "</div></html>", Theme.SUBTLE);
-					row.add(hint);
-				}
-				guideCard.add(row);
+				konar |= area.isAssigned();
+				guideCard.add(areaRow(area, rates.get(area.getName().toLowerCase(Locale.ROOT)), best,
+					area.getName().equalsIgnoreCase(taskArea), guide.getAreas().size() > 1));
+			}
+			if (!konar && taskArea == null && guide.getAreas().size() > 1)
+			{
+				guideCard.add(wrapped("Right-click the area you're using. The plugin learns the spot, picks it next time, "
+					+ "and ranks areas by your own rates.", Theme.SUBTLE));
 			}
 		}
 
 		if (!guide.getNeeds().isEmpty())
 		{
-			int missing = guide.missingCount();
-			JLabel bring = Theme.label(missing > 0 ? "Bring (" + missing + " missing)" : "Bring", missing > 0 ? Theme.GOLD : Theme.MUTED);
+			int inBank = guide.inBankCount();
+			int missing = guide.missingCount() - inBank;
+			String heading = "Bring";
+			if (missing > 0 || inBank > 0)
+			{
+				List<String> parts = new ArrayList<>();
+				if (missing > 0)
+				{
+					parts.add(missing + " missing");
+				}
+				if (inBank > 0)
+				{
+					parts.add(inBank + " in bank");
+				}
+				heading += " (" + String.join(", ", parts) + ")";
+			}
+			JLabel bring = Theme.label(heading, missing + inBank > 0 ? Theme.GOLD : Theme.MUTED);
 			bring.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
 			guideCard.add(bring);
 			for (SlayerGuide.NeedStatus need : guide.getNeeds())
 			{
-				String state = need.isMet() ? "Have it" : need.isInfoOnly() ? "Tip" : "Missing";
-				Color colour = need.isMet() ? Theme.SUCCESS : need.isInfoOnly() ? Theme.MUTED : Theme.GOLD;
-				JPanel row = new JPanel(new BorderLayout(6, 0));
-				row.setBackground(Theme.HEADER);
-				row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
-				row.add(Theme.label("<html><div style='width:95px'>" + need.getLabel() + "</div></html>", Theme.TEXT),
-					BorderLayout.CENTER);
-				row.add(Theme.boldLabel(state, colour), BorderLayout.EAST);
-				row.setToolTipText(need.isMet() ? "Worn or in your inventory (or unlocked as a Slayer reward)"
-					: need.isInfoOnly() ? "Recommended. There are too many alternatives to check, so this is just a reminder."
-					: "Not worn or in your inventory");
-				guideCard.add(row);
+				guideCard.add(needRow(need, guide.isBankKnown()));
+			}
+			if (!guide.isBankKnown() && guide.missingCount() > 0 && config.checkBank())
+			{
+				guideCard.add(wrapped("Open your bank once and the guide will also say what's in it.", Theme.SUBTLE));
 			}
 		}
+	}
+
+	private static JPanel needRow(SlayerGuide.NeedStatus need, boolean bankKnown)
+	{
+		String state;
+		Color colour;
+		String tip;
+		if (need.isMet())
+		{
+			state = "Have it";
+			colour = Theme.SUCCESS;
+			tip = "Worn or in your inventory (or unlocked as a Slayer reward)";
+		}
+		else if (need.isInfoOnly())
+		{
+			state = "Tip";
+			colour = Theme.MUTED;
+			tip = "Recommended. There are too many alternatives to check, so this is just a reminder.";
+		}
+		else if (need.isInBank())
+		{
+			state = "In bank";
+			colour = Theme.ACCENT;
+			tip = "Not worn or in your inventory, but it was in your bank the last time you opened it";
+		}
+		else
+		{
+			state = "Missing";
+			colour = Theme.GOLD;
+			tip = bankKnown ? "Not worn, in your inventory or in your bank" : "Not worn or in your inventory";
+		}
+		JPanel row = new JPanel(new BorderLayout(6, 0));
+		row.setBackground(Theme.HEADER);
+		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
+		row.add(Theme.label("<html><div style='width:95px'>" + need.getLabel() + "</div></html>", Theme.TEXT),
+			BorderLayout.CENTER);
+		row.add(Theme.boldLabel(state, colour), BorderLayout.EAST);
+		row.setToolTipText(tip);
+		return row;
+	}
+
+	/**
+	 * Konar's pick first, then areas you have rates for (best first), then the rest in the
+	 * game's order.
+	 */
+	static List<SlayerGuide.Area> sortAreas(List<SlayerGuide.Area> areas, Map<String, TaskStats> rates)
+	{
+		List<SlayerGuide.Area> sorted = new ArrayList<>(areas);
+		sorted.sort(Comparator.comparing((SlayerGuide.Area a) -> !a.isAssigned())
+			.thenComparing(a -> -areaXpPerHour(rates.get(a.getName().toLowerCase(Locale.ROOT)))));
+		return sorted;
+	}
+
+	private static double areaXpPerHour(TaskStats s)
+	{
+		return s == null || s.getActiveMillis() <= 0 ? -1 : s.getXpPerHour();
+	}
+
+	/**
+	 * The area with the best Slayer XP/hr, if at least two have enough time logged to compare.
+	 */
+	static TaskStats bestArea(Map<String, TaskStats> rates)
+	{
+		List<TaskStats> ranked = TaskStats.ranked(new ArrayList<>(rates.values()), false);
+		return ranked.size() >= 2 ? ranked.get(0) : null;
+	}
+
+	private JPanel areaRow(SlayerGuide.Area area, TaskStats rate, TaskStats best, boolean here, boolean canPick)
+	{
+		boolean isBest = best != null && rate == best;
+		JPanel row = new JPanel(new DynamicGridLayout(0, 1, 0, 1));
+		row.setBackground(area.isAssigned() || here ? Theme.highlight(Theme.SUCCESS, 0.72f) : Theme.HEADER);
+		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 4, 7));
+
+		JPanel top = new JPanel(new BorderLayout(6, 0));
+		top.setOpaque(false);
+		top.add(Theme.boldLabel(area.getName(), area.isAssigned() || here ? Theme.SUCCESS : Theme.TEXT), BorderLayout.CENTER);
+		String badge = area.isAssigned() ? "Konar" : here ? "Here" : isBest ? "Your best" : null;
+		if (badge != null)
+		{
+			top.add(Theme.boldLabel(badge, isBest && !here && !area.isAssigned() ? Theme.GOLD : Theme.SUCCESS), BorderLayout.EAST);
+		}
+		row.add(top);
+
+		List<String> tags = new ArrayList<>();
+		if (plugin.isMultiArea(area.getName()))
+		{
+			tags.add("Multi-combat");
+		}
+		if (plugin.isWildernessArea(area.getName()))
+		{
+			tags.add("Wilderness");
+		}
+		if (!tags.isEmpty())
+		{
+			row.add(Theme.label(String.join(", ", tags), Theme.GOLD));
+		}
+		if (rate != null && rate.getActiveMillis() > 0)
+		{
+			row.add(Theme.label("You: " + Formatting.compactXp(Math.round(rate.getXpPerHour())) + " xp/hr, "
+				+ Math.round(rate.getKillsPerHour()) + " kills/hr", isBest ? Theme.GOLD : Theme.MUTED));
+		}
+		if (area.getHint() != null)
+		{
+			row.add(Theme.label("<html><div style='width:130px'>" + area.getHint() + "</div></html>", Theme.SUBTLE));
+		}
+
+		StringBuilder tip = new StringBuilder("<html><b>").append(area.getName()).append("</b>");
+		if (rate != null && rate.getActiveMillis() > 0)
+		{
+			tip.append("<br>Your rates here, from ").append(rate.getTimes()).append(rate.getTimes() == 1 ? " task" : " tasks")
+				.append(":<br>").append(Formatting.compactXp(Math.round(rate.getXpPerHour()))).append(" Slayer xp/hr, ")
+				.append(Math.round(rate.getKillsPerHour())).append(" kills/hr, ")
+				.append(Formatting.compactXp(Math.round(rate.getGpPerHour()))).append(" gp/hr");
+		}
+		if (canPick && !area.isAssigned())
+		{
+			tip.append("<br><br>").append(here ? "Right-click if this isn't where you are" : "Right-click if you're doing your task here");
+			JPopupMenu menu = new JPopupMenu();
+			JMenuItem item = new JMenuItem(here ? "Not doing my task here" : "I'm doing my task here");
+			item.addActionListener(e -> plugin.setTaskArea(here ? null : area.getName()));
+			menu.add(item);
+			row.setComponentPopupMenu(menu);
+		}
+		row.setToolTipText(tip.append("</html>").toString());
+		return row;
 	}
 
 	/**
@@ -261,6 +406,8 @@ class SlayerView extends JPanel
 			row.setComponentPopupMenu(blockMenu(o.getTask(), true));
 			oddsCard.add(row);
 		}
+		oddsCard.add(holder(Theme.flatButton("Where to get a task...", "See which master is likeliest to give you a task",
+			this::pickTaskToFind)));
 
 		TaskStats advice = odds.blockAdvice(history, BLOCK_ADVICE_MIN_CHANCE);
 		if (advice != null)
@@ -289,7 +436,96 @@ class SlayerView extends JPanel
 		JMenuItem item = new JMenuItem(block ? "Mark " + task + " as blocked" : "Unblock " + task);
 		item.addActionListener(e -> plugin.setTaskBlocked(task, block));
 		menu.add(item);
+		menu.add(findItem(task));
 		return menu;
+	}
+
+	private JMenuItem findItem(String task)
+	{
+		JMenuItem find = new JMenuItem("Where to get " + task);
+		find.addActionListener(e -> plugin.showTaskSources(task));
+		return find;
+	}
+
+	private JPopupMenu findMenu(String task)
+	{
+		JPopupMenu menu = new JPopupMenu();
+		menu.add(findItem(task));
+		return menu;
+	}
+
+	/**
+	 * Asks which task to look up.
+	 */
+	private void pickTaskToFind()
+	{
+		List<String> names = plugin.getAllTaskNames();
+		if (names.isEmpty())
+		{
+			JOptionPane.showMessageDialog(this, "Log in first, so the task list can be read from the game.",
+				"Where to get a task", JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		Object choice = JOptionPane.showInputDialog(this, "Which task do you want?", "Where to get a task",
+			JOptionPane.QUESTION_MESSAGE, null, names.toArray(), names.get(0));
+		if (choice != null)
+		{
+			plugin.showTaskSources(choice.toString());
+		}
+	}
+
+	/**
+	 * Every master's chance of giving the task the player looked up.
+	 */
+	private void updateSources(TaskSources sources)
+	{
+		sourcesCard.removeAll();
+		if (sources.getTask() == null)
+		{
+			sourcesCard.setVisible(false);
+			return;
+		}
+		sourcesCard.setVisible(true);
+		JPanel top = new JPanel(new BorderLayout(6, 0));
+		top.setOpaque(false);
+		top.add(title("Where to get " + sources.getTask()), BorderLayout.CENTER);
+		JLabel close = Theme.boldLabel("x", Theme.MUTED);
+		close.setToolTipText("Close");
+		close.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+		close.addMouseListener(new java.awt.event.MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(java.awt.event.MouseEvent e)
+			{
+				plugin.showTaskSources(null);
+			}
+		});
+		top.add(close, BorderLayout.EAST);
+		sourcesCard.add(top);
+
+		if (sources.getSources().isEmpty())
+		{
+			sourcesCard.add(wrapped("No slayer master gives this task.", Theme.MUTED));
+			return;
+		}
+		TaskSources.Source best = sources.best();
+		for (TaskSources.Source src : sources.getSources())
+		{
+			String name = src.getMaster().getDisplayName();
+			String size = src.getMaxAmount() > 0 ? src.getMinAmount() + "-" + src.getMaxAmount() + " kills" : "";
+			if (src.getUnavailable() != null || src.getChance() <= 0)
+			{
+				String why = src.getUnavailable() == null ? "Can't give it now" : src.getUnavailable();
+				sourcesCard.add(row(name, "-", Theme.SUBTLE, why));
+				continue;
+			}
+			String pct = String.format(Locale.US, "%.1f%%", src.getChance() * 100);
+			sourcesCard.add(row(name + (src == best ? " (best)" : ""), pct, src == best ? Theme.SUCCESS : Theme.TEXT,
+				"<html>" + name + ": " + pct + " chance per task" + (size.isEmpty() ? "" : "<br>Usually " + size)
+					+ "<br>About 1 in " + Math.max(1, Math.round(1 / src.getChance())) + " tasks</html>"));
+		}
+		sourcesCard.add(wrapped("From each master's task weights with your levels, unlocks and blocked tasks. "
+			+ "Quest requirements aren't in the game data, so it's an estimate.", Theme.SUBTLE));
 	}
 
 	/**
@@ -333,12 +569,14 @@ class SlayerView extends JPanel
 			+ " minutes of fighting to be ranked.", Theme.SUBTLE));
 	}
 
-	private static JPanel rankRow(TaskStats s, String value, Color colour)
+	private JPanel rankRow(TaskStats s, String value, Color colour)
 	{
-		return row(s.getTask(), value, colour, "<html>" + s.getTask() + ": done " + s.getTimes() + (s.getTimes() == 1 ? " time" : " times")
+		JPanel row = row(s.getTask(), value, colour, "<html>" + s.getTask() + ": done " + s.getTimes() + (s.getTimes() == 1 ? " time" : " times")
 			+ "<br>Average " + s.getAverageKills() + " kills<br>"
 			+ Formatting.compactXp(Math.round(s.getXpPerHour())) + " Slayer xp/hr, "
 			+ Formatting.compactXp(Math.round(s.getGpPerHour())) + " gp/hr</html>");
+		row.setComponentPopupMenu(findMenu(s.getTask()));
+		return row;
 	}
 
 	private void updatePoints(SlayerStatus status)
@@ -499,6 +737,10 @@ class SlayerView extends JPanel
 		JMenuItem remove = new JMenuItem("Remove from log");
 		remove.addActionListener(e -> plugin.removeTaskRecord(r));
 		menu.add(remove);
+		if (r.task != null)
+		{
+			menu.add(findItem(r.task));
+		}
 		card.setComponentPopupMenu(menu);
 		return card;
 	}
@@ -510,7 +752,11 @@ class SlayerView extends JPanel
 		{
 			sb.append(" from ").append(r.master);
 		}
-		if (r.location != null)
+		if (r.area != null)
+		{
+			sb.append(" in ").append(r.area);
+		}
+		else if (r.location != null)
 		{
 			sb.append(" in ").append(r.location);
 		}

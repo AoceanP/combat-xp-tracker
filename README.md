@@ -49,7 +49,10 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 A **Slayer** tab with everything about your slayer progress:
 - Your master, Slayer points, task streak, current task (left / assigned) and Konar's location
 - Task guide: every place your task can be done, with the game's own directions, and what to bring (nose peg, earmuffs, rock hammer, mirror shield and so on), warning you if it isn't in your gear or inventory. Locations are read live from the game, so they stay up to date
+- The guide checks your bank too: once you've opened it, an item you need shows **In bank** if you have one there, or **Missing** if you don't own one. It's saved on your computer only and can be turned off in the settings
+- Your best area: right-click the area you're doing your task in. The plugin remembers the spot and picks it automatically next time (Konar's areas are picked for you). Each area then shows your own Slayer XP/hr and kills/hr there, your best one is marked, and areas you've found to be multi-combat or in the Wilderness are tagged
 - Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
+- Where to get a task: pick any task (or right-click one anywhere in the tab) to see every master's chance of giving it to you, so you know who to go to for the task you want
 - Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
 - What your next task is worth, when the next x5 bonus task comes, and the next big bonus (50th, 100th, 250th, 1,000th task) with how many points each master would give for it, so you can save it for the best one
 - Superiors: how many appeared this task and across your logged tasks, and how often. An optional notification when one spawns
