@@ -44,6 +44,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Pin monsters to the top of the list, and drag pinned monsters into your own order
 - Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
 - Search, sort, hide monsters, ignore items (right-click an item), and collapsed cards stay collapsed
+- Prayer drain: how long a prayer potion dose lasts while fighting each monster, measured from your own prayer points (restores and kills without prayer on aren't counted)
 
 ## Slayer
 A **Slayer** tab with everything about your slayer progress:
@@ -54,9 +55,14 @@ A **Slayer** tab with everything about your slayer progress:
 - Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
 - Where to get a task: pick any task (or right-click one anywhere in the tab) to see every master's chance of giving it to you, so you know who to go to for the task you want
 - Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
+- Prayer potions: on a task, the guide says about how many prayer potions the kills left will take, at your own measured drain
 - What your next task is worth, when the next x5 bonus task comes, and the next big bonus (50th, 100th, 250th, 1,000th task) with how many points each master would give for it, so you can save it for the best one
 - Superiors: how many appeared this task and across your logged tasks, and how often. An optional notification when one spawns
 - A task log of every finished task, saved per account: kills, time, Slayer XP, loot, superiors, points earned and biggest hit, with XP/hr and GP/hr on hover. Right-click a task to remove it
+
+## Supplies & loot
+- Loot despawn alert (off by default): a countdown to when your oldest monster drop on the ground disappears, and a notification shortly before, so you can AFK and pick everything up in one trip. Only your own drops from monsters count, and you can ignore cheap drops
+- Casts left: while autocasting, an infobox shows how many casts your runes allow, counting the rune pouch, combination runes, elemental staves, battlestaves and tomes. It turns gold when you're running low, with an optional notification
 
 ## Themes
 Twelve colour themes for the sidebar in the settings: Dark (the original, and the default), Classic, Midnight, Abyssal, Zamorak, Saradomin, Guthix, Armadyl (light), Bandos, Dragonfire, Frostbite and Venom. Each theme has its own accent colour, unless you've picked your own goal bar colour.

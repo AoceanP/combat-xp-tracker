@@ -66,6 +66,89 @@ public interface CombatXpTrackerConfig extends Config
 	)
 	String overlaySection = "overlays";
 
+	@ConfigSection(
+		name = "Supplies & loot",
+		description = "Loot despawn alert and casts left, for long trips",
+		position = 3
+	)
+	String suppliesSection = "supplies";
+
+	@ConfigItem(
+		keyName = "lootDespawnAlert",
+		name = "Loot despawn alert",
+		description = "Shows a countdown to when your oldest monster drop on the ground disappears, and notifies you "
+			+ "shortly before, so you can pick everything up in one trip. Only your own drops from monsters count.",
+		position = 0,
+		section = suppliesSection
+	)
+	default Notification lootDespawnAlert()
+	{
+		return Notification.OFF;
+	}
+
+	@Range(min = 5, max = 110)
+	@ConfigItem(
+		keyName = "lootDespawnSeconds",
+		name = "Warn before despawn",
+		description = "How many seconds before your oldest drop disappears to warn you.",
+		position = 1,
+		section = suppliesSection
+	)
+	@net.runelite.client.config.Units(net.runelite.client.config.Units.SECONDS)
+	default int lootDespawnSeconds()
+	{
+		return 20;
+	}
+
+	@ConfigItem(
+		keyName = "lootDespawnMinValue",
+		name = "Ignore drops under",
+		description = "Drops worth less than this (gp, Grand Exchange price) don't count for the despawn alert.",
+		position = 2,
+		section = suppliesSection
+	)
+	default int lootDespawnMinValue()
+	{
+		return 1000;
+	}
+
+	@ConfigItem(
+		keyName = "castsLeft",
+		name = "Casts left",
+		description = "While autocasting, an infobox shows how many casts your runes allow, counting the rune pouch, "
+			+ "combination runes, elemental staves and tomes.",
+		position = 3,
+		section = suppliesSection
+	)
+	default boolean castsLeft()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "castsLowWarning",
+		name = "Low on casts",
+		description = "The casts left infobox turns gold below this many casts.",
+		position = 4,
+		section = suppliesSection
+	)
+	default int castsLowWarning()
+	{
+		return 50;
+	}
+
+	@ConfigItem(
+		keyName = "castsLowNotification",
+		name = "Notify when low on casts",
+		description = "Sends a notification when your casts left drop below the number above.",
+		position = 5,
+		section = suppliesSection
+	)
+	default Notification castsLowNotification()
+	{
+		return Notification.OFF;
+	}
+
 	// ---- Goals ---------------------------------------------------------------
 
 	@ConfigItem(

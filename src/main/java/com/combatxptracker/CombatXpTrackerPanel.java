@@ -742,7 +742,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		int taskRemaining = plugin.getSlayerTaskRemaining();
 		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
 			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
-			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters();
+			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision();
 		if (key.equals(monsterViewKey))
 		{
 			return;

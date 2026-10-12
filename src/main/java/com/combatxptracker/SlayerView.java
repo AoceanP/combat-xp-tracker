@@ -122,8 +122,9 @@ class SlayerView extends JPanel
 		TaskOdds odds = plugin.getTaskOdds();
 		TaskSources sources = plugin.getTaskSources();
 		String taskArea = plugin.getTaskArea();
+		int potions = plugin.getTaskPrayerPotions(status.getTask(), status.getRemaining());
 		String key = status + "|" + plugin.getSlayerLogRevision() + "|" + taskSuperiors + "|" + taskKills + "|" + price
-			+ "|" + guide + "|" + odds + "|" + sources + "|" + taskArea + "|" + plugin.getAreaRevision();
+			+ "|" + guide + "|" + odds + "|" + sources + "|" + taskArea + "|" + plugin.getAreaRevision() + "|" + potions;
 		if (key.equals(viewKey))
 		{
 			return;
@@ -133,7 +134,7 @@ class SlayerView extends JPanel
 		List<SlayerTaskRecord> tasks = plugin.getSlayerTasks();
 		List<TaskStats> history = TaskStats.group(tasks, price);
 		updateStatus(status);
-		updateGuide(guide, tasks, price, taskArea);
+		updateGuide(guide, tasks, price, taskArea, potions, status.getRemaining());
 		updatePoints(status);
 		updateOdds(odds, history);
 		updateSources(sources);
@@ -178,10 +179,11 @@ class SlayerView extends JPanel
 	/**
 	 * Where the task can be done and what to bring.
 	 */
-	private void updateGuide(SlayerGuide guide, List<SlayerTaskRecord> tasks, LootPrice price, String taskArea)
+	private void updateGuide(SlayerGuide guide, List<SlayerTaskRecord> tasks, LootPrice price, String taskArea,
+		int potions, int killsLeft)
 	{
 		guideCard.removeAll();
-		if (guide.getTask() == null || (guide.getAreas().isEmpty() && guide.getNeeds().isEmpty()))
+		if (guide.getTask() == null || (guide.getAreas().isEmpty() && guide.getNeeds().isEmpty() && potions < 0))
 		{
 			guideCard.setVisible(false);
 			return;
@@ -238,6 +240,18 @@ class SlayerView extends JPanel
 			{
 				guideCard.add(wrapped("Open your bank once and the guide will also say what's in it.", Theme.SUBTLE));
 			}
+		}
+		if (potions >= 0)
+		{
+			if (guide.getNeeds().isEmpty())
+			{
+				JLabel bring = Theme.label("Bring", Theme.MUTED);
+				bring.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+				guideCard.add(bring);
+			}
+			guideCard.add(row("Prayer potions", potions == 0 ? "None" : "About " + potions, Theme.TEXT,
+				"<html>For the " + Formatting.withCommas(killsLeft) + " kills left, at your own measured prayer drain "
+					+ "on this monster.<br>Super restores restore a little more per dose.</html>"));
 		}
 	}
 
@@ -604,33 +618,38 @@ class SlayerView extends JPanel
 		int big = SlayerPoints.nextBonusTask(next, 15);
 		if (tenth < big)
 		{
-			pointsCard.add(row("Bonus x5", "#" + Formatting.withCommas(tenth) + away(tenth - next), Theme.TEXT,
+			pointsCard.add(row("Task #" + Formatting.withCommas(tenth) + " (x5)", away(tenth - next), Theme.TEXT,
 				"Every 10th task gives 5x the points"));
 		}
-		pointsCard.add(row("Bonus x" + SlayerPoints.multiplier(big), "#" + Formatting.withCommas(big) + away(big - next),
-			Theme.TEXT, "Every 50th, 100th, 250th and 1,000th task gives 15x to 50x the points. "
+		pointsCard.add(row("Task #" + Formatting.withCommas(big) + " (x" + SlayerPoints.multiplier(big) + ")",
+			away(big - next), Theme.TEXT, "Every 50th, 100th, 250th and 1,000th task gives 15x to 50x the points. "
 				+ "Below: what each master gives for it."));
 
 		// What that big task is worth with each master, so it can be saved for the best one.
-		JPanel masters = new JPanel(new DynamicGridLayout(0, 2, 4, 2));
+		JLabel with = Theme.label("Task #" + Formatting.withCommas(big) + " with", Theme.MUTED);
+		with.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+		pointsCard.add(with);
+		JPanel masters = new JPanel(new DynamicGridLayout(0, 2, 3, 3));
 		masters.setOpaque(false);
 		for (SlayerPoints.Master m : SlayerPoints.BONUS_MASTERS)
 		{
 			int pts = SlayerPoints.pointsFor(m, big, status.hasEliteDiary(m));
 			boolean current = m == master;
-			JLabel label = Theme.label(m.getDisplayName() + " " + Formatting.withCommas(pts),
-				current ? Theme.GOLD : Theme.MUTED);
-			label.setToolTipText(m.getDisplayName() + " would give " + Formatting.withCommas(pts) + " points for task #"
-				+ Formatting.withCommas(big) + (current ? " (your current master)" : ""));
-			masters.add(label);
+			JPanel cell = row(m.getDisplayName(), Formatting.withCommas(pts), current ? Theme.GOLD : Theme.TEXT,
+				m.getDisplayName() + " would give " + Formatting.withCommas(pts) + " points for task #"
+					+ Formatting.withCommas(big) + (current ? " (your current master)" : ""));
+			if (current)
+			{
+				cell.setBackground(Theme.highlight(Theme.GOLD, 0.8f));
+			}
+			masters.add(cell);
 		}
-		masters.setBorder(BorderFactory.createEmptyBorder(2, 2, 0, 2));
 		pointsCard.add(masters);
 	}
 
 	private static String away(int tasksAway)
 	{
-		return tasksAway <= 0 ? ", this one" : ", " + tasksAway + " away";
+		return tasksAway <= 0 ? "This one" : tasksAway == 1 ? "Next task" : "In " + tasksAway + " tasks";
 	}
 
 	private void updateSuperiors(List<SlayerTaskRecord> tasks, int taskSuperiors, int taskKills, boolean onTask)

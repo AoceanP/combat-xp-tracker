@@ -26,6 +26,7 @@ package com.combatxptracker;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
+import com.google.gson.reflect.TypeToken;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
@@ -45,6 +46,9 @@ import javax.swing.SwingUtilities;
 import net.runelite.api.Actor;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
+import net.runelite.api.EnumComposition;
+import net.runelite.api.EnumID;
+import net.runelite.api.EquipmentInventorySlot;
 import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
@@ -54,7 +58,10 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
+import net.runelite.api.Prayer;
 import net.runelite.api.Skill;
+import net.runelite.api.TileItem;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
@@ -63,6 +70,8 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.ItemDespawned;
+import net.runelite.api.events.ItemSpawned;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
@@ -79,6 +88,7 @@ import net.runelite.client.chat.ChatMessageBuilder;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.Notification;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.NpcLootReceived;
@@ -132,6 +142,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String BLOCKED_KEY_PREFIX = "blockedTasks.";
 	private static final String AREAS_KEY = "slayerAreas";
 	private static final String BANK_KEY = "bankItems";
+	private static final String PRAYER_KEY = "prayerDrain";
+	// Prayer drained within this many ticks (6s) of hitting a monster counts towards it.
+	private static final int FIGHT_TICKS = 10;
+	private static final Set<Integer> RUNE_POUCHES = Set.of(ItemID.BH_RUNE_POUCH, ItemID.BH_RUNE_POUCH_TROUVER,
+		ItemID.DIVINE_RUNE_POUCH);
+	private static final int[] POUCH_TYPES = {VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2,
+		VarbitID.RUNE_POUCH_TYPE_3, VarbitID.RUNE_POUCH_TYPE_4, VarbitID.RUNE_POUCH_TYPE_5, VarbitID.RUNE_POUCH_TYPE_6};
+	private static final int[] POUCH_AMOUNTS = {VarbitID.RUNE_POUCH_QUANTITY_1, VarbitID.RUNE_POUCH_QUANTITY_2,
+		VarbitID.RUNE_POUCH_QUANTITY_3, VarbitID.RUNE_POUCH_QUANTITY_4, VarbitID.RUNE_POUCH_QUANTITY_5,
+		VarbitID.RUNE_POUCH_QUANTITY_6};
 	// Eating/drinking and shield blocks: animations that aren't attacks.
 	private static final Set<Integer> NON_ATTACK_ANIMATIONS = Set.of(829, 424, 1156, 388, 403, 404, 410, 420, 425);
 
@@ -192,6 +212,9 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	@Inject
 	private AttackTimerOverlay attackTimerOverlay;
+
+	@Inject
+	private LootDespawnOverlay lootDespawnOverlay;
 
 	@Inject
 	private SlayerGameData slayerGameData;
@@ -255,6 +278,20 @@ public class CombatXpTrackerPlugin extends Plugin
 	private volatile TaskSources taskSources = TaskSources.NONE;
 	// Every task name, for picking one to look up. Read once.
 	private volatile List<String> allTaskNames = Collections.emptyList();
+	// The player's own monster drops on the ground, for the despawn alert.
+	private final GroundLoot groundLoot = new GroundLoot();
+	private volatile GroundLoot.Status groundLootStatus;
+	// Prayer drain per monster, and what's being fought right now.
+	private final PrayerDrain prayerDrain = new PrayerDrain();
+	private int savedPrayerRevision = -1;
+	private int lastPrayerPoints = -1;
+	private String fightMonster;
+	private int lastFightTick = Integer.MIN_VALUE / 2;
+	private volatile int prayerLevel = 1;
+	// The casts left infobox, while autocasting.
+	private CastsInfoBox castsInfoBox;
+	private RuneSupply.Rune castsRune;
+	private boolean castsLowNotified;
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
@@ -314,6 +351,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		buildPanel();
 		overlayManager.add(overlay);
 		overlayManager.add(attackTimerOverlay);
+		overlayManager.add(lootDespawnOverlay);
 		syncInfoBoxes();
 
 		// Turned on while already logged in: GameStateChanged and RuneScapeProfileChanged
@@ -336,7 +374,17 @@ public class CombatXpTrackerPlugin extends Plugin
 		saveMonsters();
 		saveSlayerLog();
 		saveAreaMemory();
+		savePrayerDrain();
 		overlayManager.remove(attackTimerOverlay);
+		overlayManager.remove(lootDespawnOverlay);
+		groundLoot.clear();
+		groundLootStatus = null;
+		removeCastsBox();
+		castsLowNotified = false;
+		prayerDrain.importState(null);
+		savedPrayerRevision = -1;
+		lastPrayerPoints = -1;
+		fightMonster = null;
 		attackTimer.reset();
 		slayerLog.importState(null);
 		savedSlayerLogRevision = -1;
@@ -388,6 +436,13 @@ public class CombatXpTrackerPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		GameState state = event.getGameState();
+		if (state == GameState.LOADING || state == GameState.HOPPING)
+		{
+			// The scene is rebuilt; ground items are seen again as they reappear, but can't
+			// be matched to a kill any more.
+			groundLoot.clear();
+			groundLootStatus = null;
+		}
 		if (state == GameState.LOGGED_IN)
 		{
 			// Deferred so the client's skill values are populated first.
@@ -409,6 +464,10 @@ public class CombatXpTrackerPlugin extends Plugin
 			attackTimer.reset();
 			saveSlayerLog();
 			saveAreaMemory();
+			savePrayerDrain();
+			groundLoot.clear();
+			groundLootStatus = null;
+			lastPrayerPoints = -1;
 			if (config.resetHitsOnLogout())
 			{
 				// Only this session's stats; what's remembered all-time is kept.
@@ -450,6 +509,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			SwingUtilities.invokeLater(this::rebuildPanelForTheme);
 			return;
+		}
+		if ("castsLeft".equals(event.getKey()) && !config.castsLeft())
+		{
+			clientThread.invokeLater(this::removeCastsBox);
 		}
 		if ("checkBank".equals(event.getKey()) && !config.checkBank())
 		{
@@ -520,6 +583,13 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveMonsters();
 			saveSlayerLog();
 			saveAreaMemory();
+			savePrayerDrain();
+		}
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			updateGroundLoot();
+			trackPrayer();
+			updateCasts();
 		}
 		// Panel updates are batched to at most one per tick. Hitsplats and XP drops can
 		// fire several times a tick in combat, and refreshing on each made the panel flicker.
@@ -596,9 +666,22 @@ public class CombatXpTrackerPlugin extends Plugin
 		// Only damage the local player dealt. isMine() covers every "_ME" hitsplat,
 		// including blocked 0s, whether the target is an NPC or a player.
 		Hitsplat hitsplat = event.getHitsplat();
+		if (event.getActor() == client.getLocalPlayer())
+		{
+			// Damage taken, not dealt. The hit plays a block animation the attack timer
+			// shouldn't take for an attack.
+			attackTimer.onHitTaken(client.getTickCount());
+			return;
+		}
 		if (!hitsplat.isMine())
 		{
 			return;
+		}
+
+		if (event.getActor() instanceof NPC)
+		{
+			fightMonster = BossGroups.trackedName(cleanName(((NPC) event.getActor()).getName()));
+			lastFightTick = client.getTickCount();
 		}
 
 		int damage = hitsplat.getAmount();
@@ -840,7 +923,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			return;
 		}
-		attackTimer.onAttackAnimation(client.getTickCount(), local.getInteracting() != null, attackSpeedTicks);
+		attackTimer.onAttackAnimation(client.getTickCount());
 	}
 
 	/**
@@ -892,6 +975,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
 		xpPerKill.recordKill(tracked);
+		prayerDrain.onKill(tracked, client.getTickCount());
 		if (taskSession.isTaskMonster(npcName))
 		{
 			taskSession.recordKill(now);
@@ -1007,6 +1091,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 
+		matchGroundLoot(event);
 		long now = System.currentTimeMillis();
 		// The death normally counted the kill already. If it didn't (e.g. the death
 		// happened off-screen), the loot still proves one.
@@ -1445,6 +1530,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (allTimeToo)
 		{
 			monsterTracker.reset();
+			prayerDrain.importState(null);
 		}
 		for (SkillProgress progress : skillProgress.values())
 		{
@@ -1457,6 +1543,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		monsterTracker.remove(name);
 		sessionMonsters.remove(name);
+		prayerDrain.remove(name);
 		refreshPanelNow();
 	}
 
@@ -1855,6 +1942,306 @@ public class CombatXpTrackerPlugin extends Plugin
 		});
 	}
 
+	// ---- Loot despawn alert --------------------------------------------------------------------
+
+	@Subscribe
+	public void onItemSpawned(ItemSpawned event)
+	{
+		TileItem item = event.getItem();
+		int owner = item.getOwnership();
+		if (owner != TileItem.OWNERSHIP_SELF && owner != TileItem.OWNERSHIP_GROUP)
+		{
+			return;
+		}
+		LocalPoint where = event.getTile().getLocalLocation();
+		if (where == null)
+		{
+			return;
+		}
+		groundLoot.onSpawn(item, itemManager.canonicalize(item.getId()), where.getSceneX(), where.getSceneY(),
+			event.getTile().getPlane(), client.getTickCount(), item.getDespawnTime());
+	}
+
+	@Subscribe
+	public void onItemDespawned(ItemDespawned event)
+	{
+		groundLoot.onDespawn(event.getItem());
+	}
+
+	/**
+	 * Marks the items a monster just dropped for the player as loot to keep an eye on.
+	 */
+	private void matchGroundLoot(NpcLootReceived event)
+	{
+		Map<LocalPoint, Map<Integer, Long>> byTile = new HashMap<>();
+		for (ItemStack stack : event.getItems())
+		{
+			if (stack.getLocation() == null)
+			{
+				continue;
+			}
+			int id = itemManager.canonicalize(stack.getId());
+			long value = (long) itemManager.getItemPrice(id) * stack.getQuantity();
+			byTile.computeIfAbsent(stack.getLocation(), k -> new HashMap<>()).merge(id, value, Long::sum);
+		}
+		int plane = event.getNpc() == null ? client.getTopLevelWorldView().getPlane() : event.getNpc().getWorldLocation().getPlane();
+		for (Map.Entry<LocalPoint, Map<Integer, Long>> e : byTile.entrySet())
+		{
+			groundLoot.onLoot(e.getValue(), e.getKey().getSceneX(), e.getKey().getSceneY(), plane, client.getTickCount());
+		}
+	}
+
+	/**
+	 * Each tick: forgets loot that's gone, and warns when the oldest drop is about to go.
+	 */
+	private void updateGroundLoot()
+	{
+		int tick = client.getTickCount();
+		groundLoot.prune(tick);
+		Notification alert = config.lootDespawnAlert();
+		if (!alert.isEnabled())
+		{
+			groundLootStatus = null;
+			return;
+		}
+		long minValue = Math.max(0, config.lootDespawnMinValue());
+		groundLootStatus = groundLoot.status(tick, minValue);
+		int warnTicks = (int) Math.ceil(config.lootDespawnSeconds() / 0.6);
+		if (groundLoot.shouldWarn(tick, warnTicks, minValue))
+		{
+			GroundLoot.Status status = groundLootStatus;
+			int seconds = status == null ? config.lootDespawnSeconds() : (int) Math.round(status.getTicksLeft() * 0.6);
+			notifier.notify(alert, "Your loot despawns in " + seconds + " seconds"
+				+ (status == null ? "" : " (" + status.getItems() + (status.getItems() == 1 ? " drop)" : " drops)")));
+		}
+	}
+
+	/**
+	 * Read by the overlay.
+	 */
+	GroundLoot.Status getGroundLootStatus()
+	{
+		return groundLootStatus;
+	}
+
+	// ---- Prayer drain ---------------------------------------------------------------------------
+
+	/**
+	 * Each tick: prayer points lost while fighting count towards the monster being fought.
+	 */
+	private void trackPrayer()
+	{
+		int points = client.getBoostedSkillLevel(Skill.PRAYER);
+		prayerLevel = client.getRealSkillLevel(Skill.PRAYER);
+		int drained = lastPrayerPoints >= 0 ? Math.max(0, lastPrayerPoints - points) : 0;
+		lastPrayerPoints = points;
+		int tick = client.getTickCount();
+		if (fightMonster != null && tick - lastFightTick <= FIGHT_TICKS && tick >= lastFightTick)
+		{
+			prayerDrain.onTick(fightMonster, drained, isPraying(), tick);
+		}
+	}
+
+	private boolean isPraying()
+	{
+		for (Prayer prayer : Prayer.values())
+		{
+			if (client.isPrayerActive(prayer))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * e.g. "1 dose per 2:40", or null without enough fighting to tell.
+	 */
+	public String getPrayerDrainText(String monster)
+	{
+		PrayerDrain.Rate rate = prayerDrain.rate(monster);
+		if (rate == null)
+		{
+			return null;
+		}
+		double minutes = PrayerDrain.minutesPerDose(rate, prayerLevel);
+		if (minutes <= 0)
+		{
+			return null;
+		}
+		int seconds = (int) Math.round(minutes * 60);
+		return String.format(Locale.US, "1 dose per %d:%02d", seconds / 60, seconds % 60);
+	}
+
+	/**
+	 * @return prayer potions for the rest of the task at the player's measured drain, or -1
+	 * if it isn't known yet
+	 */
+	public int getTaskPrayerPotions(String task, int killsLeft)
+	{
+		PrayerDrain.Rate rate = task == null || killsLeft <= 0 ? null : prayerDrain.rateForTask(task);
+		return rate == null ? -1 : PrayerDrain.potionsFor(rate, killsLeft, prayerLevel);
+	}
+
+	/**
+	 * Changes when a kill updates the prayer drain rates, for the panel.
+	 */
+	public int getPrayerDrainRevision()
+	{
+		return prayerDrain.getKillRevision();
+	}
+
+	private void savePrayerDrain()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return;
+		}
+		int revision = prayerDrain.getRevision();
+		if (revision == savedPrayerRevision)
+		{
+			return;
+		}
+		savedPrayerRevision = revision;
+		Map<String, PrayerDrain.Rate> state = prayerDrain.exportState();
+		if (state.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, PRAYER_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, PRAYER_KEY, gson.toJson(state));
+	}
+
+	private void loadPrayerDrain()
+	{
+		Map<String, PrayerDrain.Rate> saved = null;
+		if (configManager.getRSProfileKey() != null)
+		{
+			String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, PRAYER_KEY);
+			if (json != null && !json.isEmpty())
+			{
+				try
+				{
+					saved = gson.fromJson(json, new TypeToken<Map<String, PrayerDrain.Rate>>()
+					{
+					}.getType());
+				}
+				catch (JsonParseException e)
+				{
+					saved = null;
+				}
+			}
+		}
+		prayerDrain.importState(saved);
+		savedPrayerRevision = prayerDrain.getRevision();
+	}
+
+	// ---- Casts left -------------------------------------------------------------------------------
+
+	/**
+	 * Each tick while autocasting: how many casts the runes allow.
+	 */
+	private void updateCasts()
+	{
+		CombatStyle.AttackStyle style = attackStyle;
+		MagicMaxHit.Spell spell = config.castsLeft() && style != null && style.getStyle() == CombatStyle.MAGIC
+			? maxHitCalculator.autocastSpell() : null;
+		RuneSupply.Result result = spell == null ? null : RuneSupply.castsLeft(spell, carriedRunes(), unlimitedRunes());
+		if (result == null || result.isUnlimited())
+		{
+			removeCastsBox();
+			return;
+		}
+
+		boolean low = result.getCasts() < config.castsLowWarning();
+		if (low && !castsLowNotified)
+		{
+			notifier.notify(config.castsLowNotification(), "Running low on runes: " + result.getCasts() + " "
+				+ spell.getDisplayName() + " casts left");
+		}
+		castsLowNotified = low;
+
+		RuneSupply.Rune limit = result.getLimitedBy();
+		if (castsInfoBox == null || limit != castsRune)
+		{
+			removeCastsBox();
+			castsRune = limit;
+			castsInfoBox = new CastsInfoBox(itemManager.getImage(RuneSupply.itemFor(limit)), this);
+			infoBoxManager.addInfoBox(castsInfoBox);
+		}
+		castsInfoBox.update(result.getCasts(), low, spell.getDisplayName() + ": " + Formatting.withCommas(result.getCasts())
+			+ " casts left</br>" + limit.getDisplayName() + " runes run out first");
+	}
+
+	private void removeCastsBox()
+	{
+		if (castsInfoBox != null)
+		{
+			infoBoxManager.removeInfoBox(castsInfoBox);
+			castsInfoBox = null;
+			castsRune = null;
+		}
+	}
+
+	/**
+	 * Runes in the inventory and its rune pouch.
+	 */
+	private Map<RuneSupply.Rune, Long> carriedRunes()
+	{
+		Map<RuneSupply.Rune, Long> have = new EnumMap<>(RuneSupply.Rune.class);
+		ItemContainer inventory = client.getItemContainer(InventoryID.INV);
+		boolean pouch = false;
+		if (inventory != null)
+		{
+			for (Item item : inventory.getItems())
+			{
+				if (item.getId() <= 0)
+				{
+					continue;
+				}
+				RuneSupply.add(have, item.getId(), item.getQuantity());
+				pouch |= RUNE_POUCHES.contains(item.getId())
+					|| itemManager.getItemComposition(item.getId()).getName().toLowerCase(Locale.ROOT).contains("rune pouch");
+			}
+		}
+		if (pouch)
+		{
+			EnumComposition runes = client.getEnum(EnumID.RUNEPOUCH_RUNE);
+			for (int i = 0; i < POUCH_TYPES.length; i++)
+			{
+				int type = client.getVarbitValue(POUCH_TYPES[i]);
+				int amount = client.getVarbitValue(POUCH_AMOUNTS[i]);
+				if (type > 0 && amount > 0)
+				{
+					RuneSupply.add(have, runes.getIntValue(type), amount);
+				}
+			}
+		}
+		return have;
+	}
+
+	/**
+	 * Runes the worn weapon and shield give without limit.
+	 */
+	private Set<RuneSupply.Rune> unlimitedRunes()
+	{
+		Set<RuneSupply.Rune> unlimited = java.util.EnumSet.noneOf(RuneSupply.Rune.class);
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		if (worn != null)
+		{
+			for (EquipmentInventorySlot slot : new EquipmentInventorySlot[]{EquipmentInventorySlot.WEAPON, EquipmentInventorySlot.SHIELD})
+			{
+				Item item = worn.getItem(slot.getSlotIdx());
+				if (item != null && item.getId() > 0)
+				{
+					unlimited.addAll(RuneSupply.unlimitedFrom(
+						itemManager.getItemComposition(item.getId()).getName().toLowerCase(Locale.ROOT)));
+				}
+			}
+		}
+		return unlimited;
+	}
+
 	public SlayerGuide getSlayerGuide()
 	{
 		return slayerGuide;
@@ -1980,6 +2367,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		areaMemory.importState(saved);
 		savedAreaRevision = areaMemory.getRevision();
+		loadPrayerDrain();
 		savedBank = bank;
 		bankNames = null;
 		if (bank != null && config.checkBank())

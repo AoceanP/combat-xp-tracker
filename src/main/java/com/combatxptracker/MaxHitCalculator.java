@@ -681,7 +681,7 @@ public class MaxHitCalculator
 		return client.getVarbitValue(VarbitID.INSIDE_WILDERNESS) == 1;
 	}
 
-	private MagicMaxHit.Spell autocastSpell()
+	MagicMaxHit.Spell autocastSpell()
 	{
 		int autocast = client.getVarbitValue(VarbitID.AUTOCAST_SPELL);
 		if (autocast <= 0)

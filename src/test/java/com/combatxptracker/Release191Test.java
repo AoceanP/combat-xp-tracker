@@ -247,7 +247,8 @@ public class Release191Test
 	{
 		AttackTimer timer = new AttackTimer();
 		// The animation arrives before the game says who the player is fighting.
-		timer.onAttackAnimation(200, false, 4);
+		timer.onAttackAnimation(200);
+		timer.confirmPending(200, false, true, 4);
 		assertEquals(-1, timer.ticksLeft(200, 4));
 		// A frame later the target is set: it counts from the tick the animation started.
 		timer.confirmPending(200, true, true, 4);
@@ -259,7 +260,7 @@ public class Release191Test
 	public void targetArrivingNextTickStillCounts()
 	{
 		AttackTimer timer = new AttackTimer();
-		timer.onAttackAnimation(300, false, 5);
+		timer.onAttackAnimation(300);
 		timer.confirmPending(300, false, true, 5);
 		timer.confirmPending(301, true, true, 5);
 		assertEquals(4, timer.ticksLeft(301, 5));
@@ -270,22 +271,55 @@ public class Release191Test
 	{
 		AttackTimer timer = new AttackTimer();
 		// An emote: never gets a target.
-		timer.onAttackAnimation(400, false, 4);
+		timer.onAttackAnimation(400);
 		timer.confirmPending(400, false, true, 4);
 		timer.confirmPending(402, true, true, 4);
 		assertEquals(-1, timer.ticksLeft(402, 4));
 		// Stopped animating before a target appeared.
-		timer.onAttackAnimation(500, false, 4);
+		timer.onAttackAnimation(500);
 		timer.confirmPending(500, true, false, 4);
 		assertEquals(-1, timer.ticksLeft(500, 4));
 	}
 
 	@Test
-	public void animationWithATargetCountsAtOnce()
+	public void animationWithATargetCountsOnTheNextFrame()
 	{
 		AttackTimer timer = new AttackTimer();
-		timer.onAttackAnimation(600, true, 4);
+		timer.onAttackAnimation(600);
+		timer.confirmPending(600, true, true, 4);
 		assertEquals(4, timer.ticksLeft(600, 4));
+	}
+
+	@Test
+	public void blockingAHitIsNotAnAttack()
+	{
+		AttackTimer timer = new AttackTimer();
+		// Attack at 700, then the monster hits back at 702: the block animation is ignored.
+		timer.onAttackAnimation(700);
+		timer.confirmPending(700, true, true, 4);
+		timer.onAttackAnimation(702);
+		timer.onHitTaken(702);
+		timer.confirmPending(702, true, true, 4);
+		assertEquals(2, timer.ticksLeft(702, 4));
+		// Waiting to attack again, a block at 706 doesn't start a new countdown...
+		timer.onAttackAnimation(706);
+		timer.onHitTaken(706);
+		timer.confirmPending(706, true, true, 4);
+		assertEquals(0, timer.ticksLeft(706, 4));
+		// ...but the real attack at 707 does.
+		timer.onAttackAnimation(707);
+		timer.confirmPending(707, true, true, 4);
+		assertEquals(4, timer.ticksLeft(707, 4));
+	}
+
+	@Test
+	public void hitAfterTheAttackTickStillCounts()
+	{
+		AttackTimer timer = new AttackTimer();
+		timer.onHitTaken(799);
+		timer.onAttackAnimation(800);
+		timer.confirmPending(800, true, true, 5);
+		assertEquals(5, timer.ticksLeft(800, 5));
 	}
 
 	@Test

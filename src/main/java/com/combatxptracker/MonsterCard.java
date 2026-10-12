@@ -80,6 +80,7 @@ class MonsterCard extends JPanel
 	private final JLabel ratesLabel = Theme.label("", Theme.SUBTLE);
 	private final JLabel taskLabel = Theme.label("", Theme.SUCCESS);
 	private final JLabel dryLabel = Theme.label("", Theme.MUTED);
+	private final JLabel prayerLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private final JLabel noLootLabel = Theme.label("No drops recorded yet", Theme.SUBTLE);
@@ -138,6 +139,10 @@ class MonsterCard extends JPanel
 		extra.add(taskLabel);
 		dryLabel.setToolTipText("Kills since this monster last dropped an item worth at least your \"Rare drop value\" setting.");
 		extra.add(dryLabel);
+		prayerLabel.setAlignmentX(LEFT_ALIGNMENT);
+		prayerLabel.setToolTipText("<html>How long a prayer potion dose lasts while fighting this monster, measured from your own "
+			+ "prayer drain.<br>Restores don't count, and kills without prayer on aren't included.</html>");
+		extra.add(prayerLabel);
 		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
@@ -254,6 +259,10 @@ class MonsterCard extends JPanel
 		{
 			dryLabel.setVisible(false);
 		}
+
+		String prayer = plugin.getPrayerDrainText(monsterName);
+		prayerLabel.setText(prayer == null ? "" : "Prayer: " + prayer);
+		prayerLabel.setVisible(prayer != null);
 
 		if (taskRemaining > 0)
 		{
