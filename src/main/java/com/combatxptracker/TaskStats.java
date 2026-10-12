@@ -75,6 +75,21 @@ final class TaskStats
 		return activeMillis;
 	}
 
+	int getKills()
+	{
+		return kills;
+	}
+
+	long getSlayerXp()
+	{
+		return slayerXp;
+	}
+
+	long getLoot()
+	{
+		return loot;
+	}
+
 	double getXpPerHour()
 	{
 		return ActivityTimer.perHour(slayerXp, activeMillis);

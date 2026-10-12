@@ -48,6 +48,15 @@ final class SessionSummaryText
 	 */
 	static String build(Map<Skill, SkillProgress> skills, HitStats hits, List<MonsterTracker.Snapshot> monsters, XpRateMode rateMode)
 	{
+		return build(skills, hits, monsters, rateMode, null);
+	}
+
+	/**
+	 * @param luck this session's hit luck, or null
+	 */
+	static String build(Map<Skill, SkillProgress> skills, HitStats hits, List<MonsterTracker.Snapshot> monsters, XpRateMode rateMode,
+		HitLuck.Result luck)
+	{
 		StringBuilder sb = new StringBuilder("Combat & XP Tracker - session summary\n");
 
 		// XP, biggest gains first
@@ -82,6 +91,10 @@ final class SessionSummaryText
 		{
 			sb.append(String.format(Locale.US, "\nHits: %s | Average: %.1f | Biggest: %d\n",
 				Formatting.withCommas(hits.getHitCount()), hits.getAverageDamage(), hits.getMaxHit()));
+		}
+		if (luck != null)
+		{
+			sb.append(luckLine(luck)).append('\n');
 		}
 
 		// Monsters
@@ -137,6 +150,16 @@ final class SessionSummaryText
 		}
 
 		return sb.toString().trim();
+	}
+
+	/**
+	 * e.g. "Luck: top 18% (average hit 54% of max, 3 max hits, about 1.6 expected)".
+	 */
+	static String luckLine(HitLuck.Result luck)
+	{
+		return String.format(Locale.US, "Luck: %s (average hit %d%% of max, %d max %s, about %.1f expected)",
+			luck.label().toLowerCase(Locale.ROOT), Math.round(luck.getAverageShare() * 100), luck.getMaxHits(),
+			luck.getMaxHits() == 1 ? "hit" : "hits", luck.getExpectedMaxHits());
 	}
 
 	static String describe(MonsterTracker.Snapshot s)

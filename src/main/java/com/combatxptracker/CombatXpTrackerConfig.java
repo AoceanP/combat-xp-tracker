@@ -74,6 +74,17 @@ public interface CombatXpTrackerConfig extends Config
 	String suppliesSection = "supplies";
 
 	@ConfigItem(
+		keyName = "masterGoal",
+		name = "Best master by",
+		description = "What the Slayer tab ranks masters by. Set from the tab.",
+		hidden = true
+	)
+	default String masterGoal()
+	{
+		return "XP";
+	}
+
+	@ConfigItem(
 		keyName = "lootDespawnAlert",
 		name = "Loot despawn alert",
 		description = "Shows a countdown to when your oldest monster drop on the ground disappears, and notifies you "

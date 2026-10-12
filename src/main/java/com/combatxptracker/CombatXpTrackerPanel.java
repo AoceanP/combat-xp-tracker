@@ -543,6 +543,16 @@ class CombatXpTrackerPanel extends PluginPanel
 				"<html>Effective levels: your levels with prayer, attack style, the hidden +8 and Void included.<br>"
 					+ "Accuracy and max hit are worked out from these. Atk = Attack, Str = Strength, Rng = Ranged, Mag = Magic.</html>"));
 		}
+		HitLuck.Result luck = plugin.getLuck();
+		if (luck != null)
+		{
+			maxHitDetails.add(detailRow("Luck", luck.label(), false, String.format(java.util.Locale.US,
+				"<html>Your hits this session against your max hit, compared with what's expected from %s hits.<br>"
+					+ "Average hit %d%% of your max (about 50%% is normal), %d max %s (about %.1f expected).<br>"
+					+ "Special attacks and weapons that don't roll evenly aren't counted.</html>",
+				Formatting.withCommas(luck.getHits()), Math.round(luck.getAverageShare() * 100), luck.getMaxHits(),
+				luck.getMaxHits() == 1 ? "hit" : "hits", luck.getExpectedMaxHits())));
+		}
 		if (max.getSpecMaxHit() >= 0)
 		{
 			SpecialAttack spec = max.getSpec();
@@ -829,7 +839,8 @@ class CombatXpTrackerPanel extends PluginPanel
 		List<MonsterTracker.Snapshot> monsters = MonsterTracker.view(
 			tracker.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems())),
 			config.monsterSort(), MonsterTracker.parseNames(config.hiddenMonsters()));
-		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode());
+		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode(),
+			plugin.getLuck());
 
 		try
 		{

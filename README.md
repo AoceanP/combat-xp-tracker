@@ -26,6 +26,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Magic: your autocast spell or a powered staff (tridents, Sanguinesti, Tumeken's shadow, Warped sceptre), magic damage gear, magic prayers and Elite Void
 - Separate max hits for your slayer task (Black mask / Slayer helmet) and against undead (Salve amulet), highlighted when your current target is on task
 - Special attack max hit for your weapon: Armadyl, Bandos, Saradomin, Zamorak and Ancient godswords, Dragon dagger, warhammer, longsword and mace, halberds, Abyssal dagger and bludgeon, and more
+- Luck: once you've landed enough hits, how lucky they've been this session against your max hit ("Top 18%"), with your max hits against how many were expected. Special attacks and weapons that don't roll evenly are left out. It's in the Copy summary too
 - Effective levels: your Attack and Strength (or Ranged, or Magic) with prayer, style, the hidden +8 and Void, which accuracy and max hit are built on
 - Gear bonuses: obsidian armour and Berserker necklace with obsidian weapons, Inquisitor's armour with crush weapons, crystal armour with the Bow of faerdhinen or crystal bow, and charged wilderness weapons in the Wilderness
 - Extra rows for weapons strong against certain monsters, highlighted when you're fighting one: Dragon hunter lance and crossbow (dragons), Arclight, Emberlight, Silverlight and Darklight (demons), Keris (kalphites), and the Twisted bow against high-Magic monsters
@@ -54,6 +55,7 @@ A **Slayer** tab with everything about your slayer progress:
 - Your best area: right-click the area you're doing your task in. The plugin remembers the spot and picks it automatically next time (Konar's areas are picked for you). Each area then shows your own Slayer XP/hr and kills/hr there, your best one is marked, and areas you've found to be multi-combat or in the Wilderness are tagged
 - Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
 - Where to get a task: pick any task (or right-click one anywhere in the tab) to see every master's chance of giving it to you, so you know who to go to for the task you want
+- Best master for you: every slayer master ranked by the Slayer XP, GP or points per hour you'd get from them, using their task chances and your own rates on each task from your log. Tasks you haven't logged use your average, and masters you can't use yet say why
 - Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
 - Prayer potions: on a task, the guide says about how many prayer potions the kills left will take, at your own measured drain
 - What your next task is worth, when the next x5 bonus task comes, and the next big bonus (50th, 100th, 250th, 1,000th task) with how many points each master would give for it, so you can save it for the best one

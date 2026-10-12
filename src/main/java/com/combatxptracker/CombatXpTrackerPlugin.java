@@ -145,6 +145,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String PRAYER_KEY = "prayerDrain";
 	// Prayer drained within this many ticks (6s) of hitting a monster counts towards it.
 	private static final int FIGHT_TICKS = 10;
+	// Hits this soon after a special attack (6 ticks, for projectiles) don't count for luck.
+	private static final int SPEC_LUCK_TICKS = 6;
+	// Weapons whose hits don't roll evenly from 0 to the max hit, or hit more than once.
+	private static final String[] UNEVEN_WEAPONS = {"scythe of vitur", "dual macuahuitl", "venator bow",
+		"osmumten's fang", "keris", "ahrim's", "dharok's", "karil's", "tonalztics", "gadderhammer"};
 	private static final Set<Integer> RUNE_POUCHES = Set.of(ItemID.BH_RUNE_POUCH, ItemID.BH_RUNE_POUCH_TROUVER,
 		ItemID.DIVINE_RUNE_POUCH);
 	private static final int[] POUCH_TYPES = {VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2,
@@ -292,6 +297,14 @@ public class CombatXpTrackerPlugin extends Plugin
 	private CastsInfoBox castsInfoBox;
 	private RuneSupply.Rune castsRune;
 	private boolean castsLowNotified;
+	// Luck of this session's hits, and the last special attack (its hits don't count).
+	private final HitLuck hitLuck = new HitLuck();
+	private int lastSpecEnergy = -1;
+	private int lastSpecTick = Integer.MIN_VALUE / 2;
+	// Every master's task chances and the player's levels, for "best master for you".
+	private volatile Map<SlayerPoints.Master, TaskOdds> allMasterOdds = Collections.emptyMap();
+	private volatile int combatLevel;
+	private volatile int slayerLevel;
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
@@ -409,6 +422,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		removeAllInfoBoxes();
 		skillProgress.clear();
 		hitStats.reset();
+		hitLuck.reset();
+		allMasterOdds = Collections.emptyMap();
 		combinedDropTracker.reset();
 		monsterTracker.reset();
 		sessionMonsters.reset();
@@ -472,6 +487,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			{
 				// Only this session's stats; what's remembered all-time is kept.
 				hitStats.reset();
+				hitLuck.reset();
 				combinedDropTracker.reset();
 				sessionMonsters.reset();
 			}
@@ -590,6 +606,12 @@ public class CombatXpTrackerPlugin extends Plugin
 			updateGroundLoot();
 			trackPrayer();
 			updateCasts();
+			int energy = client.getVarpValue(VarPlayerID.SA_ENERGY);
+			if (lastSpecEnergy >= 0 && energy < lastSpecEnergy)
+			{
+				lastSpecTick = client.getTickCount();
+			}
+			lastSpecEnergy = energy;
 		}
 		// Panel updates are batched to at most one per tick. Hitsplats and XP drops can
 		// fire several times a tick in combat, and refreshing on each made the panel flicker.
@@ -726,6 +748,10 @@ public class CombatXpTrackerPlugin extends Plugin
 			if (taskSession.isTaskMonster(rawName))
 			{
 				taskSession.recordHit(damage, now);
+			}
+			if (damage > 0)
+			{
+				hitLuck.record(damage, luckMaxHit(rawName, style));
 			}
 		}
 
@@ -1525,6 +1551,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		xpPerKill.clear();
 		hitStats.reset();
+		hitLuck.reset();
 		combinedDropTracker.reset();
 		sessionMonsters.reset();
 		if (allTimeToo)
@@ -1892,6 +1919,13 @@ public class CombatXpTrackerPlugin extends Plugin
 			{
 				allTaskNames = Collections.unmodifiableList(slayerGameData.taskNames());
 			}
+			Player local = client.getLocalPlayer();
+			combatLevel = local == null ? 0 : local.getCombatLevel();
+			slayerLevel = client.getRealSkillLevel(Skill.SLAYER);
+			if (status.getMaster() != null)
+			{
+				allMasterOdds = slayerGameData.allOdds(this::blockedTasks);
+			}
 			TaskOdds odds = slayerGameData.odds(status.getMaster(), blockedTasks(status.getMaster()));
 			if (!odds.toString().equals(taskOdds.toString()))
 			{
@@ -2245,6 +2279,110 @@ public class CombatXpTrackerPlugin extends Plugin
 	public SlayerGuide getSlayerGuide()
 	{
 		return slayerGuide;
+	}
+
+	// ---- Luck ---------------------------------------------------------------------------------
+
+	/**
+	 * The max hit a hit on this monster rolled up to, or -1 if it isn't known for sure (a
+	 * special attack, a weapon that doesn't roll evenly, enchanted bolts, Salve).
+	 */
+	private int luckMaxHit(String npcName, CombatStyle hitStyle)
+	{
+		MaxHitCalculator.Result max = maxHitResult;
+		if (max == null || max.getMaxHit() <= 0 || hitStyle != max.getStyle() || max.getVsUndeadMaxHit() > 0
+			|| client.getTickCount() - lastSpecTick <= SPEC_LUCK_TICKS)
+		{
+			return -1;
+		}
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		String weapon = wornName(worn, EquipmentInventorySlot.WEAPON);
+		for (String uneven : UNEVEN_WEAPONS)
+		{
+			if (weapon.contains(uneven))
+			{
+				return -1;
+			}
+		}
+		if (weapon.contains("crossbow") && wornName(worn, EquipmentInventorySlot.AMMO).contains("(e)"))
+		{
+			// Enchanted bolt effects.
+			return -1;
+		}
+		int best = -1;
+		for (MaxHitCalculator.Extra extra : max.getExtras())
+		{
+			if (extra.isHighlight())
+			{
+				best = Math.max(best, extra.getMaxHit());
+			}
+		}
+		if (best > 0)
+		{
+			return best;
+		}
+		if (max.getOnTaskMaxHit() > 0 && taskSession.isTaskMonster(npcName))
+		{
+			return max.getOnTaskMaxHit();
+		}
+		return max.getMaxHit();
+	}
+
+	private String wornName(ItemContainer worn, EquipmentInventorySlot slot)
+	{
+		Item item = worn == null ? null : worn.getItem(slot.getSlotIdx());
+		return item == null || item.getId() <= 0 ? ""
+			: itemManager.getItemComposition(item.getId()).getName().toLowerCase(Locale.ROOT);
+	}
+
+	/**
+	 * @return how lucky this session's hits have been, or null with too few
+	 */
+	public HitLuck.Result getLuck()
+	{
+		return hitLuck.result();
+	}
+
+	// ---- Best master -----------------------------------------------------------------------------
+
+	/**
+	 * Every slayer master ranked for this player, from the task log.
+	 */
+	public List<MasterAdvice.Entry> getMasterAdvice(List<TaskStats> history, MasterAdvice.Goal goal)
+	{
+		Map<SlayerPoints.Master, TaskOdds> odds = allMasterOdds;
+		if (odds.isEmpty())
+		{
+			return Collections.emptyList();
+		}
+		SlayerStatus status = slayerStatus;
+		return MasterAdvice.compute(odds, history, status::hasEliteDiary, combatLevel, slayerLevel, goal);
+	}
+
+	/**
+	 * Changes when the masters' odds are read again.
+	 */
+	public int getMasterOddsKey()
+	{
+		return System.identityHashCode(allMasterOdds);
+	}
+
+	public MasterAdvice.Goal getMasterGoal()
+	{
+		try
+		{
+			return MasterAdvice.Goal.valueOf(config.masterGoal());
+		}
+		catch (IllegalArgumentException e)
+		{
+			return MasterAdvice.Goal.XP;
+		}
+	}
+
+	public void setMasterGoal(MasterAdvice.Goal goal)
+	{
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "masterGoal", goal.name());
+		refreshPanelNow();
 	}
 
 	// ---- Slayer areas ------------------------------------------------------------------------
