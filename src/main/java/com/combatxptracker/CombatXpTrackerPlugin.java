@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Locale;
 import java.util.regex.Matcher;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
@@ -100,9 +101,11 @@ import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.DrawManager;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
+import net.runelite.client.util.ImageCapture;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.Text;
 
@@ -222,6 +225,15 @@ public class CombatXpTrackerPlugin extends Plugin
 	private LootDespawnOverlay lootDespawnOverlay;
 
 	@Inject
+	private DrawManager drawManager;
+
+	@Inject
+	private ImageCapture imageCapture;
+
+	@Inject
+	private ScheduledExecutorService executor;
+
+	@Inject
 	private SlayerGameData slayerGameData;
 
 	@Inject
@@ -305,6 +317,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	private volatile Map<SlayerPoints.Master, TaskOdds> allMasterOdds = Collections.emptyMap();
 	private volatile int combatLevel;
 	private volatile int slayerLevel;
+	// Milestone messages, and the account's name for Gielinor Wrapped.
+	private final Milestones milestones = new Milestones();
+	private volatile String accountName;
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
@@ -752,6 +767,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			if (damage > 0)
 			{
 				hitLuck.record(damage, luckMaxHit(rawName, style));
+				announceMilestone(milestones.onHit(damage, name, style));
 			}
 		}
 
@@ -1000,6 +1016,11 @@ public class CombatXpTrackerPlugin extends Plugin
 		String tracked = BossGroups.trackedName(npcName);
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
+		if (config.rememberMonsters())
+		{
+			// Without remembered monsters the counts restart every session.
+			announceMilestone(Milestones.onKill(tracked, monsterTracker.getKills(tracked), monsterTracker.getTotalKills()));
+		}
 		xpPerKill.recordKill(tracked);
 		prayerDrain.onKill(tracked, client.getTickCount());
 		if (taskSession.isTaskMonster(npcName))
@@ -1257,6 +1278,11 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 
+		Player me = client.getLocalPlayer();
+		if (me != null && me.getName() != null)
+		{
+			accountName = me.getName();
+		}
 		attackStyle = maxHitCalculator.readAttackStyle();
 		attackSpeedTicks = maxHitCalculator.attackSpeed(attackStyle);
 		String task = maxHitCalculator.readSlayerTaskName();
@@ -1397,6 +1423,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		// 1.5.x saved each Royal Titan (etc.) separately and had no High Alchemy values.
 		monsterTracker.rename(BossGroups::trackedName);
 		monsterTracker.fillMissingHaPrices(id -> id == ItemID.COINS ? 1 : itemManager.getItemComposition(id).getHaPrice());
+		milestones.setRecord(monsterTracker.getBiggestHit(), monsterTracker.getTotalHits());
 		engagedNpcs.clear();
 		countedKills.clear();
 		savedMonsterRevision = monsterTracker.getRevision();
@@ -2281,6 +2308,42 @@ public class CombatXpTrackerPlugin extends Plugin
 		return slayerGuide;
 	}
 
+	// ---- Milestones and Wrapped ------------------------------------------------------------------
+
+	private void announceMilestone(String message)
+	{
+		if (message == null || !config.milestoneMessages())
+		{
+			return;
+		}
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.GAMEMESSAGE)
+			.runeLiteFormattedMessage(new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append("Milestone: ")
+				.append(ChatColorType.NORMAL)
+				.append(message)
+				.build())
+			.build());
+		if (config.milestoneScreenshot())
+		{
+			String fileName = "Milestone " + message.replaceAll("[^A-Za-z0-9 ,()]", "").trim();
+			drawManager.requestNextFrameListener(frame ->
+			{
+				BufferedImage image = ImageUtil.bufferedImageFromImage(frame);
+				executor.submit(() -> imageCapture.saveScreenshot(image, fileName, "Milestones", false, false));
+			});
+		}
+	}
+
+	/**
+	 * The logged-in account's name, or null.
+	 */
+	public String getAccountName()
+	{
+		return accountName;
+	}
+
 	// ---- Luck ---------------------------------------------------------------------------------
 
 	/**
@@ -2365,24 +2428,6 @@ public class CombatXpTrackerPlugin extends Plugin
 	public int getMasterOddsKey()
 	{
 		return System.identityHashCode(allMasterOdds);
-	}
-
-	public MasterAdvice.Goal getMasterGoal()
-	{
-		try
-		{
-			return MasterAdvice.Goal.valueOf(config.masterGoal());
-		}
-		catch (IllegalArgumentException e)
-		{
-			return MasterAdvice.Goal.XP;
-		}
-	}
-
-	public void setMasterGoal(MasterAdvice.Goal goal)
-	{
-		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "masterGoal", goal.name());
-		refreshPanelNow();
 	}
 
 	// ---- Slayer areas ------------------------------------------------------------------------
@@ -2649,6 +2694,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		slayerLog.add(pendingTaskRecord);
 		pendingTaskRecord = null;
+		announceMilestone(Milestones.onTask(slayerLog.getTasks().size()));
 		saveSlayerLog();
 		panelDirty = true;
 	}

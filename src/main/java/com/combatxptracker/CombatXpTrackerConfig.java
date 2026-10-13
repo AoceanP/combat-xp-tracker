@@ -74,17 +74,6 @@ public interface CombatXpTrackerConfig extends Config
 	String suppliesSection = "supplies";
 
 	@ConfigItem(
-		keyName = "masterGoal",
-		name = "Best master by",
-		description = "What the Slayer tab ranks masters by. Set from the tab.",
-		hidden = true
-	)
-	default String masterGoal()
-	{
-		return "XP";
-	}
-
-	@ConfigItem(
 		keyName = "lootDespawnAlert",
 		name = "Loot despawn alert",
 		description = "Shows a countdown to when your oldest monster drop on the ground disappears, and notifies you "
@@ -440,6 +429,31 @@ public interface CombatXpTrackerConfig extends Config
 	default Notification superiorNotification()
 	{
 		return Notification.OFF;
+	}
+
+	@ConfigItem(
+		keyName = "milestoneMessages",
+		name = "Milestone messages",
+		description = "A chat message for milestones: 100, 500, 1,000 (and more) kills of a monster, total kills, "
+			+ "your 10th, 50th, 100th (and more) slayer task, and a new biggest hit ever.",
+		position = 16,
+		section = combatSection
+	)
+	default boolean milestoneMessages()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "milestoneScreenshot",
+		name = "Screenshot milestones",
+		description = "Also saves a screenshot for each milestone, in RuneLite's screenshots folder under Milestones.",
+		position = 16,
+		section = combatSection
+	)
+	default boolean milestoneScreenshot()
+	{
+		return false;
 	}
 
 	@ConfigItem(

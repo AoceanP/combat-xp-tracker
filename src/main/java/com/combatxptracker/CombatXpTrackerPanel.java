@@ -187,12 +187,19 @@ class CombatXpTrackerPanel extends PluginPanel
 		JLabel title = Theme.boldLabel("Combat & XP Tracker", Theme.TEXT);
 		header.add(title, BorderLayout.NORTH);
 
-		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
+		// Two rows, so "Wrapped" fits the sidebar.
+		JPanel buttons = new JPanel(new GridLayout(2, 2, 4, 4));
 		buttons.setOpaque(false);
 		JLabel[] copy = new JLabel[1];
 		copy[0] = Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post",
 			() -> copySummary(copy[0]));
 		buttons.add(copy[0]);
+		buttons.add(Theme.flatButton("Wrapped", "Gielinor Wrapped: your lifetime stats, to look back on or share",
+			this::showWrapped));
+		JLabel[] export = new JLabel[1];
+		export[0] = Theme.flatButton("Export", "Save your monsters, slayer task log or goals as a spreadsheet (CSV)",
+			() -> exportMenu().show(export[0], 0, export[0].getHeight()));
+		buttons.add(export[0]);
 		buttons.add(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset));
 		header.add(buttons, BorderLayout.CENTER);
 		return header;
@@ -855,6 +862,81 @@ class CombatXpTrackerPanel extends PluginPanel
 		Timer restore = new Timer(1500, e -> button.setText("Copy"));
 		restore.setRepeats(false);
 		restore.start();
+	}
+
+	// ---- Wrapped and export ------------------------------------------------------
+
+	private List<MonsterTracker.Snapshot> allTimeMonsters()
+	{
+		return plugin.getMonsterTracker(MonsterRange.ALL_TIME)
+			.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems()), config.rareDropValue());
+	}
+
+	private void showWrapped()
+	{
+		WrappedStats stats = WrappedStats.of(allTimeMonsters(), plugin.getSlayerTasks(), config.lootPrice());
+		WrappedDialog.show(this, stats, plugin.getAccountName());
+	}
+
+	private javax.swing.JPopupMenu exportMenu()
+	{
+		javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+		menu.add(exportItems("Monsters (all time)", "monsters", () -> CsvExport.monsters(MonsterTracker.view(allTimeMonsters(),
+			config.monsterSort(), java.util.Collections.emptySet()))));
+		menu.add(exportItems("Slayer task log", "slayer-tasks", () -> CsvExport.tasks(plugin.getSlayerTasks(), config.lootPrice(),
+			java.time.ZoneId.systemDefault())));
+		menu.add(exportItems("Goals", "goals", () -> CsvExport.goals(plugin.getSkillProgress(), config.xpRateMode())));
+		return menu;
+	}
+
+	private javax.swing.JMenu exportItems(String title, String fileName, java.util.function.Supplier<String> csv)
+	{
+		javax.swing.JMenu sub = new javax.swing.JMenu(title);
+		javax.swing.JMenuItem save = new javax.swing.JMenuItem("Save as CSV file...");
+		save.addActionListener(e -> saveCsv(fileName, csv.get()));
+		javax.swing.JMenuItem copy = new javax.swing.JMenuItem("Copy as CSV");
+		copy.setToolTipText("Paste straight into Excel or Google Sheets");
+		copy.addActionListener(e ->
+		{
+			try
+			{
+				Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(csv.get()), null);
+			}
+			catch (IllegalStateException ex)
+			{
+				JOptionPane.showMessageDialog(this, "The clipboard is busy. Try again.", "Export", JOptionPane.WARNING_MESSAGE);
+			}
+		});
+		sub.add(save);
+		sub.add(copy);
+		return sub;
+	}
+
+	private void saveCsv(String fileName, String csv)
+	{
+		javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
+		chooser.setDialogTitle("Save as spreadsheet");
+		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("CSV spreadsheet", "csv"));
+		chooser.setSelectedFile(new java.io.File("combat-xp-tracker-" + fileName + ".csv"));
+		if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION)
+		{
+			return;
+		}
+		java.io.File file = chooser.getSelectedFile();
+		if (!file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".csv"))
+		{
+			file = new java.io.File(file.getParentFile(), file.getName() + ".csv");
+		}
+		try
+		{
+			// The byte order mark tells Excel the file is UTF-8.
+			java.nio.file.Files.write(file.toPath(), ("\uFEFF" + csv).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		}
+		catch (java.io.IOException ex)
+		{
+			JOptionPane.showMessageDialog(this, "Couldn't save the file:\n" + ex.getMessage(), "Export",
+				JOptionPane.ERROR_MESSAGE);
+		}
 	}
 
 	// ---- Dialogs ----------------------------------------------------------------

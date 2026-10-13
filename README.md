@@ -55,7 +55,7 @@ A **Slayer** tab with everything about your slayer progress:
 - Your best area: right-click the area you're doing your task in. The plugin remembers the spot and picks it automatically next time (Konar's areas are picked for you). Each area then shows your own Slayer XP/hr and kills/hr there, your best one is marked, and areas you've found to be multi-combat or in the Wilderness are tagged
 - Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
 - Where to get a task: pick any task (or right-click one anywhere in the tab) to see every master's chance of giving it to you, so you know who to go to for the task you want
-- Best master for you: every slayer master ranked by the Slayer XP, GP or points per hour you'd get from them, using their task chances and your own rates on each task from your log. Tasks you haven't logged use your average, and masters you can't use yet say why
+- Master tip: if another slayer master would clearly give you more Slayer XP per hour (10% or more), a tip under the next task odds says so. It uses each master's task chances and your own rate on each task from your log
 - Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
 - Prayer potions: on a task, the guide says about how many prayer potions the kills left will take, at your own measured drain
 - What your next task is worth, when the next x5 bonus task comes, and the next big bonus (50th, 100th, 250th, 1,000th task) with how many points each master would give for it, so you can save it for the best one
@@ -69,8 +69,11 @@ A **Slayer** tab with everything about your slayer progress:
 ## Themes
 Twelve colour themes for the sidebar in the settings: Dark (the original, and the default), Classic, Midnight, Abyssal, Zamorak, Saradomin, Guthix, Armadyl (light), Bandos, Dragonfire, Frostbite and Venom. Each theme has its own accent colour, unless you've picked your own goal bar colour.
 
-## Session summary
+## Session summary and sharing
 - **Copy** puts a text summary of your session (XP, hits, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
+- **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
+- **Export** saves your monsters, slayer task log or goals as a CSV spreadsheet for Excel or Google Sheets, or copies it to paste straight in
+- Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, and a new biggest hit ever. Optionally a screenshot of each one
 
 ## Overlays
 - Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)

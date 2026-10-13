@@ -49,6 +49,11 @@ final class MasterAdvice
 	 * Logged tasks needed before comparing masters at all.
 	 */
 	static final int MIN_KNOWN_TASKS = 3;
+	/**
+	 * Only suggest another master when they'd be at least this much better (10%), so small
+	 * differences inside the estimate's margin don't nag.
+	 */
+	static final double MIN_TIP_GAIN = 0.10;
 
 	enum Goal
 	{
@@ -172,6 +177,45 @@ final class MasterAdvice
 
 	private MasterAdvice()
 	{
+	}
+
+	/**
+	 * @return the master's entry, or null
+	 */
+	static Entry find(List<Entry> entries, SlayerPoints.Master master)
+	{
+		for (Entry e : entries)
+		{
+			if (e.master == master)
+			{
+				return e;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The master clearly better for Slayer XP than the player's own, for the tip under the
+	 * next task odds. Both must have enough of the task log behind them.
+	 *
+	 * @return the better master, or null if the player's master is fine (or it can't be told)
+	 */
+	static Entry betterThan(List<Entry> entries, SlayerPoints.Master current, double minGain)
+	{
+		Entry yours = find(entries, current);
+		if (yours == null || !yours.ranked || yours.xpPerHour <= 0)
+		{
+			return null;
+		}
+		Entry best = null;
+		for (Entry e : entries)
+		{
+			if (e.ranked && e.master != current && (best == null || e.xpPerHour > best.xpPerHour))
+			{
+				best = e;
+			}
+		}
+		return best != null && best.xpPerHour >= yours.xpPerHour * (1 + minGain) ? best : null;
 	}
 
 	/**

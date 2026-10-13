@@ -66,7 +66,6 @@ class SlayerView extends JPanel
 	private final JPanel guideCard = card();
 	private final JPanel oddsCard = card();
 	private final JPanel sourcesCard = card();
-	private final JPanel mastersCard = card();
 	private final JPanel rankCard = card();
 	private final JPanel pointsCard = card();
 	private final JPanel superiorCard = card();
@@ -105,7 +104,6 @@ class SlayerView extends JPanel
 		add(pointsCard);
 		add(holder(oddsCard));
 		add(holder(sourcesCard));
-		add(holder(mastersCard));
 		add(superiorCard);
 		add(holder(rankCard));
 		add(logHeader);
@@ -127,7 +125,7 @@ class SlayerView extends JPanel
 		int potions = plugin.getTaskPrayerPotions(status.getTask(), status.getRemaining());
 		String key = status + "|" + plugin.getSlayerLogRevision() + "|" + taskSuperiors + "|" + taskKills + "|" + price
 			+ "|" + guide + "|" + odds + "|" + sources + "|" + taskArea + "|" + plugin.getAreaRevision() + "|" + potions
-			+ "|" + plugin.getMasterOddsKey() + "|" + plugin.getMasterGoal();
+			+ "|" + plugin.getMasterOddsKey();
 		if (key.equals(viewKey))
 		{
 			return;
@@ -139,9 +137,8 @@ class SlayerView extends JPanel
 		updateStatus(status);
 		updateGuide(guide, tasks, price, taskArea, potions, status.getRemaining());
 		updatePoints(status);
-		updateOdds(odds, history);
+		updateOdds(odds, history, status.getMaster());
 		updateSources(sources);
-		updateMasters(history, status.getMaster());
 		updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null);
 		updateRanking(history);
 		updateLog(tasks, price);
@@ -388,7 +385,7 @@ class SlayerView extends JPanel
 	/**
 	 * The likeliest next tasks from your master, with right-click to mark one as blocked.
 	 */
-	private void updateOdds(TaskOdds odds, List<TaskStats> history)
+	private void updateOdds(TaskOdds odds, List<TaskStats> history, SlayerPoints.Master current)
 	{
 		oddsCard.removeAll();
 		if (odds.getMaster() == null || odds.getOptions().isEmpty())
@@ -434,6 +431,20 @@ class SlayerView extends JPanel
 			oddsCard.add(wrapped("Block or skip idea: " + advice.getTask() + " (" + String.format(Locale.US, "%.1f%%", o.getChance() * 100)
 				+ " chance) is your slowest task at " + Formatting.compactXp(Math.round(advice.getXpPerHour())) + " Slayer xp/hr.",
 				Theme.GOLD));
+		}
+		MasterAdvice.Entry better = MasterAdvice.betterThan(plugin.getMasterAdvice(history, MasterAdvice.Goal.XP), current,
+			MasterAdvice.MIN_TIP_GAIN);
+		if (better != null)
+		{
+			MasterAdvice.Entry yours = MasterAdvice.find(plugin.getMasterAdvice(history, MasterAdvice.Goal.XP), current);
+			long gain = Math.round((better.getXpPerHour() / yours.getXpPerHour() - 1) * 100);
+			JLabel tip = wrapped("Tip: " + better.getMaster().getDisplayName() + " would be about " + gain
+				+ "% more Slayer XP/hr for you, from your task log.", Theme.SUCCESS);
+			tip.setToolTipText("<html>Your expected Slayer XP/hr, from each master's task chances and your own rate on each task:<br>"
+				+ better.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(better.getXpPerHour())) + " xp/hr<br>"
+				+ yours.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(yours.getXpPerHour())) + " xp/hr<br>"
+				+ "Tasks you haven't logged count at your average rate.</html>");
+			oddsCard.add(tip);
 		}
 		if (blockedList.getComponentCount() > 0)
 		{
@@ -544,107 +555,6 @@ class SlayerView extends JPanel
 		}
 		sourcesCard.add(wrapped("From each master's task weights with your levels, unlocks and blocked tasks. "
 			+ "Quest requirements aren't in the game data, so it's an estimate.", Theme.SUBTLE));
-	}
-
-	/**
-	 * Every master ranked for this player, by their own rates on each task.
-	 */
-	private void updateMasters(List<TaskStats> history, SlayerPoints.Master current)
-	{
-		mastersCard.removeAll();
-		MasterAdvice.Goal goal = plugin.getMasterGoal();
-		List<MasterAdvice.Entry> entries = plugin.getMasterAdvice(history, goal);
-		if (entries.isEmpty())
-		{
-			mastersCard.setVisible(false);
-			return;
-		}
-		mastersCard.setVisible(true);
-		mastersCard.add(title("Best master for you"));
-
-		JPanel goals = new JPanel(new java.awt.GridLayout(1, MasterAdvice.Goal.values().length, 3, 0));
-		goals.setOpaque(false);
-		for (MasterAdvice.Goal g : MasterAdvice.Goal.values())
-		{
-			JLabel option = Theme.boldLabel(g.getDisplayName(), g == goal ? Theme.TEXT : Theme.MUTED);
-			option.setHorizontalAlignment(SwingConstants.CENTER);
-			option.setOpaque(true);
-			option.setBackground(g == goal ? Theme.highlight(Theme.ACCENT, 0.6f) : Theme.HEADER);
-			option.setBorder(BorderFactory.createEmptyBorder(3, 2, 3, 2));
-			option.setToolTipText("Rank masters by " + g.getDisplayName().toLowerCase(Locale.ROOT) + " per hour");
-			option.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
-			option.addMouseListener(new java.awt.event.MouseAdapter()
-			{
-				@Override
-				public void mouseClicked(java.awt.event.MouseEvent e)
-				{
-					plugin.setMasterGoal(g);
-				}
-			});
-			goals.add(option);
-		}
-		mastersCard.add(goals);
-
-		boolean anyRanked = false;
-		MasterAdvice.Entry best = null;
-		for (MasterAdvice.Entry e : entries)
-		{
-			if (e.isRanked() && (best == null || e.value(goal) > best.value(goal)))
-			{
-				best = e;
-			}
-		}
-		for (MasterAdvice.Entry e : entries)
-		{
-			String name = e.getMaster().getDisplayName() + (e.getMaster() == current ? " (yours)" : "");
-			if (e.getUnavailable() != null)
-			{
-				mastersCard.add(row(name, "-", Theme.SUBTLE, e.getUnavailable()));
-				continue;
-			}
-			if (!e.isRanked())
-			{
-				mastersCard.add(row(name, "?", Theme.SUBTLE, "<html>Not enough of your task log covers "
-					+ e.getMaster().getDisplayName() + "'s tasks yet (" + Math.round(e.getCoverage() * 100) + "% known)</html>"));
-				continue;
-			}
-			anyRanked = true;
-			double value = e.value(goal);
-			String text = value < 0 ? "Varies" : goal == MasterAdvice.Goal.POINTS
-				? String.format(Locale.US, "%.0f pts/hr", value)
-				: Formatting.compactXp(Math.round(value)) + (goal == MasterAdvice.Goal.GP ? " gp/hr" : " xp/hr");
-			JPanel row = row(name, text, e == best ? Theme.SUCCESS : Theme.TEXT, masterTooltip(e));
-			if (e == best)
-			{
-				row.setBackground(Theme.highlight(Theme.SUCCESS, 0.8f));
-			}
-			mastersCard.add(row);
-		}
-		if (anyRanked && best != null)
-		{
-			mastersCard.add(wrapped("From your task log and each master's task chances. Your log covers "
-				+ Math.round(best.getCoverage() * 100) + "% of " + best.getMaster().getDisplayName()
-				+ "'s tasks; the rest use your average rate. Points leave out bonus tasks.", Theme.SUBTLE));
-		}
-		else
-		{
-			mastersCard.add(wrapped("Do a few more tasks (at least " + MasterAdvice.MIN_KNOWN_TASKS
-				+ " different ones, " + TaskStats.MIN_ACTIVE_MILLIS / 60_000 + "+ minutes each) to compare masters.", Theme.SUBTLE));
-		}
-	}
-
-	private static String masterTooltip(MasterAdvice.Entry e)
-	{
-		StringBuilder sb = new StringBuilder("<html><b>").append(e.getMaster().getDisplayName()).append("</b> for you:<br>")
-			.append(Formatting.compactXp(Math.round(e.getXpPerHour()))).append(" Slayer xp/hr<br>")
-			.append(Formatting.compactXp(Math.round(e.getGpPerHour()))).append(" gp/hr<br>");
-		if (e.getPointsPerTask() >= 0)
-		{
-			sb.append(e.getPointsPerTask()).append(" points a task (bonus tasks aside)<br>");
-		}
-		sb.append("About ").append(Formatting.duration(e.getHoursPerTask())).append(" of fighting a task<br>")
-			.append("Your log covers ").append(Math.round(e.getCoverage() * 100)).append("% of their tasks");
-		return sb.append("</html>").toString();
 	}
 
 	/**

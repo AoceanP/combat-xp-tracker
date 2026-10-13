@@ -446,6 +446,54 @@ public class MonsterTracker
 		revision++;
 	}
 
+	/**
+	 * @return kills of one monster
+	 */
+	public synchronized int getKills(String monsterName)
+	{
+		Entry e = monsterName == null ? null : entries.get(monsterName);
+		return e == null ? 0 : e.kills;
+	}
+
+	/**
+	 * @return kills of every monster together
+	 */
+	public synchronized long getTotalKills()
+	{
+		long total = 0;
+		for (Entry e : entries.values())
+		{
+			total += e.kills;
+		}
+		return total;
+	}
+
+	/**
+	 * @return the biggest hit on any monster, or -1
+	 */
+	public synchronized int getBiggestHit()
+	{
+		int biggest = -1;
+		for (Entry e : entries.values())
+		{
+			biggest = Math.max(biggest, e.biggestHit);
+		}
+		return biggest;
+	}
+
+	/**
+	 * @return hits on every monster together
+	 */
+	public synchronized long getTotalHits()
+	{
+		long total = 0;
+		for (Entry e : entries.values())
+		{
+			total += e.hits;
+		}
+		return total;
+	}
+
 	public synchronized void recordLoot(String monsterName, List<Drop> drops, long nowMillis)
 	{
 		if (isBlank(monsterName) || drops.isEmpty())
