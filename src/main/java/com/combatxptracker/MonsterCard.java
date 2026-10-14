@@ -62,6 +62,7 @@ import net.runelite.client.util.QuantityFormatter;
 class MonsterCard extends JPanel
 {
 	private static final int ITEMS_PER_ROW = 5;
+	private static final CombatStyle[] STYLES = {CombatStyle.MELEE, CombatStyle.RANGED, CombatStyle.MAGIC};
 	private static final Dimension ITEM_SIZE = new Dimension(40, 36);
 
 	private final ItemManager itemManager;
@@ -73,14 +74,18 @@ class MonsterCard extends JPanel
 	private final JLabel valueLabel = Theme.label("", Theme.GOLD);
 
 	private final JPanel body = new JPanel(new BorderLayout(0, 6));
-	private final JLabel hitsLabel = Theme.label("", Theme.MUTED);
-	private final JLabel avgLabel = Theme.label("", Theme.MUTED);
-	private final JLabel maxLabel = Theme.label("", Theme.TEXT);
-	private final JPanel styleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+	private final JLabel hitsLabel = Theme.boldLabel("", Theme.TEXT);
+	private final JLabel avgLabel = Theme.boldLabel("", Theme.TEXT);
+	private final JLabel maxLabel = Theme.boldLabel("", Theme.TEXT);
+	// Biggest hit per style, always Melee, Ranged, Magic so the columns line up across cards.
+	private final JPanel styleRow = new JPanel(new GridLayout(1, STYLES.length, 3, 0));
+	private final Map<CombatStyle, JLabel> styleValues = new java.util.EnumMap<>(CombatStyle.class);
 	private final JLabel ratesLabel = Theme.label("", Theme.SUBTLE);
 	private final JLabel taskLabel = Theme.label("", Theme.SUCCESS);
 	private final JLabel dryLabel = Theme.label("", Theme.MUTED);
 	private final JLabel prayerLabel = Theme.label("", Theme.MUTED);
+	private final JLabel collectionLabel = Theme.label("", Theme.GOLD);
+	private final JLabel missingLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private final JLabel noLootLabel = Theme.label("No drops recorded yet", Theme.SUBTLE);
@@ -114,15 +119,23 @@ class MonsterCard extends JPanel
 		header.add(valueLabel, BorderLayout.EAST);
 
 		// Body
-		JPanel statsRow = new JPanel(new GridLayout(1, 3, 6, 0));
+		JPanel statsRow = new JPanel(new GridLayout(1, 3, 3, 0));
 		statsRow.setOpaque(false);
-		statsRow.add(hitsLabel);
-		statsRow.add(avgLabel);
-		statsRow.add(maxLabel);
+		statsRow.add(tile(hitsLabel, "Hits"));
+		statsRow.add(tile(avgLabel, "Avg hit"));
+		statsRow.add(tile(maxLabel, "Max hit"));
 
 		styleRow.setOpaque(false);
+		for (CombatStyle style : STYLES)
+		{
+			JLabel value = Theme.boldLabel("-", Theme.SUBTLE);
+			styleValues.put(style, value);
+			JPanel tile = tile(value, style.getDisplayName());
+			tile.setToolTipText("Biggest " + style.getDisplayName().toLowerCase() + " hit on " + monsterName);
+			styleRow.add(tile);
+		}
 
-		JPanel stats = new JPanel(new BorderLayout(0, 4));
+		JPanel stats = new JPanel(new BorderLayout(0, 3));
 		stats.setOpaque(false);
 		stats.add(statsRow, BorderLayout.NORTH);
 		stats.add(styleRow, BorderLayout.CENTER);
@@ -143,6 +156,10 @@ class MonsterCard extends JPanel
 		prayerLabel.setToolTipText("<html>How long a prayer potion dose lasts while fighting this monster, measured from your own "
 			+ "prayer drain.<br>Restores don't count, and kills without prayer on aren't included.</html>");
 		extra.add(prayerLabel);
+		collectionLabel.setAlignmentX(LEFT_ALIGNMENT);
+		extra.add(collectionLabel);
+		missingLabel.setAlignmentX(LEFT_ALIGNMENT);
+		extra.add(missingLabel);
 		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
@@ -226,6 +243,71 @@ class MonsterCard extends JPanel
 		return monsterName;
 	}
 
+	/**
+	 * A small stat tile: the value above a caption, centred, like the tiles at the top of the
+	 * panel.
+	 */
+	private static JPanel tile(JLabel value, String caption)
+	{
+		JPanel tile = new JPanel(new BorderLayout(0, 0));
+		tile.setBackground(Theme.HEADER);
+		tile.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+		value.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+		JLabel label = Theme.label(caption, Theme.MUTED);
+		label.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+		tile.add(value, BorderLayout.NORTH);
+		tile.add(label, BorderLayout.SOUTH);
+		return tile;
+	}
+
+	/**
+	 * e.g. "Collection log 3/6, 1,214 kc", or "Collection log complete (8/8)".
+	 */
+	static String collectionText(CollectionLog.Status log)
+	{
+		String kc = log.getKillCount() >= 0 ? ", " + Formatting.withCommas(log.getKillCount()) + " kc" : "";
+		if (log.isComplete())
+		{
+			return "Collection log complete (" + log.getTotal() + "/" + log.getTotal() + ")";
+		}
+		return "Collection log " + log.getObtained() + "/" + log.getTotal() + kc;
+	}
+
+	/**
+	 * e.g. "Missing Vorki, Vorkath's head +1". Hover for the full list.
+	 */
+	static String missingText(CollectionLog.Status log)
+	{
+		List<String> missing = log.getMissing();
+		int shown = Math.min(2, missing.size());
+		StringBuilder sb = new StringBuilder("Missing ").append(String.join(", ", missing.subList(0, shown)));
+		if (missing.size() > shown)
+		{
+			sb.append(" +").append(missing.size() - shown);
+		}
+		return "<html><div style='width:150px'>" + sb + "</div></html>";
+	}
+
+	private static String collectionTooltip(CollectionLog.Status log)
+	{
+		StringBuilder sb = new StringBuilder("<html>Collection log: ").append(log.getObtained()).append(" of ")
+			.append(log.getTotal()).append(" items");
+		if (log.getKillCount() >= 0)
+		{
+			sb.append("<br>Kill count: ").append(Formatting.withCommas(log.getKillCount()));
+		}
+		if (!log.getMissing().isEmpty())
+		{
+			sb.append("<br><br>Still missing:");
+			for (String item : log.getMissing())
+			{
+				sb.append("<br>").append(item);
+			}
+		}
+		return sb.append("<br><br>Updated when you open this page in the Collection Log, and when a new item is added.</html>")
+			.toString();
+	}
+
 	private void toggleCollapsed()
 	{
 		collapsed = !collapsed;
@@ -260,6 +342,19 @@ class MonsterCard extends JPanel
 			dryLabel.setVisible(false);
 		}
 
+		CollectionLog.Status log = plugin.getCollectionStatus(monsterName);
+		collectionLabel.setVisible(log != null);
+		missingLabel.setVisible(log != null && !log.isComplete());
+		if (log != null)
+		{
+			String tooltip = collectionTooltip(log);
+			collectionLabel.setText(collectionText(log));
+			collectionLabel.setForeground(log.isComplete() ? Theme.SUCCESS : Theme.GOLD);
+			collectionLabel.setToolTipText(tooltip);
+			missingLabel.setText(missingText(log));
+			missingLabel.setToolTipText(tooltip);
+		}
+
 		String prayer = plugin.getPrayerDrainText(monsterName);
 		prayerLabel.setText(prayer == null ? "" : "Prayer: " + prayer);
 		prayerLabel.setVisible(prayer != null);
@@ -284,27 +379,27 @@ class MonsterCard extends JPanel
 		valueLabel.setText(s.getLootValue() > 0 ? QuantityFormatter.quantityToStackSize(s.getLootValue()) + " gp" : "");
 		valueLabel.setToolTipText(s.getLootValue() > 0 ? Formatting.withCommas(s.getLootValue()) + " gp" : null);
 
-		hitsLabel.setText("Hits " + Formatting.withCommas(s.getHits()));
-		avgLabel.setText(String.format(java.util.Locale.US, "Avg %.1f", s.getAverageHit()));
+		hitsLabel.setText(Formatting.withCommas(s.getHits()));
+		avgLabel.setText(String.format(java.util.Locale.US, "%.1f", s.getAverageHit()));
 		if (s.getBiggestHit() >= 0)
 		{
-			maxLabel.setText("Max " + s.getBiggestHit());
+			maxLabel.setText(String.valueOf(s.getBiggestHit()));
 			CombatStyle style = s.getBiggestHitStyle();
 			maxLabel.setForeground(style != null ? style.getColor() : Theme.TEXT);
 			maxLabel.setToolTipText(style != null ? "Biggest hit, dealt with " + style.getDisplayName() : "Biggest hit");
 		}
 		else
 		{
-			maxLabel.setText("Max -");
+			maxLabel.setText("-");
 			maxLabel.setForeground(Theme.SUBTLE);
 		}
 
-		styleRow.removeAll();
-		for (Map.Entry<CombatStyle, Integer> e : s.getBiggestByStyle().entrySet())
+		for (CombatStyle style : STYLES)
 		{
-			JLabel chip = Theme.label(e.getKey().getDisplayName() + " " + e.getValue(), e.getKey().getColor());
-			chip.setToolTipText("Biggest " + e.getKey().getDisplayName().toLowerCase() + " hit on " + monsterName);
-			styleRow.add(chip);
+			Integer biggest = s.getBiggestByStyle().get(style);
+			JLabel value = styleValues.get(style);
+			value.setText(biggest == null ? "-" : String.valueOf(biggest));
+			value.setForeground(biggest == null ? Theme.SUBTLE : style.getColor());
 		}
 		styleRow.setVisible(!s.getBiggestByStyle().isEmpty());
 

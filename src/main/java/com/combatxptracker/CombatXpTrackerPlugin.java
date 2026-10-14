@@ -73,12 +73,16 @@ import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
 import net.runelite.api.events.ItemSpawned;
+import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.StatChanged;
+import net.runelite.api.ScriptID;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
@@ -146,6 +150,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String AREAS_KEY = "slayerAreas";
 	private static final String BANK_KEY = "bankItems";
 	private static final String PRAYER_KEY = "prayerDrain";
+	private static final String COLLECTION_KEY = "collectionLog";
 	// Prayer drained within this many ticks (6s) of hitting a monster counts towards it.
 	private static final int FIGHT_TICKS = 10;
 	// Hits this soon after a special attack (6 ticks, for projectiles) don't count for luck.
@@ -320,6 +325,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	// Milestone messages, and the account's name for Gielinor Wrapped.
 	private final Milestones milestones = new Milestones();
 	private volatile String accountName;
+	// What the player has from each collection log page they've opened.
+	private final CollectionLog collectionLog = new CollectionLog();
+	private int savedCollectionRevision = -1;
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
@@ -413,6 +421,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		savedPrayerRevision = -1;
 		lastPrayerPoints = -1;
 		fightMonster = null;
+		collectionLog.importState(null);
+		savedCollectionRevision = -1;
 		attackTimer.reset();
 		slayerLog.importState(null);
 		savedSlayerLogRevision = -1;
@@ -834,6 +844,11 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (event.getType() != ChatMessageType.GAMEMESSAGE)
 		{
 			return;
+		}
+		if (collectionLog.onNewItem(text))
+		{
+			saveCollectionLog();
+			panelDirty = true;
 		}
 		int killCount = BossFight.parseKillCount(text);
 		if (killCount > 0)
@@ -2308,6 +2323,166 @@ public class CombatXpTrackerPlugin extends Plugin
 		return slayerGuide;
 	}
 
+	// ---- Collection log -------------------------------------------------------------------------
+
+	/**
+	 * The Collection Log drew a page: save what the player has from it.
+	 */
+	@Subscribe
+	public void onScriptPostFired(ScriptPostFired event)
+	{
+		if (event.getScriptId() != ScriptID.COLLECTION_DRAW_LIST)
+		{
+			return;
+		}
+		Widget header = client.getWidget(InterfaceID.Collection.HEADER);
+		Widget contents = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
+		if (header == null || contents == null || contents.getDynamicChildren() == null || isOtherPlayersLog())
+		{
+			return;
+		}
+		List<String> lines = new ArrayList<>();
+		addTexts(lines, header.getDynamicChildren());
+		addTexts(lines, header.getChildren());
+		Widget headerText = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
+		if (headerText != null)
+		{
+			lines.add(Text.removeTags(headerText.getText() == null ? "" : headerText.getText()));
+			addTexts(lines, headerText.getDynamicChildren());
+		}
+		String title = null;
+		for (String line : lines)
+		{
+			if (!line.isEmpty())
+			{
+				title = line;
+				break;
+			}
+		}
+		List<CollectionLog.Item> items = new ArrayList<>();
+		for (Widget w : contents.getDynamicChildren())
+		{
+			if (w.getItemId() > 0)
+			{
+				// Missing items are drawn faded; obtained ones fully opaque.
+				items.add(new CollectionLog.Item(w.getItemId(), itemManager.getItemComposition(w.getItemId()).getName(),
+					w.getOpacity() == 0));
+			}
+		}
+		collectionLog.syncPage(title, items, lines, pageKills(title));
+		saveCollectionLog();
+		panelDirty = true;
+	}
+
+	/**
+	 * Someone else's log, seen through a house's Adventure Log: its title names them.
+	 */
+	private boolean isOtherPlayersLog()
+	{
+		Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
+		Player me = client.getLocalPlayer();
+		if (frame == null || me == null || me.getName() == null)
+		{
+			return false;
+		}
+		List<String> texts = new ArrayList<>();
+		addTexts(texts, frame.getDynamicChildren());
+		addTexts(texts, frame.getChildren());
+		return CollectionLog.isOtherPlayersTitle(texts, me.getName());
+	}
+
+	private static void addTexts(List<String> lines, Widget[] widgets)
+	{
+		if (widgets == null)
+		{
+			return;
+		}
+		for (Widget w : widgets)
+		{
+			if (w != null && w.getText() != null && !w.getText().isEmpty())
+			{
+				lines.add(Text.removeTags(w.getText()).trim());
+			}
+		}
+	}
+
+	/**
+	 * All-time kills of every monster that belongs to a collection log page.
+	 */
+	private long pageKills(String title)
+	{
+		long kills = 0;
+		if (title == null)
+		{
+			return 0;
+		}
+		for (MonsterTracker.Snapshot s : monsterTracker.snapshot())
+		{
+			if (CollectionLog.matches(title, s.getName()))
+			{
+				kills += s.getKills();
+			}
+		}
+		return kills;
+	}
+
+	/**
+	 * @return the monster's collection log progress, or null if its page hasn't been opened
+	 */
+	public CollectionLog.Status getCollectionStatus(String monster)
+	{
+		String title = collectionLog.titleFor(monster);
+		return title == null ? null : collectionLog.status(monster, pageKills(title));
+	}
+
+	public int getCollectionRevision()
+	{
+		return collectionLog.getRevision();
+	}
+
+	private void saveCollectionLog()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return;
+		}
+		int revision = collectionLog.getRevision();
+		if (revision == savedCollectionRevision)
+		{
+			return;
+		}
+		savedCollectionRevision = revision;
+		if (collectionLog.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, COLLECTION_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, COLLECTION_KEY, gson.toJson(collectionLog.exportState()));
+	}
+
+	private void loadCollectionLog()
+	{
+		List<CollectionLog.Page> saved = null;
+		if (configManager.getRSProfileKey() != null)
+		{
+			String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, COLLECTION_KEY);
+			if (json != null && !json.isEmpty())
+			{
+				try
+				{
+					CollectionLog.Page[] pages = gson.fromJson(json, CollectionLog.Page[].class);
+					saved = pages == null ? null : Arrays.asList(pages);
+				}
+				catch (JsonParseException e)
+				{
+					saved = null;
+				}
+			}
+		}
+		collectionLog.importState(saved);
+		savedCollectionRevision = collectionLog.getRevision();
+	}
+
 	// ---- Milestones and Wrapped ------------------------------------------------------------------
 
 	private void announceMilestone(String message)
@@ -2551,6 +2726,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		areaMemory.importState(saved);
 		savedAreaRevision = areaMemory.getRevision();
 		loadPrayerDrain();
+		loadCollectionLog();
 		savedBank = bank;
 		bankNames = null;
 		if (bank != null && config.checkBank())

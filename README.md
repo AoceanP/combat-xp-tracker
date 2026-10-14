@@ -41,6 +41,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Your slayer task on the matching card: kills left and roughly how long at your kill rate
 - A chat summary when you finish a slayer task: kills, time, loot, GP/hr and biggest hit
 - A chat summary when you kill a boss: fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
+- Collection log: open a boss's page in the in-game Collection Log and its monster card shows how many of its items you have, which ones you're still missing and your kill count. It stays up to date as new items are added. Bosses and raids only, since slayer monsters share one page
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop
 - Pin monsters to the top of the list, and drag pinned monsters into your own order
 - Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
