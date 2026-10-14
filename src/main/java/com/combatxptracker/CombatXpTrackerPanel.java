@@ -39,6 +39,7 @@ import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
@@ -70,6 +71,7 @@ import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.IconTextField;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
+import net.runelite.client.util.Filepath;
 import net.runelite.client.util.QuantityFormatter;
 
 /**
@@ -914,25 +916,25 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private void saveCsv(String fileName, String csv)
 	{
-		javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
-		chooser.setDialogTitle("Save as spreadsheet");
-		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("CSV spreadsheet", "csv"));
-		chooser.setSelectedFile(new java.io.File("combat-xp-tracker-" + fileName + ".csv"));
-		if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION)
+		// RuneLite's Filepath API, as plugin hub plugins should use for file i/o.
+		List<Filepath> chosen = new Filepath.Chooser()
+			.setIsSave()
+			.setAcceptsFiles()
+			.setDialogTitle("Save as spreadsheet")
+			.addExtensionFilter("CSV spreadsheet", "csv")
+			.setDefaultExtension("csv")
+			.setFileName("combat-xp-tracker-" + fileName + ".csv")
+			.showDialog(this);
+		if (chosen == null || chosen.isEmpty())
 		{
 			return;
-		}
-		java.io.File file = chooser.getSelectedFile();
-		if (!file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".csv"))
-		{
-			file = new java.io.File(file.getParentFile(), file.getName() + ".csv");
 		}
 		try
 		{
 			// The byte order mark tells Excel the file is UTF-8.
-			java.nio.file.Files.write(file.toPath(), ("\uFEFF" + csv).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			chosen.get(0).write("\uFEFF" + csv);
 		}
-		catch (java.io.IOException ex)
+		catch (IOException ex)
 		{
 			JOptionPane.showMessageDialog(this, "Couldn't save the file:\n" + ex.getMessage(), "Export",
 				JOptionPane.ERROR_MESSAGE);
