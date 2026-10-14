@@ -48,6 +48,9 @@ final class SlayerTaskRecord
 	int superiors;
 	// -1 when unknown (e.g. Mortimer).
 	int points = -1;
+	// Supplies used (gp, Grand Exchange) and cannonballs fired. 0 in logs from before 1.9.6.
+	long supplies;
+	int cannonballs;
 
 	long loot(LootPrice price)
 	{

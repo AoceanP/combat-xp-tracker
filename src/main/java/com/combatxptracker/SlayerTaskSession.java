@@ -47,6 +47,8 @@ final class SlayerTaskSession
 	private String master;
 	private String location;
 	private String area;
+	private long supplies;
+	private int cannonballs;
 	private final ActivityTimer activity = new ActivityTimer();
 
 	void start(String taskName)
@@ -63,6 +65,8 @@ final class SlayerTaskSession
 		master = null;
 		location = null;
 		area = null;
+		supplies = 0;
+		cannonballs = 0;
 		activity.reset();
 	}
 
@@ -87,6 +91,15 @@ final class SlayerTaskSession
 	String getArea()
 	{
 		return area;
+	}
+
+	/**
+	 * Supplies used on the task: their gp, and cannonballs fired.
+	 */
+	void recordSupplies(long gp, int balls)
+	{
+		supplies += Math.max(0, gp);
+		cannonballs += Math.max(0, balls);
 	}
 
 	void recordSuperior()
@@ -121,6 +134,8 @@ final class SlayerTaskSession
 		r.master = master;
 		r.location = location;
 		r.area = area;
+		r.supplies = supplies;
+		r.cannonballs = cannonballs;
 		r.assigned = assigned;
 		r.kills = kills;
 		r.endMillis = endMillis;
@@ -228,6 +243,10 @@ final class SlayerTaskSession
 		if (superiors > 0)
 		{
 			sb.append(", ").append(superiors).append(superiors == 1 ? " superior" : " superiors");
+		}
+		if (supplies > 0)
+		{
+			sb.append(", ").append(Formatting.compactXp(supplies)).append(" gp of supplies");
 		}
 		return sb.append('.').toString();
 	}

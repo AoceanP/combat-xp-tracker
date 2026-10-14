@@ -28,8 +28,9 @@ package com.combatxptracker;
  * Ticks until the player can attack again, from their weapon's attack speed (OSRS Wiki,
  * "Attack speed").
  *
- * Attacks are spotted from the player's attack animation and from combat XP drops, so it's
- * a close estimate rather than the game's own timer. Used on the client thread only.
+ * Attacks are spotted once a tick: when the weapon is ready and the player has a target and
+ * an attack animation playing. Combat XP drops, which come on the tick of an attack that
+ * lands, correct it. A close estimate rather than the game's own timer. Client thread only.
  */
 final class AttackTimer
 {
@@ -51,10 +52,6 @@ final class AttackTimer
 	static final int IDLE_TICKS = 16;
 
 	private int lastAttackTick = -1;
-	// An animation that may be an attack, waiting to be checked.
-	private int pendingAnimationTick = -1;
-	// The last tick the player was hit: an animation then is usually a block, not an attack.
-	private int hitTakenTick = -1;
 
 	/**
 	 * @param weaponSpeed        the weapon's attack speed in ticks, or 0 when unarmed
@@ -98,45 +95,18 @@ final class AttackTimer
 	}
 
 	/**
-	 * The player started an animation that could be an attack. It's held until
-	 * {@link #confirmPending} has seen the rest of that tick: whether the player has a target
-	 * (on the first attack of a fight the game can send the animation a moment before it says
-	 * who the player is fighting), and whether they were hit, which makes it a block.
+	 * Checked once every game tick. When the weapon is ready again and the player is
+	 * attacking something (a target, and an attack-like animation playing), that's an attack.
+	 * While the weapon is cooling down nothing can restart the count, so the animation
+	 * played when the player is hit (a block) never looks like an attack.
+	 *
+	 * @param attacking whether the player has a target and is animating
 	 */
-	void onAttackAnimation(int tick)
+	void onTick(int tick, boolean attacking, int speed)
 	{
-		pendingAnimationTick = tick;
-	}
-
-	/**
-	 * Something hit the player. Being hit plays the weapon's block animation, which isn't an
-	 * attack; blocks differ for every weapon, so they're told apart this way.
-	 */
-	void onHitTaken(int tick)
-	{
-		hitTakenTick = tick;
-	}
-
-	/**
-	 * Checked every client frame: a held animation counts as the attack (on the tick it
-	 * started) once the player has a target, within the next tick, unless they were hit on
-	 * that tick. Attacks that land still count through their XP drop.
-	 */
-	void confirmPending(int tick, boolean hasTarget, boolean animating, int speed)
-	{
-		if (pendingAnimationTick < 0)
+		if (attacking && (lastAttackTick < 0 || tick < lastAttackTick || tick - lastAttackTick >= speed))
 		{
-			return;
-		}
-		if (tick > pendingAnimationTick + 1 || tick < pendingAnimationTick || !animating
-			|| hitTakenTick == pendingAnimationTick)
-		{
-			pendingAnimationTick = -1;
-		}
-		else if (hasTarget)
-		{
-			onAttackSignal(pendingAnimationTick, speed);
-			pendingAnimationTick = -1;
+			lastAttackTick = tick;
 		}
 	}
 
@@ -155,7 +125,5 @@ final class AttackTimer
 	void reset()
 	{
 		lastAttackTick = -1;
-		pendingAnimationTick = -1;
-		hitTakenTick = -1;
 	}
 }

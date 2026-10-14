@@ -85,6 +85,7 @@ class MonsterCard extends JPanel
 	private final JLabel dryLabel = Theme.label("", Theme.MUTED);
 	private final JLabel prayerLabel = Theme.label("", Theme.MUTED);
 	private final JLabel collectionLabel = Theme.label("", Theme.GOLD);
+	private final JLabel suppliesLabel = Theme.label("", Theme.MUTED);
 	private final JLabel missingLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
@@ -160,6 +161,9 @@ class MonsterCard extends JPanel
 		extra.add(collectionLabel);
 		missingLabel.setAlignmentX(LEFT_ALIGNMENT);
 		extra.add(missingLabel);
+		suppliesLabel.setAlignmentX(LEFT_ALIGNMENT);
+		suppliesLabel.setVisible(false);
+		extra.add(suppliesLabel);
 		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
@@ -241,6 +245,20 @@ class MonsterCard extends JPanel
 	String getMonsterName()
 	{
 		return monsterName;
+	}
+
+	/**
+	 * Supplies used fighting this monster, or null for none.
+	 */
+	void updateSupplies(SupplyLedger.Totals supplies)
+	{
+		boolean show = supplies != null && supplies.totalGp() > 0;
+		suppliesLabel.setVisible(show);
+		if (show)
+		{
+			suppliesLabel.setText("Supplies used: " + Formatting.compactXp(supplies.totalGp()) + " gp");
+			suppliesLabel.setToolTipText(SupplyLedger.tooltip(supplies));
+		}
 	}
 
 	/**

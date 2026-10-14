@@ -240,86 +240,57 @@ public class Release191Test
 		assertFalse(new SlayerGuide("X", Collections.emptyList(), Collections.emptyList()).isBankKnown());
 	}
 
-	// ---- Attack timer: first attack of a fight ---------------------------------------------
+	// ---- Attack timer (reworked in 1.9.6: checked once a tick) ---------------------------------
 
 	@Test
-	public void firstAttackCountsOnceTheTargetIsKnown()
+	public void attackCountsWhenReadyAndAttacking()
 	{
 		AttackTimer timer = new AttackTimer();
-		// The animation arrives before the game says who the player is fighting.
-		timer.onAttackAnimation(200);
-		timer.confirmPending(200, false, true, 4);
+		timer.onTick(200, false, 4);
 		assertEquals(-1, timer.ticksLeft(200, 4));
-		// A frame later the target is set: it counts from the tick the animation started.
-		timer.confirmPending(200, true, true, 4);
-		assertEquals(4, timer.ticksLeft(200, 4));
-		assertEquals(3, timer.ticksLeft(201, 4));
+		timer.onTick(201, true, 4);
+		assertEquals(4, timer.ticksLeft(201, 4));
+		assertEquals(3, timer.ticksLeft(202, 4));
 	}
 
 	@Test
-	public void targetArrivingNextTickStillCounts()
+	public void blocksWhileCoolingDownAreIgnored()
 	{
 		AttackTimer timer = new AttackTimer();
-		timer.onAttackAnimation(300);
-		timer.confirmPending(300, false, true, 5);
-		timer.confirmPending(301, true, true, 5);
-		assertEquals(4, timer.ticksLeft(301, 5));
-	}
-
-	@Test
-	public void animationWithoutAFightIsIgnored()
-	{
-		AttackTimer timer = new AttackTimer();
-		// An emote: never gets a target.
-		timer.onAttackAnimation(400);
-		timer.confirmPending(400, false, true, 4);
-		timer.confirmPending(402, true, true, 4);
-		assertEquals(-1, timer.ticksLeft(402, 4));
-		// Stopped animating before a target appeared.
-		timer.onAttackAnimation(500);
-		timer.confirmPending(500, true, false, 4);
-		assertEquals(-1, timer.ticksLeft(500, 4));
-	}
-
-	@Test
-	public void animationWithATargetCountsOnTheNextFrame()
-	{
-		AttackTimer timer = new AttackTimer();
-		timer.onAttackAnimation(600);
-		timer.confirmPending(600, true, true, 4);
-		assertEquals(4, timer.ticksLeft(600, 4));
-	}
-
-	@Test
-	public void blockingAHitIsNotAnAttack()
-	{
-		AttackTimer timer = new AttackTimer();
-		// Attack at 700, then the monster hits back at 702: the block animation is ignored.
-		timer.onAttackAnimation(700);
-		timer.confirmPending(700, true, true, 4);
-		timer.onAttackAnimation(702);
-		timer.onHitTaken(702);
-		timer.confirmPending(702, true, true, 4);
+		// Attack at 700. The monster hits back at 701 and 702: still animating with a target.
+		timer.onTick(700, true, 4);
+		timer.onTick(701, true, 4);
+		timer.onTick(702, true, 4);
 		assertEquals(2, timer.ticksLeft(702, 4));
-		// Waiting to attack again, a block at 706 doesn't start a new countdown...
-		timer.onAttackAnimation(706);
-		timer.onHitTaken(706);
-		timer.confirmPending(706, true, true, 4);
-		assertEquals(0, timer.ticksLeft(706, 4));
-		// ...but the real attack at 707 does.
-		timer.onAttackAnimation(707);
-		timer.confirmPending(707, true, true, 4);
-		assertEquals(4, timer.ticksLeft(707, 4));
+		timer.onTick(703, true, 4);
+		// Ready again at 704, and swinging: a new attack.
+		timer.onTick(704, true, 4);
+		assertEquals(4, timer.ticksLeft(704, 4));
 	}
 
 	@Test
-	public void hitAfterTheAttackTickStillCounts()
+	public void waitingForATargetKeepsShowingReady()
 	{
 		AttackTimer timer = new AttackTimer();
-		timer.onHitTaken(799);
-		timer.onAttackAnimation(800);
-		timer.confirmPending(800, true, true, 5);
-		assertEquals(5, timer.ticksLeft(800, 5));
+		timer.onTick(800, true, 5);
+		for (int tick = 801; tick <= 808; tick++)
+		{
+			timer.onTick(tick, false, 5);
+		}
+		assertEquals(0, timer.ticksLeft(808, 5));
+		// The next swing.
+		timer.onTick(809, true, 5);
+		assertEquals(5, timer.ticksLeft(809, 5));
+	}
+
+	@Test
+	public void xpDropCorrectsTheTiming()
+	{
+		AttackTimer timer = new AttackTimer();
+		// The animation was missed, but the XP drop from the hit landed on 900.
+		timer.onAttackSignal(900, 4);
+		timer.onTick(901, true, 4);
+		assertEquals(3, timer.ticksLeft(901, 4));
 	}
 
 	@Test

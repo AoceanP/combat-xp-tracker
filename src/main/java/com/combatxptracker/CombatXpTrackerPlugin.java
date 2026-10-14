@@ -64,9 +64,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.TileItem;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.ActorDeath;
-import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
-import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
@@ -79,6 +77,7 @@ import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.StatChanged;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.ScriptID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
@@ -151,6 +150,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String BANK_KEY = "bankItems";
 	private static final String PRAYER_KEY = "prayerDrain";
 	private static final String COLLECTION_KEY = "collectionLog";
+	private static final String SUPPLIES_KEY = "supplies";
+	// Supplies used within this many ticks (30s) of hitting a monster count towards it.
+	private static final int SUPPLY_TICKS = 50;
+	// The cannon's ball count drops by one a shot; bigger drops are it being picked up.
+	private static final int MAX_CANNON_SHOT = 2;
 	// Prayer drained within this many ticks (6s) of hitting a monster counts towards it.
 	private static final int FIGHT_TICKS = 10;
 	// Hits this soon after a special attack (6 ticks, for projectiles) don't count for luck.
@@ -328,6 +332,17 @@ public class CombatXpTrackerPlugin extends Plugin
 	// What the player has from each collection log page they've opened.
 	private final CollectionLog collectionLog = new CollectionLog();
 	private int savedCollectionRevision = -1;
+	// Supplies used per monster (all time and this session), and what was carried last.
+	private final SupplyLedger allTimeSupplies = new SupplyLedger();
+	private final SupplyLedger sessionSupplies = new SupplyLedger();
+	private int savedSuppliesRevision = -1;
+	private Map<Integer, Long> lastInventory;
+	private SupplyLedger.Category pendingConsume;
+	private int pendingConsumeTick;
+	private Map<Integer, Long> lastRunes;
+	private int lastAmmoId = -1;
+	private long lastAmmoQty;
+	private int lastCannonBalls = -1;
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
@@ -423,6 +438,14 @@ public class CombatXpTrackerPlugin extends Plugin
 		fightMonster = null;
 		collectionLog.importState(null);
 		savedCollectionRevision = -1;
+		saveSupplies();
+		allTimeSupplies.importState(null);
+		sessionSupplies.reset();
+		savedSuppliesRevision = -1;
+		lastInventory = null;
+		lastRunes = null;
+		pendingConsume = null;
+		lastCannonBalls = -1;
 		attackTimer.reset();
 		slayerLog.importState(null);
 		savedSlayerLogRevision = -1;
@@ -505,6 +528,10 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveSlayerLog();
 			saveAreaMemory();
 			savePrayerDrain();
+			saveSupplies();
+			lastInventory = null;
+			lastRunes = null;
+			lastCannonBalls = -1;
 			groundLoot.clear();
 			groundLootStatus = null;
 			lastPrayerPoints = -1;
@@ -513,6 +540,7 @@ public class CombatXpTrackerPlugin extends Plugin
 				// Only this session's stats; what's remembered all-time is kept.
 				hitStats.reset();
 				hitLuck.reset();
+				sessionSupplies.reset();
 				combinedDropTracker.reset();
 				sessionMonsters.reset();
 			}
@@ -609,6 +637,10 @@ public class CombatXpTrackerPlugin extends Plugin
 	public void onGameTick(GameTick tick)
 	{
 		refreshCombatState();
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			attackTimer.onTick(client.getTickCount(), isAttacking(), attackSpeedTicks);
+		}
 		pruneKillTracking();
 		pruneFights();
 		finishPendingTaskRecord();
@@ -625,12 +657,14 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveSlayerLog();
 			saveAreaMemory();
 			savePrayerDrain();
+			saveSupplies();
 		}
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
 			updateGroundLoot();
 			trackPrayer();
 			updateCasts();
+			trackRunesAndAmmo();
 			int energy = client.getVarpValue(VarPlayerID.SA_ENERGY);
 			if (lastSpecEnergy >= 0 && energy < lastSpecEnergy)
 			{
@@ -715,9 +749,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		Hitsplat hitsplat = event.getHitsplat();
 		if (event.getActor() == client.getLocalPlayer())
 		{
-			// Damage taken, not dealt. The hit plays a block animation the attack timer
-			// shouldn't take for an attack.
-			attackTimer.onHitTaken(client.getTickCount());
+			// Damage taken, not dealt.
 			return;
 		}
 		if (!hitsplat.isMine())
@@ -965,37 +997,38 @@ public class CombatXpTrackerPlugin extends Plugin
 	}
 
 	/**
-	 * The player starting an attack animation while fighting something.
+	 * Whether the player is attacking something right now: an attack-like animation playing
+	 * while targeting an NPC that can be fought (or a player).
 	 */
-	@Subscribe
-	public void onAnimationChanged(AnimationChanged event)
+	private boolean isAttacking()
 	{
 		Player local = client.getLocalPlayer();
-		if (local == null || event.getActor() != local)
+		if (local == null)
 		{
-			return;
+			return false;
 		}
 		int animation = local.getAnimation();
 		if (animation == -1 || NON_ATTACK_ANIMATIONS.contains(animation))
 		{
-			return;
+			return false;
 		}
-		attackTimer.onAttackAnimation(client.getTickCount());
-	}
-
-	/**
-	 * Confirms an attack animation that started before the player had a target.
-	 */
-	@Subscribe
-	public void onClientTick(ClientTick event)
-	{
-		Player local = client.getLocalPlayer();
-		if (local != null)
+		Actor target = local.getInteracting();
+		if (target instanceof Player)
 		{
-			int animation = local.getAnimation();
-			attackTimer.confirmPending(client.getTickCount(), local.getInteracting() != null,
-				animation != -1 && !NON_ATTACK_ANIMATIONS.contains(animation), attackSpeedTicks);
+			return true;
 		}
+		if (!(target instanceof NPC))
+		{
+			return false;
+		}
+		NPC npc = (NPC) target;
+		Integer health = npcManager.getHealth(npc.getId());
+		if (health != null && health > 0)
+		{
+			return true;
+		}
+		String[] actions = npc.getComposition() == null ? null : npc.getComposition().getActions();
+		return actions != null && Arrays.asList(actions).contains("Attack");
 	}
 
 	/**
@@ -1055,6 +1088,13 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		String option = Text.removeTags(event.getMenuOption());
+		if (event.getItemId() > 0 && ("Eat".equalsIgnoreCase(option) || "Drink".equalsIgnoreCase(option)))
+		{
+			// The item changes in the inventory on the next tick.
+			pendingConsume = "Eat".equalsIgnoreCase(option) ? SupplyLedger.Category.FOOD : SupplyLedger.Category.POTIONS;
+			pendingConsumeTick = client.getTickCount();
+		}
 		MenuEntry entry = event.getMenuEntry();
 		NPC npc = entry.getNpc();
 		if (npc == null || !LOOT_OPTION.equals(Text.removeTags(entry.getOption())))
@@ -1078,6 +1118,20 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			rememberBank();
 			return;
+		}
+		if (event.getContainerId() == InventoryID.INV)
+		{
+			Map<Integer, Long> now = inventoryCounts(event.getItemContainer());
+			if (pendingConsume != null && lastInventory != null && client.getTickCount() - pendingConsumeTick <= 2)
+			{
+				long gp = SupplyLedger.consumedValue(lastInventory, now, itemManager::getItemPrice);
+				if (!now.equals(lastInventory))
+				{
+					recordSupply(pendingConsume, gp, 1);
+					pendingConsume = null;
+				}
+			}
+			lastInventory = now;
 		}
 		if (event.getContainerId() != InventoryID.INV || pendingLootNpc == null)
 		{
@@ -1594,11 +1648,13 @@ public class CombatXpTrackerPlugin extends Plugin
 		xpPerKill.clear();
 		hitStats.reset();
 		hitLuck.reset();
+		sessionSupplies.reset();
 		combinedDropTracker.reset();
 		sessionMonsters.reset();
 		if (allTimeToo)
 		{
 			monsterTracker.reset();
+			allTimeSupplies.reset();
 			prayerDrain.importState(null);
 		}
 		for (SkillProgress progress : skillProgress.values())
@@ -1613,6 +1669,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		monsterTracker.remove(name);
 		sessionMonsters.remove(name);
 		prayerDrain.remove(name);
+		allTimeSupplies.remove(name);
+		sessionSupplies.remove(name);
 		refreshPanelNow();
 	}
 
@@ -2318,6 +2376,188 @@ public class CombatXpTrackerPlugin extends Plugin
 		return unlimited;
 	}
 
+	// ---- Supplies used ---------------------------------------------------------------------------
+
+	/**
+	 * Records supplies used. They count towards the monster fought in the last 30 seconds,
+	 * and its slayer task. Cannonballs count for the task even while AFK.
+	 */
+	private void recordSupply(SupplyLedger.Category category, long gp, long count)
+	{
+		int tick = client.getTickCount();
+		boolean fighting = fightMonster != null && tick - lastFightTick <= SUPPLY_TICKS && tick >= lastFightTick;
+		boolean cannon = category == SupplyLedger.Category.CANNONBALLS;
+		if (!fighting && !cannon)
+		{
+			return;
+		}
+		if (fighting)
+		{
+			allTimeSupplies.record(fightMonster, category, gp, count);
+			sessionSupplies.record(fightMonster, category, gp, count);
+		}
+		if (taskSession.isActive() && (fighting ? taskSession.isTaskMonster(fightMonster) : cannon))
+		{
+			taskSession.recordSupplies(gp, cannon ? (int) count : 0);
+		}
+		panelDirty = true;
+	}
+
+	/**
+	 * Each tick: runes and ammo used up since the last tick, while fighting.
+	 */
+	private void trackRunesAndAmmo()
+	{
+		int tick = client.getTickCount();
+		boolean fighting = fightMonster != null && tick - lastFightTick <= FIGHT_TICKS && tick >= lastFightTick
+			&& !isBankOpen();
+
+		Map<Integer, Long> runes = carriedRuneItems();
+		if (lastRunes != null && fighting)
+		{
+			Map<Integer, Long> used = SupplyLedger.decreases(lastRunes, runes);
+			long count = 0;
+			long gp = 0;
+			for (Map.Entry<Integer, Long> e : used.entrySet())
+			{
+				count += e.getValue();
+				gp += e.getValue() * itemManager.getItemPrice(e.getKey());
+			}
+			recordSupply(SupplyLedger.Category.RUNES, gp, count);
+		}
+		lastRunes = runes;
+
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		Item ammo = worn == null ? null : worn.getItem(EquipmentInventorySlot.AMMO.getSlotIdx());
+		int ammoId = ammo == null ? -1 : ammo.getId();
+		long ammoQty = ammo == null ? 0 : ammo.getQuantity();
+		if (fighting && ammoId > 0 && ammoId == lastAmmoId && ammoQty < lastAmmoQty)
+		{
+			long used = lastAmmoQty - ammoQty;
+			recordSupply(SupplyLedger.Category.AMMO, used * itemManager.getItemPrice(ammoId), used);
+		}
+		lastAmmoId = ammoId;
+		lastAmmoQty = ammoQty;
+	}
+
+	/**
+	 * Rune items in the inventory and rune pouch, by item.
+	 */
+	private Map<Integer, Long> carriedRuneItems()
+	{
+		Map<Integer, Long> runes = new HashMap<>();
+		ItemContainer inventory = client.getItemContainer(InventoryID.INV);
+		boolean pouch = false;
+		if (inventory != null)
+		{
+			for (Item item : inventory.getItems())
+			{
+				if (RuneSupply.isRune(item.getId()))
+				{
+					runes.merge(item.getId(), (long) item.getQuantity(), Long::sum);
+				}
+				pouch |= RUNE_POUCHES.contains(item.getId());
+			}
+		}
+		if (pouch)
+		{
+			EnumComposition types = client.getEnum(EnumID.RUNEPOUCH_RUNE);
+			for (int i = 0; i < POUCH_TYPES.length; i++)
+			{
+				int type = client.getVarbitValue(POUCH_TYPES[i]);
+				int amount = client.getVarbitValue(POUCH_AMOUNTS[i]);
+				if (type > 0 && amount > 0)
+				{
+					runes.merge(types.getIntValue(type), (long) amount, Long::sum);
+				}
+			}
+		}
+		return runes;
+	}
+
+	private boolean isBankOpen()
+	{
+		Widget bank = client.getWidget(InterfaceID.Bankmain.UNIVERSE);
+		return bank != null && !bank.isHidden();
+	}
+
+	/**
+	 * The cannon's ball count went down: a shot each.
+	 */
+	@Subscribe
+	public void onVarbitChanged(VarbitChanged event)
+	{
+		if (event.getVarpId() != VarPlayerID.ROCKTHROWER)
+		{
+			return;
+		}
+		int balls = event.getValue();
+		int fired = lastCannonBalls - balls;
+		// Picking the cannon up empties it at once; only single shots are used up.
+		if (lastCannonBalls >= 0 && fired > 0 && fired <= MAX_CANNON_SHOT)
+		{
+			recordSupply(SupplyLedger.Category.CANNONBALLS, fired * (long) itemManager.getItemPrice(ItemID.MCANNONBALL), fired);
+		}
+		lastCannonBalls = balls;
+	}
+
+	/**
+	 * @return supplies used fighting a monster, for the range shown, or null
+	 */
+	public SupplyLedger.Totals getSupplies(String monster, MonsterRange range)
+	{
+		return (range == MonsterRange.SESSION ? sessionSupplies : allTimeSupplies).get(monster);
+	}
+
+	public int getSuppliesRevision()
+	{
+		return allTimeSupplies.getRevision() + sessionSupplies.getRevision();
+	}
+
+	private void saveSupplies()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return;
+		}
+		int revision = allTimeSupplies.getRevision();
+		if (revision == savedSuppliesRevision)
+		{
+			return;
+		}
+		savedSuppliesRevision = revision;
+		if (!config.rememberMonsters() || allTimeSupplies.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, SUPPLIES_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, SUPPLIES_KEY, gson.toJson(allTimeSupplies.exportState()));
+	}
+
+	private void loadSupplies()
+	{
+		Map<String, SupplyLedger.Totals> saved = null;
+		if (config.rememberMonsters() && configManager.getRSProfileKey() != null)
+		{
+			String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, SUPPLIES_KEY);
+			if (json != null && !json.isEmpty())
+			{
+				try
+				{
+					saved = gson.fromJson(json, new TypeToken<Map<String, SupplyLedger.Totals>>()
+					{
+					}.getType());
+				}
+				catch (JsonParseException e)
+				{
+					saved = null;
+				}
+			}
+		}
+		allTimeSupplies.importState(saved);
+		savedSuppliesRevision = allTimeSupplies.getRevision();
+	}
+
 	public SlayerGuide getSlayerGuide()
 	{
 		return slayerGuide;
@@ -2727,6 +2967,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		savedAreaRevision = areaMemory.getRevision();
 		loadPrayerDrain();
 		loadCollectionLog();
+		loadSupplies();
 		savedBank = bank;
 		bankNames = null;
 		if (bank != null && config.checkBank())

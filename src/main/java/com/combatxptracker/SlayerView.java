@@ -761,6 +761,10 @@ class SlayerView extends JPanel
 		{
 			append(extra, "+" + r.points + " pts");
 		}
+		if (r.supplies > 0)
+		{
+			append(extra, Formatting.compactXp(r.supplies) + " supplies");
+		}
 		if (extra.length() > 0)
 		{
 			card.add(Theme.label(extra.toString(), loot > 0 ? Theme.GOLD : Theme.SUBTLE));
@@ -815,6 +819,14 @@ class SlayerView extends JPanel
 		if (r.biggestHit >= 0)
 		{
 			sb.append("<br>Biggest hit: ").append(r.biggestHit);
+		}
+		if (r.supplies > 0)
+		{
+			sb.append("<br>Supplies used: ").append(Formatting.compactXp(r.supplies)).append(" gp");
+		}
+		if (r.cannonballs > 0)
+		{
+			sb.append("<br>Cannonballs fired: ").append(Formatting.withCommas(r.cannonballs));
 		}
 		return sb.append("<br><br>Right-click to remove</html>").toString();
 	}

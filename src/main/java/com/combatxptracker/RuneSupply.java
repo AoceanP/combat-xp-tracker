@@ -193,6 +193,14 @@ final class RuneSupply
 	}
 
 	/**
+	 * @return whether an item is a rune this knows (including combination runes)
+	 */
+	static boolean isRune(int itemId)
+	{
+		return RUNE_ITEMS.containsKey(itemId);
+	}
+
+	/**
 	 * The plain rune item for a rune, for its icon.
 	 */
 	static int itemFor(Rune rune)

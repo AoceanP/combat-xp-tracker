@@ -762,7 +762,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
 			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
 			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision()
-			+ "|" + plugin.getCollectionRevision();
+			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision();
 		if (key.equals(monsterViewKey))
 		{
 			return;
@@ -807,6 +807,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			}
 			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
 				pinned.contains(s.getName().toLowerCase()));
+			card.updateSupplies(plugin.getSupplies(s.getName(), range));
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();
