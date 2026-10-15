@@ -86,6 +86,8 @@ class MonsterCard extends JPanel
 	private final JLabel prayerLabel = Theme.label("", Theme.MUTED);
 	private final JLabel collectionLabel = Theme.label("", Theme.GOLD);
 	private final JLabel suppliesLabel = Theme.label("", Theme.MUTED);
+	private final JLabel uptimeLabel = Theme.label("", Theme.MUTED);
+	private final JLabel bestLabel = Theme.label("", Theme.TEXT);
 	private final JLabel missingLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
@@ -164,6 +166,15 @@ class MonsterCard extends JPanel
 		suppliesLabel.setAlignmentX(LEFT_ALIGNMENT);
 		suppliesLabel.setVisible(false);
 		extra.add(suppliesLabel);
+		uptimeLabel.setAlignmentX(LEFT_ALIGNMENT);
+		uptimeLabel.setVisible(false);
+		uptimeLabel.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
+			+ "before the next attack<br>(eating, moving, a late click) count against it. Breaks over 10 seconds aren't counted.</html>");
+		extra.add(uptimeLabel);
+		bestLabel.setAlignmentX(LEFT_ALIGNMENT);
+		bestLabel.setVisible(false);
+		bestLabel.setToolTipText("Your fastest kill and your last kill, from the game's own fight duration message.");
+		extra.add(bestLabel);
 		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
@@ -258,6 +269,24 @@ class MonsterCard extends JPanel
 		{
 			suppliesLabel.setText("Supplies used: " + Formatting.compactXp(supplies.totalGp()) + " gp");
 			suppliesLabel.setToolTipText(SupplyLedger.tooltip(supplies));
+		}
+	}
+
+	/**
+	 * Attack uptime (0 to 100, or -1 to hide) and boss kill times (or null).
+	 */
+	void updateFight(int uptime, BossTimes.Times times)
+	{
+		uptimeLabel.setVisible(uptime >= 0);
+		if (uptime >= 0)
+		{
+			uptimeLabel.setText("Attack uptime: " + uptime + "%");
+		}
+		String best = BossTimes.label(times);
+		bestLabel.setVisible(best != null);
+		if (best != null)
+		{
+			bestLabel.setText(best);
 		}
 	}
 

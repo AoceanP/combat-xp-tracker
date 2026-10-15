@@ -108,10 +108,11 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 					right = extra.getMaxHit() + " (bane)";
 				}
 			}
+			int change = plugin.getMaxHitChange();
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(maxHit.getStyle().getDisplayName() + " max:")
-				.right(right)
-				.rightColor(maxHit.getStyle().getColor())
+				.right(change == 0 ? right : right + " " + MaxHitFlash.label(change))
+				.rightColor(change > 0 ? MaxHitFlash.UP : change < 0 ? MaxHitFlash.DOWN : maxHit.getStyle().getColor())
 				.build());
 			if (maxHit.getSpecMaxHit() >= 0)
 			{

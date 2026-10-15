@@ -85,13 +85,17 @@ final class AttackTimer
 	 * Something that looks like an attack happened this tick. Ignored while the weapon is
 	 * still cooling down, so a block animation or a second signal in the same attack
 	 * doesn't restart the count.
+	 *
+	 * @return whether it counted as a new attack
 	 */
-	void onAttackSignal(int tick, int speed)
+	boolean onAttackSignal(int tick, int speed)
 	{
 		if (lastAttackTick < 0 || tick - lastAttackTick >= speed - 1 || tick < lastAttackTick)
 		{
 			lastAttackTick = tick;
+			return true;
 		}
+		return false;
 	}
 
 	/**
@@ -101,13 +105,16 @@ final class AttackTimer
 	 * played when the player is hit (a block) never looks like an attack.
 	 *
 	 * @param attacking whether the player has a target and is animating
+	 * @return whether it counted as a new attack
 	 */
-	void onTick(int tick, boolean attacking, int speed)
+	boolean onTick(int tick, boolean attacking, int speed)
 	{
 		if (attacking && (lastAttackTick < 0 || tick < lastAttackTick || tick - lastAttackTick >= speed))
 		{
 			lastAttackTick = tick;
+			return true;
 		}
+		return false;
 	}
 
 	/**

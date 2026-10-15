@@ -151,6 +151,10 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String PRAYER_KEY = "prayerDrain";
 	private static final String COLLECTION_KEY = "collectionLog";
 	private static final String SUPPLIES_KEY = "supplies";
+	private static final String UPTIME_KEY = "attackUptime";
+	private static final String BOSS_TIMES_KEY = "bossTimes";
+	// A boss's duration message and kill count message come within this many ticks.
+	private static final int BOSS_TIME_WINDOW_TICKS = 3;
 	// Supplies used within this many ticks (30s) of hitting a monster count towards it.
 	private static final int SUPPLY_TICKS = 50;
 	// The cannon's ball count drops by one a shot; bigger drops are it being picked up.
@@ -336,6 +340,19 @@ public class CombatXpTrackerPlugin extends Plugin
 	private final SupplyLedger allTimeSupplies = new SupplyLedger();
 	private final SupplyLedger sessionSupplies = new SupplyLedger();
 	private int savedSuppliesRevision = -1;
+	// Attack uptime per monster (all time and this session).
+	private final AttackUptime allTimeUptime = new AttackUptime();
+	private final AttackUptime sessionUptime = new AttackUptime();
+	private int savedUptimeRevision = -1;
+	// Boss kill times from the game's messages, and the halves waiting to be matched up.
+	private final BossTimes bossTimes = new BossTimes();
+	private int savedBossTimesRevision = -1;
+	private BossTimes.Duration pendingDuration;
+	private int pendingDurationTick;
+	private String lastKillCountBoss;
+	private int lastKillCountBossTick;
+	private final MaxHitFlash maxHitFlash = new MaxHitFlash();
+	private volatile int maxHitChange;
 	private Map<Integer, Long> lastInventory;
 	private SupplyLedger.Category pendingConsume;
 	private int pendingConsumeTick;
@@ -442,6 +459,17 @@ public class CombatXpTrackerPlugin extends Plugin
 		allTimeSupplies.importState(null);
 		sessionSupplies.reset();
 		savedSuppliesRevision = -1;
+		saveUptime();
+		allTimeUptime.importState(null);
+		sessionUptime.reset();
+		savedUptimeRevision = -1;
+		saveBossTimes();
+		bossTimes.importState(null);
+		savedBossTimesRevision = -1;
+		pendingDuration = null;
+		lastKillCountBoss = null;
+		maxHitFlash.reset();
+		maxHitChange = 0;
 		lastInventory = null;
 		lastRunes = null;
 		pendingConsume = null;
@@ -529,6 +557,12 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveAreaMemory();
 			savePrayerDrain();
 			saveSupplies();
+			saveUptime();
+			saveBossTimes();
+			allTimeUptime.endFight();
+			sessionUptime.endFight();
+			maxHitFlash.reset();
+			maxHitChange = 0;
 			lastInventory = null;
 			lastRunes = null;
 			lastCannonBalls = -1;
@@ -541,6 +575,7 @@ public class CombatXpTrackerPlugin extends Plugin
 				hitStats.reset();
 				hitLuck.reset();
 				sessionSupplies.reset();
+				sessionUptime.reset();
 				combinedDropTracker.reset();
 				sessionMonsters.reset();
 			}
@@ -639,7 +674,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		refreshCombatState();
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
-			attackTimer.onTick(client.getTickCount(), isAttacking(), attackSpeedTicks);
+			if (attackTimer.onTick(client.getTickCount(), isAttacking(), attackSpeedTicks))
+			{
+				recordAttack();
+			}
 		}
 		pruneKillTracking();
 		pruneFights();
@@ -658,6 +696,8 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveAreaMemory();
 			savePrayerDrain();
 			saveSupplies();
+			saveUptime();
+			saveBossTimes();
 		}
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -728,7 +768,10 @@ public class CombatXpTrackerPlugin extends Plugin
 				&& isFromCurrentStyle(skill))
 			{
 				// Combat XP comes the moment you attack.
-				attackTimer.onAttackSignal(client.getTickCount(), attackSpeedTicks);
+				if (attackTimer.onAttackSignal(client.getTickCount(), attackSpeedTicks))
+				{
+					recordAttack();
+				}
 			}
 			CombatStyle style = CombatStyle.fromXpSkill(skill);
 			if (style != null)
@@ -888,7 +931,43 @@ public class CombatXpTrackerPlugin extends Plugin
 			lastKillCount = killCount;
 			lastKillCountTick = client.getTickCount();
 			postKillSummaryIfReady();
+			lastKillCountBoss = BossFight.parseKillCountName(text);
+			lastKillCountBossTick = client.getTickCount();
+			recordBossTimeIfReady();
+			return;
 		}
+		BossTimes.Duration duration = BossTimes.parse(text);
+		if (duration != null)
+		{
+			pendingDuration = duration;
+			pendingDurationTick = client.getTickCount();
+			recordBossTimeIfReady();
+		}
+	}
+
+	/**
+	 * Records a boss kill time once both its duration and kill count messages are in,
+	 * whichever came first.
+	 */
+	private void recordBossTimeIfReady()
+	{
+		if (pendingDuration == null || lastKillCountBoss == null
+			|| Math.abs(pendingDurationTick - lastKillCountBossTick) > BOSS_TIME_WINDOW_TICKS)
+		{
+			return;
+		}
+		String boss = BossGroups.trackedName(lastKillCountBoss);
+		BossTimes.Duration duration = pendingDuration;
+		pendingDuration = null;
+		lastKillCountBoss = null;
+		double before = bossTimes.record(boss, duration);
+		if (before >= 0)
+		{
+			boolean precise = BossTimes.isPrecise(duration.seconds) || BossTimes.isPrecise(before);
+			announceMilestone("New " + boss + " personal best: " + BossTimes.format(duration.seconds, precise)
+				+ (before > 0 ? " (was " + BossTimes.format(before, precise) + ")" : ""));
+		}
+		panelDirty = true;
 	}
 
 	/**
@@ -947,6 +1026,14 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			lastKillCount = -1;
 		}
+		if (pendingDuration != null && tick - pendingDurationTick > BOSS_TIME_WINDOW_TICKS)
+		{
+			pendingDuration = null;
+		}
+		if (lastKillCountBoss != null && tick - lastKillCountBossTick > BOSS_TIME_WINDOW_TICKS)
+		{
+			lastKillCountBoss = null;
+		}
 	}
 
 	private void clearFights()
@@ -1000,6 +1087,27 @@ public class CombatXpTrackerPlugin extends Plugin
 	 * Whether the player is attacking something right now: an attack-like animation playing
 	 * while targeting an NPC that can be fought (or a player).
 	 */
+	/**
+	 * An attack on the monster the player is targeting, for attack uptime.
+	 */
+	private void recordAttack()
+	{
+		Player local = client.getLocalPlayer();
+		Actor target = local == null ? null : local.getInteracting();
+		if (!(target instanceof NPC))
+		{
+			return;
+		}
+		String name = BossGroups.trackedName(cleanName(target.getName()));
+		if (name == null)
+		{
+			return;
+		}
+		int tick = client.getTickCount();
+		allTimeUptime.onAttack(name, tick, attackSpeedTicks);
+		sessionUptime.onAttack(name, tick, attackSpeedTicks);
+	}
+
 	private boolean isAttacking()
 	{
 		Player local = client.getLocalPlayer();
@@ -1385,6 +1493,25 @@ public class CombatXpTrackerPlugin extends Plugin
 			maxHitResult = result;
 			panelDirty = true;
 		}
+		int tick = client.getTickCount();
+		if (result != null)
+		{
+			maxHitFlash.update(result.getStyle(), result.getMaxHit(), tick);
+		}
+		int change = config.flashMaxHitChange() ? maxHitFlash.change(tick) : 0;
+		if (change != maxHitChange)
+		{
+			maxHitChange = change;
+			panelDirty = true;
+		}
+	}
+
+	/**
+	 * @return how much the max hit just changed by, while it's flashing, or 0
+	 */
+	public int getMaxHitChange()
+	{
+		return maxHitChange;
 	}
 
 	/**
@@ -1649,12 +1776,15 @@ public class CombatXpTrackerPlugin extends Plugin
 		hitStats.reset();
 		hitLuck.reset();
 		sessionSupplies.reset();
+		sessionUptime.reset();
 		combinedDropTracker.reset();
 		sessionMonsters.reset();
 		if (allTimeToo)
 		{
 			monsterTracker.reset();
 			allTimeSupplies.reset();
+			allTimeUptime.reset();
+			bossTimes.reset();
 			prayerDrain.importState(null);
 		}
 		for (SkillProgress progress : skillProgress.values())
@@ -1671,6 +1801,9 @@ public class CombatXpTrackerPlugin extends Plugin
 		prayerDrain.remove(name);
 		allTimeSupplies.remove(name);
 		sessionSupplies.remove(name);
+		allTimeUptime.remove(name);
+		sessionUptime.remove(name);
+		bossTimes.remove(name);
 		refreshPanelNow();
 	}
 
@@ -2558,6 +2691,108 @@ public class CombatXpTrackerPlugin extends Plugin
 		savedSuppliesRevision = allTimeSupplies.getRevision();
 	}
 
+	// ---- Attack uptime and boss times ----------------------------------------------------------
+
+	/**
+	 * @return attack uptime fighting a monster from 0 to 100, for the range shown, or -1
+	 */
+	public int getUptime(String monster, MonsterRange range)
+	{
+		return (range == MonsterRange.SESSION ? sessionUptime : allTimeUptime).percent(monster);
+	}
+
+	/**
+	 * @return this session's attack uptime over every monster from 0 to 100, or -1
+	 */
+	public int getSessionUptime()
+	{
+		return sessionUptime.totalPercent();
+	}
+
+	/**
+	 * @return a boss's kill times, or null
+	 */
+	public BossTimes.Times getBossTimes(String monster)
+	{
+		return bossTimes.get(monster);
+	}
+
+	public int getFightStatsRevision()
+	{
+		return allTimeUptime.getRevision() + sessionUptime.getRevision() + bossTimes.getRevision();
+	}
+
+	private void saveUptime()
+	{
+		if (configManager.getRSProfileKey() == null || allTimeUptime.getRevision() == savedUptimeRevision)
+		{
+			return;
+		}
+		savedUptimeRevision = allTimeUptime.getRevision();
+		if (!config.rememberMonsters() || allTimeUptime.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, UPTIME_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, UPTIME_KEY, gson.toJson(allTimeUptime.exportState()));
+	}
+
+	private void loadUptime()
+	{
+		allTimeUptime.importState(loadJson(UPTIME_KEY, new TypeToken<Map<String, AttackUptime.Ticks>>()
+		{
+		}.getType()));
+		savedUptimeRevision = allTimeUptime.getRevision();
+	}
+
+	private void saveBossTimes()
+	{
+		if (configManager.getRSProfileKey() == null || bossTimes.getRevision() == savedBossTimesRevision)
+		{
+			return;
+		}
+		savedBossTimesRevision = bossTimes.getRevision();
+		if (!config.rememberMonsters() || bossTimes.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, BOSS_TIMES_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, BOSS_TIMES_KEY, gson.toJson(bossTimes.exportState()));
+	}
+
+	private void loadBossTimes()
+	{
+		bossTimes.importState(loadJson(BOSS_TIMES_KEY, new TypeToken<Map<String, BossTimes.Times>>()
+		{
+		}.getType()));
+		savedBossTimesRevision = bossTimes.getRevision();
+	}
+
+	/**
+	 * @return the saved JSON for this account under a key, or null if there's none or it's
+	 * unreadable
+	 */
+	private <T> T loadJson(String key, java.lang.reflect.Type type)
+	{
+		if (!config.rememberMonsters() || configManager.getRSProfileKey() == null)
+		{
+			return null;
+		}
+		String json = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, key);
+		if (json == null || json.isEmpty())
+		{
+			return null;
+		}
+		try
+		{
+			return gson.fromJson(json, type);
+		}
+		catch (JsonParseException e)
+		{
+			return null;
+		}
+	}
+
 	public SlayerGuide getSlayerGuide()
 	{
 		return slayerGuide;
@@ -2968,6 +3203,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		loadPrayerDrain();
 		loadCollectionLog();
 		loadSupplies();
+		loadUptime();
+		loadBossTimes();
 		savedBank = bank;
 		bankNames = null;
 		if (bank != null && config.checkBank())

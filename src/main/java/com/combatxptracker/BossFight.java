@@ -87,6 +87,19 @@ final class BossFight
 	}
 
 	/**
+	 * @return the boss named in a kill count message ("Vorkath"), or null if it isn't one
+	 */
+	static String parseKillCountName(String message)
+	{
+		if (parseKillCount(message) < 0)
+		{
+			return null;
+		}
+		Matcher m = KILL_COUNT.matcher(message.trim());
+		return m.matches() ? m.group(1) : null;
+	}
+
+	/**
 	 * @return the kill count in a kill count message, or -1 if it isn't one
 	 */
 	static int parseKillCount(String message)

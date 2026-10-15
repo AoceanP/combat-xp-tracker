@@ -530,8 +530,9 @@ class CombatXpTrackerPanel extends PluginPanel
 		}
 
 		CombatStyle style = max.getStyle();
-		fourthCaption.setText(style.getDisplayName() + " max");
-		fourthValue.setForeground(style.getColor());
+		int change = plugin.getMaxHitChange();
+		fourthCaption.setText(style.getDisplayName() + " max" + (change == 0 ? "" : " " + MaxHitFlash.label(change)));
+		fourthValue.setForeground(change > 0 ? MaxHitFlash.UP : change < 0 ? MaxHitFlash.DOWN : style.getColor());
 		fourthValue.setText(max.getMaxHit() >= 0 ? String.valueOf(max.getMaxHit()) : "-");
 		fourthValue.setToolTipText("<html>" + style.getDisplayName() + " max hit for your current attack style, gear, "
 			+ "levels and prayers.<br>Special attacks and bonuses against certain monsters are shown below.</html>");
@@ -762,7 +763,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
 			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
 			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision()
-			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision();
+			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision();
 		if (key.equals(monsterViewKey))
 		{
 			return;
@@ -808,6 +809,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
 				pinned.contains(s.getName().toLowerCase()));
 			card.updateSupplies(plugin.getSupplies(s.getName(), range));
+			card.updateFight(plugin.getUptime(s.getName(), range), plugin.getBossTimes(s.getName()));
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();
@@ -851,7 +853,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			tracker.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems())),
 			config.monsterSort(), MonsterTracker.parseNames(config.hiddenMonsters()));
 		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode(),
-			plugin.getLuck());
+			plugin.getLuck(), plugin.getSessionUptime());
 
 		try
 		{

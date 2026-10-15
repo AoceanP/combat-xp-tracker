@@ -245,6 +245,19 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "flashMaxHitChange",
+		name = "Flash max hit changes",
+		description = "When your max hit goes up or down (a potion, a prayer, a gear swap, a boost wearing off), it "
+			+ "flashes green or red for a few seconds with the change, e.g. 34 (+3).",
+		position = 0,
+		section = combatSection
+	)
+	default boolean flashMaxHitChange()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "showZeroHits",
 		name = "Include 0-damage hits in average",
 		description = "Whether misses (0 damage) count toward your average hit.",
@@ -435,7 +448,7 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "milestoneMessages",
 		name = "Milestone messages",
 		description = "A chat message for milestones: 100, 500, 1,000 (and more) kills of a monster, total kills, "
-			+ "your 10th, 50th, 100th (and more) slayer task, and a new biggest hit ever.",
+			+ "your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best.",
 		position = 16,
 		section = combatSection
 	)

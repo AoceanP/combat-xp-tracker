@@ -27,6 +27,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Separate max hits for your slayer task (Black mask / Slayer helmet) and against undead (Salve amulet), highlighted when your current target is on task
 - Special attack max hit for your weapon: Armadyl, Bandos, Saradomin, Zamorak and Ancient godswords, Dragon dagger, warhammer, longsword and mace, halberds, Abyssal dagger and bludgeon, and more
 - Luck: once you've landed enough hits, how lucky they've been this session against your max hit ("Top 18%"), with your max hits against how many were expected. Special attacks and weapons that don't roll evenly are left out. It's in the Copy summary too
+- When your max hit changes (a potion, a prayer, a gear swap, a boost wearing off) it flashes green or red for a few seconds with the change, e.g. *34 (+3)*
 - Effective levels: your Attack and Strength (or Ranged, or Magic) with prayer, style, the hidden +8 and Void, which accuracy and max hit are built on
 - Gear bonuses: obsidian armour and Berserker necklace with obsidian weapons, Inquisitor's armour with crush weapons, crystal armour with the Bow of faerdhinen or crystal bow, and charged wilderness weapons in the Wilderness
 - Extra rows for weapons strong against certain monsters, highlighted when you're fighting one: Dragon hunter lance and crossbow (dragons), Arclight, Emberlight, Silverlight and Darklight (demons), Keris (kalphites), and the Twisted bow against high-Magic monsters
@@ -41,6 +42,8 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Your slayer task on the matching card: kills left and roughly how long at your kill rate
 - A chat summary when you finish a slayer task: kills, time, loot, GP/hr and biggest hit
 - A chat summary when you kill a boss: fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
+- Attack uptime: how much of each fight you spent attacking, for each monster. Ticks past your weapon's attack speed before your next attack (eating, moving, a late click) count against it
+- Boss personal bests: your fastest kill and your last kill on each boss card, from the game's own fight duration message, with a milestone message when you beat it
 - Supplies used: food eaten, potion doses, runes cast, ammo fired and cannonballs, with what they cost at Grand Exchange prices, for each monster (this session or all time) and each slayer task. Hover for the breakdown
 - Collection log: open a boss's page in the in-game Collection Log and its monster card shows how many of its items you have, which ones you're still missing and your kill count. It stays up to date as new items are added. Bosses and raids only, since slayer monsters share one page
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop
@@ -72,10 +75,10 @@ A **Slayer** tab with everything about your slayer progress:
 Twelve colour themes for the sidebar in the settings: Dark (the original, and the default), Classic, Midnight, Abyssal, Zamorak, Saradomin, Guthix, Armadyl (light), Bandos, Dragonfire, Frostbite and Venom. Each theme has its own accent colour, unless you've picked your own goal bar colour.
 
 ## Session summary and sharing
-- **Copy** puts a text summary of your session (XP, hits, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
+- **Copy** puts a text summary of your session (XP, hits, attack uptime, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
 - **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
 - **Export** saves your monsters, slayer task log or goals as a CSV spreadsheet for Excel or Google Sheets, or copies it to paste straight in
-- Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, and a new biggest hit ever. Optionally a screenshot of each one
+- Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
 
 ## Overlays
 - Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)
