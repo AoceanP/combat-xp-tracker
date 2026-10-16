@@ -49,6 +49,7 @@ final class SlayerTaskSession
 	private String area;
 	private long supplies;
 	private int cannonballs;
+	private int deaths;
 	private final ActivityTimer activity = new ActivityTimer();
 
 	void start(String taskName)
@@ -67,6 +68,7 @@ final class SlayerTaskSession
 		area = null;
 		supplies = 0;
 		cannonballs = 0;
+		deaths = 0;
 		activity.reset();
 	}
 
@@ -96,6 +98,11 @@ final class SlayerTaskSession
 	/**
 	 * Supplies used on the task: their gp, and cannonballs fired.
 	 */
+	void recordDeath()
+	{
+		deaths++;
+	}
+
 	void recordSupplies(long gp, int balls)
 	{
 		supplies += Math.max(0, gp);
@@ -136,6 +143,7 @@ final class SlayerTaskSession
 		r.area = area;
 		r.supplies = supplies;
 		r.cannonballs = cannonballs;
+		r.deaths = deaths;
 		r.assigned = assigned;
 		r.kills = kills;
 		r.endMillis = endMillis;
@@ -247,6 +255,10 @@ final class SlayerTaskSession
 		if (supplies > 0)
 		{
 			sb.append(", ").append(Formatting.compactXp(supplies)).append(" gp of supplies");
+		}
+		if (deaths > 0)
+		{
+			sb.append(", ").append(deaths).append(deaths == 1 ? " death" : " deaths");
 		}
 		return sb.append('.').toString();
 	}

@@ -154,6 +154,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String SUPPLIES_KEY = "supplies";
 	private static final String UPTIME_KEY = "attackUptime";
 	private static final String BOSS_TIMES_KEY = "bossTimes";
+	private static final String DEATHS_KEY = "deaths";
 	// A boss's duration message and kill count message come within this many ticks.
 	private static final int BOSS_TIME_WINDOW_TICKS = 3;
 	// Supplies used within this many ticks (30s) of hitting a monster count towards it.
@@ -355,6 +356,10 @@ public class CombatXpTrackerPlugin extends Plugin
 	private String lastKillCountBoss;
 	private int lastKillCountBossTick;
 	private final MaxHitFlash maxHitFlash = new MaxHitFlash();
+	// Deaths per monster (all time and this session).
+	private final DeathLedger allTimeDeaths = new DeathLedger();
+	private final DeathLedger sessionDeaths = new DeathLedger();
+	private int savedDeathsRevision = -1;
 	private final AttackDetector attackDetector = new AttackDetector(NON_ATTACK_ANIMATIONS);
 	// The monster being fought now, for the target card.
 	private volatile TargetInfo targetInfo;
@@ -475,6 +480,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		saveBossTimes();
 		bossTimes.importState(null);
 		savedBossTimesRevision = -1;
+		saveDeaths();
+		allTimeDeaths.importState(null);
+		sessionDeaths.reset();
+		savedDeathsRevision = -1;
 		pendingDuration = null;
 		lastKillCountBoss = null;
 		maxHitFlash.reset();
@@ -570,6 +579,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveSupplies();
 			saveUptime();
 			saveBossTimes();
+			saveDeaths();
 			allTimeUptime.endFight();
 			sessionUptime.endFight();
 			maxHitFlash.reset();
@@ -587,6 +597,7 @@ public class CombatXpTrackerPlugin extends Plugin
 				hitLuck.reset();
 				sessionSupplies.reset();
 				sessionUptime.reset();
+				sessionDeaths.reset();
 				combinedDropTracker.reset();
 				sessionMonsters.reset();
 			}
@@ -706,6 +717,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveSupplies();
 			saveUptime();
 			saveBossTimes();
+			saveDeaths();
 		}
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -882,6 +894,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
+		if (event.getActor() == client.getLocalPlayer())
+		{
+			onPlayerDeath();
+			return;
+		}
 		if (!(event.getActor() instanceof NPC))
 		{
 			return;
@@ -909,6 +926,80 @@ public class CombatXpTrackerPlugin extends Plugin
 				}
 			}
 		}
+	}
+
+	/**
+	 * The player died. Counted against the monster that killed them, with what they were
+	 * carrying. Deaths to other players aren't counted.
+	 */
+	private void onPlayerDeath()
+	{
+		String monster = deathCause();
+		if (monster == null)
+		{
+			return;
+		}
+		long carried = carriedValue();
+		long now = System.currentTimeMillis();
+		int count = allTimeDeaths.record(monster, carried, now);
+		sessionDeaths.record(monster, carried, now);
+		if (taskSession.isActive() && taskSession.isTaskMonster(monster))
+		{
+			taskSession.recordDeath();
+		}
+		if (config.deathMessage())
+		{
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(new ChatMessageBuilder()
+					.append(ChatColorType.HIGHLIGHT)
+					.append(DeathLedger.message(monster, count, carried))
+					.build())
+				.build());
+		}
+		panelDirty = true;
+	}
+
+	/**
+	 * The monster that killed the player: the one they were fighting, one attacking them, or
+	 * the last one they hit in the past 30 seconds. Null for another player or nothing.
+	 */
+	private String deathCause()
+	{
+		Player local = client.getLocalPlayer();
+		Actor target = local == null ? null : local.getInteracting();
+		if (target instanceof Player)
+		{
+			return null;
+		}
+		if (target instanceof NPC)
+		{
+			return BossGroups.trackedName(cleanName(target.getName()));
+		}
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc != null && npc.getInteracting() == local)
+			{
+				return BossGroups.trackedName(cleanName(npc.getName()));
+			}
+		}
+		return fightMonster != null && client.getTickCount() - lastFightTick <= SUPPLY_TICKS ? fightMonster : null;
+	}
+
+	/**
+	 * Grand Exchange value of the player's inventory and equipment.
+	 */
+	private long carriedValue()
+	{
+		long total = 0;
+		for (int containerId : new int[]{InventoryID.INV, InventoryID.WORN})
+		{
+			for (Map.Entry<Integer, Long> e : inventoryCounts(client.getItemContainer(containerId)).entrySet())
+			{
+				total += e.getValue() * itemManager.getItemPrice(e.getKey());
+			}
+		}
+		return total;
 	}
 
 	/**
@@ -1869,10 +1960,12 @@ public class CombatXpTrackerPlugin extends Plugin
 		hitLuck.reset();
 		sessionSupplies.reset();
 		sessionUptime.reset();
+		sessionDeaths.reset();
 		combinedDropTracker.reset();
 		sessionMonsters.reset();
 		if (allTimeToo)
 		{
+			allTimeDeaths.reset();
 			monsterTracker.reset();
 			allTimeSupplies.reset();
 			allTimeUptime.reset();
@@ -1896,6 +1989,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		allTimeUptime.remove(name);
 		sessionUptime.remove(name);
 		bossTimes.remove(name);
+		allTimeDeaths.remove(name);
+		sessionDeaths.remove(name);
 		refreshPanelNow();
 	}
 
@@ -2853,7 +2948,8 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	public int getFightStatsRevision()
 	{
-		return allTimeUptime.getRevision() + sessionUptime.getRevision() + bossTimes.getRevision();
+		return allTimeUptime.getRevision() + sessionUptime.getRevision() + bossTimes.getRevision()
+			+ allTimeDeaths.getRevision() + sessionDeaths.getRevision();
 	}
 
 	private void saveUptime()
@@ -2877,6 +2973,37 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 		}.getType()));
 		savedUptimeRevision = allTimeUptime.getRevision();
+	}
+
+	/**
+	 * @return deaths to a monster, for the range shown, or null for none
+	 */
+	public DeathLedger.Deaths getDeaths(String monster, MonsterRange range)
+	{
+		return (range == MonsterRange.SESSION ? sessionDeaths : allTimeDeaths).get(monster);
+	}
+
+	private void saveDeaths()
+	{
+		if (configManager.getRSProfileKey() == null || allTimeDeaths.getRevision() == savedDeathsRevision)
+		{
+			return;
+		}
+		savedDeathsRevision = allTimeDeaths.getRevision();
+		if (!config.rememberMonsters() || allTimeDeaths.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, DEATHS_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, DEATHS_KEY, gson.toJson(allTimeDeaths.exportState()));
+	}
+
+	private void loadDeaths()
+	{
+		allTimeDeaths.importState(loadJson(DEATHS_KEY, new TypeToken<Map<String, DeathLedger.Deaths>>()
+		{
+		}.getType()));
+		savedDeathsRevision = allTimeDeaths.getRevision();
 	}
 
 	private void saveBossTimes()
@@ -3339,6 +3466,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		loadSupplies();
 		loadUptime();
 		loadBossTimes();
+		loadDeaths();
 		savedBank = bank;
 		bankNames = null;
 		if (bank != null && config.checkBank())

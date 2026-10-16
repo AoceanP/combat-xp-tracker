@@ -45,6 +45,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Accuracy, DPS and attack uptime tiles on each monster: the share of your hits that did damage, your damage per second while fighting, and how much of each fight you spent attacking (ticks past your weapon's attack speed before your next attack, from eating, moving or a late click, count against it)
 - Target card: the monster you're fighting right now at the top of the tab, with its health bar, hits left to kill it at your average hit, your time per kill and your DPS
 - Boss personal bests: your fastest kill and your last kill on each boss card, from the game's own fight duration message, with a milestone message when you beat it
+- Deaths: how many times you've died to each monster and what you were carrying, on its card and in the slayer task log, with an optional chat message
 - Supplies used: food eaten, potion doses, runes cast, ammo fired and cannonballs, with what they cost at Grand Exchange prices, for each monster (this session or all time) and each slayer task. Hover for the breakdown
 - Collection log: open a boss's page in the in-game Collection Log and its monster card shows how many of its items you have, which ones you're still missing and your kill count. It stays up to date as new items are added. Bosses and raids only, since slayer monsters share one page
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop

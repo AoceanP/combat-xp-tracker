@@ -765,6 +765,10 @@ class SlayerView extends JPanel
 		{
 			append(extra, Formatting.compactXp(r.supplies) + " supplies");
 		}
+		if (r.deaths > 0)
+		{
+			append(extra, r.deaths + (r.deaths == 1 ? " death" : " deaths"));
+		}
 		if (extra.length() > 0)
 		{
 			card.add(Theme.label(extra.toString(), loot > 0 ? Theme.GOLD : Theme.SUBTLE));
@@ -827,6 +831,10 @@ class SlayerView extends JPanel
 		if (r.cannonballs > 0)
 		{
 			sb.append("<br>Cannonballs fired: ").append(Formatting.withCommas(r.cannonballs));
+		}
+		if (r.deaths > 0)
+		{
+			sb.append("<br>Deaths: ").append(r.deaths);
 		}
 		return sb.append("<br><br>Right-click to remove</html>").toString();
 	}

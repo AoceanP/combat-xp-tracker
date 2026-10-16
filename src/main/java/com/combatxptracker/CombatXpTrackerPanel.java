@@ -778,15 +778,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			targetCard.setVisible(false);
 			return;
 		}
-		MonsterTracker.Snapshot stats = null;
-		for (MonsterTracker.Snapshot s : plugin.getMonsterTracker(MonsterRange.SESSION).snapshot())
-		{
-			if (s.getName().equalsIgnoreCase(target.getName()))
-			{
-				stats = s;
-				break;
-			}
-		}
+		MonsterTracker.Snapshot stats = plugin.getMonsterTracker(MonsterRange.SESSION).snapshotOf(target.getName());
 		double averagePerHit = stats == null || stats.getRolls() == 0 ? 0 : stats.getTotalDamage() / (double) stats.getRolls();
 		long perKill = stats == null || stats.getKills() == 0 ? -1 : stats.getActiveMillis() / stats.getKills();
 		targetCard.update(target, averagePerHit, perKill, plugin.getDps(target.getName(), MonsterRange.SESSION));
@@ -855,6 +847,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.updateSupplies(plugin.getSupplies(s.getName(), range));
 			card.updateFight(s.getAccuracy(), plugin.getDps(s.getName(), range), plugin.getUptime(s.getName(), range),
 				plugin.getBossTimes(s.getName()));
+			card.updateDeaths(plugin.getDeaths(s.getName(), range));
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();

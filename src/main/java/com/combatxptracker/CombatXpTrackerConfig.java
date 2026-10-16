@@ -54,22 +54,36 @@ public interface CombatXpTrackerConfig extends Config
 
 	@ConfigSection(
 		name = "Combat",
-		description = "Damage, max hit and per-monster tracking",
+		description = "Damage, max hit, kills to level and milestones",
 		position = 1
 	)
 	String combatSection = "combat";
 
 	@ConfigSection(
+		name = "Monsters",
+		description = "The Monsters tab: what's remembered, loot values, the target card and kill messages",
+		position = 2
+	)
+	String monstersSection = "monsters";
+
+	@ConfigSection(
+		name = "Slayer",
+		description = "The Slayer tab, task summaries and superiors",
+		position = 3
+	)
+	String slayerSection = "slayer";
+
+	@ConfigSection(
 		name = "Overlays",
 		description = "On-screen overlay and infoboxes",
-		position = 2
+		position = 4
 	)
 	String overlaySection = "overlays";
 
 	@ConfigSection(
 		name = "Supplies & loot",
 		description = "Loot despawn alert and casts left, for long trips",
-		position = 3
+		position = 5
 	)
 	String suppliesSection = "supplies";
 
@@ -208,7 +222,7 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "showNextLevelTime",
 		name = "Show time to next level",
 		description = "Adds how long until your next level to each goal, as well as the time to the goal itself.",
-		position = 5,
+		position = 4,
 		section = goalsSection
 	)
 	default boolean showNextLevelTime()
@@ -220,7 +234,7 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "goalChatMessage",
 		name = "Chat message when a goal is reached",
 		description = "Adds a message to your chatbox when you reach a goal. Only you can see it.",
-		position = 4,
+		position = 5,
 		section = goalsSection
 	)
 	default boolean goalChatMessage()
@@ -249,7 +263,7 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Flash max hit changes",
 		description = "When your max hit goes up or down (a potion, a prayer, a gear swap, a boost wearing off), it "
 			+ "flashes green or red for a few seconds with the change, e.g. 34 (+3).",
-		position = 0,
+		position = 1,
 		section = combatSection
 	)
 	default boolean flashMaxHitChange()
@@ -261,7 +275,7 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "showZeroHits",
 		name = "Include 0-damage hits in average",
 		description = "Whether misses (0 damage) count toward your average hit.",
-		position = 1,
+		position = 3,
 		section = combatSection
 	)
 	default boolean showZeroHits()
@@ -273,8 +287,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "trackMonsterLoot",
 		name = "Track monster drops",
 		description = "Records each monster's drops and their Grand Exchange value in the Monsters tab.",
-		position = 2,
-		section = combatSection
+		position = 0,
+		section = monstersSection
 	)
 	default boolean trackMonsterLoot()
 	{
@@ -285,7 +299,7 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "resetHitsOnLogout",
 		name = "Reset stats on logout",
 		description = "Clears damage stats and this session's monsters when you log out. All-time monsters are kept.",
-		position = 3,
+		position = 5,
 		section = combatSection
 	)
 	default boolean resetHitsOnLogout()
@@ -297,8 +311,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "rememberMonsters",
 		name = "Remember monsters",
 		description = "Keeps the Monsters tab between sessions and client restarts, separately for each account.",
-		position = 4,
-		section = combatSection
+		position = 1,
+		section = monstersSection
 	)
 	default boolean rememberMonsters()
 	{
@@ -309,8 +323,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "monsterSort",
 		name = "Sort monsters by",
 		description = "Order of the Monsters tab. You can also change it at the top of the tab.",
-		position = 5,
-		section = combatSection
+		position = 3,
+		section = monstersSection
 	)
 	default MonsterSort monsterSort()
 	{
@@ -321,8 +335,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "hiddenMonsters",
 		name = "Hidden monsters",
 		description = "Monsters left out of the Monsters tab, separated by commas. Right-click a monster in the panel to hide it.",
-		position = 6,
-		section = combatSection
+		position = 7,
+		section = monstersSection
 	)
 	default String hiddenMonsters()
 	{
@@ -333,8 +347,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "monsterRange",
 		name = "Monsters tab shows",
 		description = "This session, or everything remembered for this account. You can also switch at the top of the tab.",
-		position = 7,
-		section = combatSection
+		position = 2,
+		section = monstersSection
 	)
 	default MonsterRange monsterRange()
 	{
@@ -345,8 +359,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "lootPrice",
 		name = "Value loot at",
 		description = "Grand Exchange price, or High Alchemy value (useful for ironmen, who can't use the GE).",
-		position = 8,
-		section = combatSection
+		position = 4,
+		section = monstersSection
 	)
 	default LootPrice lootPrice()
 	{
@@ -358,8 +372,8 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Ignored items",
 		description = "Items left out of loot and its value, separated by commas. Use * as a wildcard, e.g. 'bones, *ashes'. "
 			+ "Right-click an item in the Monsters tab to ignore it.",
-		position = 9,
-		section = combatSection
+		position = 6,
+		section = monstersSection
 	)
 	default String ignoredItems()
 	{
@@ -371,8 +385,8 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Rare drop value (gp)",
 		description = "Items worth at least this much each get a gold border in the loot grid, "
 			+ "and each monster shows how many kills since its last one (the dry streak).",
-		position = 10,
-		section = combatSection
+		position = 5,
+		section = monstersSection
 	)
 	@Range(min = 1_000)
 	default int rareDropValue()
@@ -384,8 +398,8 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "taskSummary",
 		name = "Slayer task summary",
 		description = "When a slayer task is finished, adds a chat message with its kills, time, loot, GP/hr and biggest hit.",
-		position = 11,
-		section = combatSection
+		position = 1,
+		section = slayerSection
 	)
 	default boolean taskSummary()
 	{
@@ -397,10 +411,23 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Boss kill summary",
 		description = "When you kill a boss (anything the game gives a kill count for), adds a chat message with the fight time, "
 			+ "your damage and its share of the boss's hitpoints, and your biggest hit.",
-		position = 12,
-		section = combatSection
+		position = 9,
+		section = monstersSection
 	)
 	default boolean killSummary()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "deathMessage",
+		name = "Death message",
+		description = "When you die to a monster, a chat message with how many times you've died to it and what you were "
+			+ "carrying. Deaths are always counted on the monster's card.",
+		position = 10,
+		section = monstersSection
+	)
+	default boolean deathMessage()
 	{
 		return true;
 	}
@@ -411,7 +438,7 @@ public interface CombatXpTrackerConfig extends Config
 		description = "Shows how many more kills of the monster you're fighting each combat skill needs for its next level, "
 			+ "your next combat level, and what the rest of your slayer task will give. Uses your real XP per kill once "
 			+ "you've killed one.",
-		position = 13,
+		position = 4,
 		section = combatSection
 	)
 	default boolean killsToLevel()
@@ -424,8 +451,8 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Target card",
 		description = "A card at the top of the Monsters tab for the monster you're fighting: its health, hits left to kill it, "
 			+ "your time per kill and your damage per second.",
-		position = 13,
-		section = combatSection
+		position = 8,
+		section = monstersSection
 	)
 	default boolean showTargetCard()
 	{
@@ -437,8 +464,8 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Slayer task log",
 		description = "Keeps a log of your finished slayer tasks (kills, time, XP, loot, superiors, points) in the Slayer tab, "
 			+ "saved separately for each account.",
-		position = 14,
-		section = combatSection
+		position = 0,
+		section = slayerSection
 	)
 	default boolean slayerLog()
 	{
@@ -450,8 +477,8 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Notify on superior spawn",
 		description = "Sends a RuneLite notification when a superior slayer monster appears. RuneLite's own Slayer plugin "
 			+ "can do this too, so it's off by default.",
-		position = 15,
-		section = combatSection
+		position = 3,
+		section = slayerSection
 	)
 	default Notification superiorNotification()
 	{
@@ -463,7 +490,7 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Milestone messages",
 		description = "A chat message for milestones: 100, 500, 1,000 (and more) kills of a monster, total kills, "
 			+ "your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best.",
-		position = 16,
+		position = 6,
 		section = combatSection
 	)
 	default boolean milestoneMessages()
@@ -475,7 +502,7 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "milestoneScreenshot",
 		name = "Screenshot milestones",
 		description = "Also saves a screenshot for each milestone, in RuneLite's screenshots folder under Milestones.",
-		position = 16,
+		position = 7,
 		section = combatSection
 	)
 	default boolean milestoneScreenshot()
@@ -488,8 +515,8 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Check bank for task items",
 		description = "Remembers what's in your bank when you open it, so the Slayer tab's task guide can say whether an "
 			+ "item you need is in your bank or you don't own one. Saved on your computer only, per account.",
-		position = 15,
-		section = combatSection
+		position = 2,
+		section = slayerSection
 	)
 	default boolean checkBank()
 	{
@@ -501,7 +528,7 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Show effective levels",
 		description = "Shows your effective Attack and Strength (or Ranged, or Magic) under the max hit: your level with "
 			+ "prayer, attack style, the hidden +8 and Void included. It's what accuracy and max hit are worked out from.",
-		position = 16,
+		position = 2,
 		section = combatSection
 	)
 	default boolean showEffectiveLevels()

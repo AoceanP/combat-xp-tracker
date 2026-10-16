@@ -73,6 +73,7 @@ class MonsterCard extends JPanel
 	private final JLabel killsLabel = Theme.label("", Theme.SUBTLE);
 	private final JLabel valueLabel = Theme.label("", Theme.GOLD);
 
+	private static final java.awt.Color DEATHS = new java.awt.Color(235, 110, 100);
 	private final JPanel body = new JPanel(new BorderLayout(0, 6));
 	private final JLabel hitsLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel avgLabel = Theme.boldLabel("", Theme.TEXT);
@@ -91,6 +92,7 @@ class MonsterCard extends JPanel
 	private final JLabel uptimeValue = Theme.boldLabel("-", Theme.TEXT);
 	private final JPanel fightRow = new JPanel(new GridLayout(1, 3, 3, 0));
 	private final JLabel bestLabel = Theme.label("", Theme.TEXT);
+	private final JLabel deathsLabel = Theme.label("", DEATHS);
 	private final JLabel missingLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
@@ -192,6 +194,9 @@ class MonsterCard extends JPanel
 		bestLabel.setVisible(false);
 		bestLabel.setToolTipText("Your fastest kill and your last kill, from the game's own fight duration message.");
 		extra.add(bestLabel);
+		deathsLabel.setAlignmentX(LEFT_ALIGNMENT);
+		deathsLabel.setVisible(false);
+		extra.add(deathsLabel);
 		stats.add(extra, BorderLayout.SOUTH);
 
 		lootGrid.setOpaque(false);
@@ -286,6 +291,21 @@ class MonsterCard extends JPanel
 		{
 			suppliesLabel.setText("Supplies used: " + Formatting.compactXp(supplies.totalGp()) + " gp");
 			suppliesLabel.setToolTipText(SupplyLedger.tooltip(supplies));
+		}
+	}
+
+	/**
+	 * Deaths to this monster, or null for none.
+	 */
+	void updateDeaths(DeathLedger.Deaths deaths)
+	{
+		String text = DeathLedger.label(deaths);
+		deathsLabel.setVisible(text != null);
+		if (text != null)
+		{
+			deathsLabel.setText(text);
+			deathsLabel.setToolTipText("<html>You were carrying " + Formatting.compactXp(deaths.carried) + " gp in all when you "
+				+ "died to " + monsterName + ".<br>That was at risk, not lost: most of it goes to a gravestone or Death's Office.</html>");
 		}
 	}
 

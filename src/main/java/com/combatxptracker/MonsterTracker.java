@@ -577,6 +577,25 @@ public class MonsterTracker
 	/**
 	 * @return every monster, most recently fought first
 	 */
+	/**
+	 * @return one monster's stats (loot at Grand Exchange prices), or null if it isn't tracked
+	 */
+	public synchronized Snapshot snapshotOf(String monsterName)
+	{
+		if (monsterName == null)
+		{
+			return null;
+		}
+		for (Entry e : entries.values())
+		{
+			if (e.name.equalsIgnoreCase(monsterName))
+			{
+				return new Snapshot(e);
+			}
+		}
+		return null;
+	}
+
 	public synchronized List<Snapshot> snapshot()
 	{
 		return snapshot(LootPrice.GRAND_EXCHANGE, name -> false);
