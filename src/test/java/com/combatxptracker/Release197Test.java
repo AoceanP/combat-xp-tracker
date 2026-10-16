@@ -220,7 +220,7 @@ public class Release197Test
 	public void summaryIncludesUptime()
 	{
 		String text = SessionSummaryText.build(new java.util.EnumMap<>(net.runelite.api.Skill.class), new HitStats(),
-			java.util.Collections.emptyList(), XpRateMode.SESSION, null, 87);
-		assertTrue(text, text.contains("Attack uptime: 87%"));
+			java.util.Collections.emptyList(), XpRateMode.SESSION, null, 87, 4.25);
+		assertTrue(text, text.contains("Attack uptime: 87% | DPS: 4.3"));
 	}
 }

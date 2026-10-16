@@ -145,6 +145,14 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 					.right(Formatting.withCommas(row.getKills()) + (row.getKills() == 1 ? " kill" : " kills"))
 					.build());
 			}
+			LevelForecast.CombatRow combat = plugin.getKillsToCombatLevel();
+			if (combat != null)
+			{
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left("Combat " + combat.getNextLevel() + ":")
+					.right(Formatting.withCommas(combat.getKills()) + (combat.getKills() == 1 ? " kill" : " kills"))
+					.build());
+			}
 		}
 
 		for (Map.Entry<Skill, SkillProgress> entry : plugin.getSkillProgress().entrySet())

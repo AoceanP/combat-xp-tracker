@@ -203,6 +203,8 @@ public class MonsterTracker
 		private final int kills;
 		private final int hits;
 		private final long totalDamage;
+		private final int rolls;
+		private final int landed;
 		private final int biggestHit;
 		private final CombatStyle biggestHitStyle;
 		private final Map<CombatStyle, Integer> biggestByStyle;
@@ -224,6 +226,8 @@ public class MonsterTracker
 			kills = e.kills;
 			hits = e.hits;
 			totalDamage = e.totalDamage;
+			rolls = e.rolls;
+			landed = e.landed;
 			biggestHit = e.biggestHit;
 			biggestHitStyle = e.biggestHitStyle;
 			biggestByStyle = Collections.unmodifiableMap(new EnumMap<>(e.biggestByStyle));
@@ -294,6 +298,29 @@ public class MonsterTracker
 		public int getHits()
 		{
 			return hits;
+		}
+
+		/**
+		 * @return the share of your hits that did damage, from 0 to 100, or -1 with fewer than
+		 * {@link #MIN_ROLLS} hits. A 0 counts as a miss, though the game also shows a 0 for a hit
+		 * that rolled no damage.
+		 */
+		public int getAccuracy()
+		{
+			return rolls < MIN_ROLLS ? -1 : (int) Math.round(landed * 100.0 / rolls);
+		}
+
+		/**
+		 * @return every hit including 0s, whatever the "Include 0-damage hits" setting
+		 */
+		public int getRolls()
+		{
+			return rolls;
+		}
+
+		public long getTotalDamage()
+		{
+			return totalDamage;
 		}
 
 		public double getAverageHit()
@@ -368,6 +395,8 @@ public class MonsterTracker
 		int kills;
 		int hits;
 		long totalDamage;
+		int rolls;
+		int landed;
 		int biggestHit = -1;
 		CombatStyle biggestHitStyle;
 		Map<CombatStyle, Integer> biggestByStyle;
@@ -392,6 +421,8 @@ public class MonsterTracker
 		int kills;
 		int hits;
 		long totalDamage;
+		int rolls;
+		int landed;
 		int biggestHit = -1;
 		CombatStyle biggestHitStyle;
 		final Map<CombatStyle, Integer> biggestByStyle = new EnumMap<>(CombatStyle.class);
@@ -408,6 +439,29 @@ public class MonsterTracker
 	// Keyed by NPC name, so every "Abyssal demon" shares one entry.
 	private final Map<String, Entry> entries = new LinkedHashMap<>();
 	private int revision;
+
+	/**
+	 * Hits that count towards accuracy fewer than this are too few to say.
+	 */
+	static final int MIN_ROLLS = 10;
+
+	/**
+	 * Any hit, 0s included, for accuracy. Recorded even when 0s are left out of the average.
+	 */
+	public synchronized void recordRoll(String monsterName, boolean didDamage)
+	{
+		if (isBlank(monsterName))
+		{
+			return;
+		}
+		Entry e = entries.computeIfAbsent(monsterName, Entry::new);
+		e.rolls++;
+		if (didDamage)
+		{
+			e.landed++;
+		}
+		revision++;
+	}
 
 	/**
 	 * @param style the style the hit came from, or null if it couldn't be determined
@@ -609,6 +663,8 @@ public class MonsterTracker
 		target.kills += source.kills;
 		target.hits += source.hits;
 		target.totalDamage += source.totalDamage;
+		target.rolls += source.rolls;
+		target.landed += source.landed;
 		if (source.biggestHit > target.biggestHit)
 		{
 			target.biggestHit = source.biggestHit;
@@ -668,6 +724,8 @@ public class MonsterTracker
 			s.name = e.name;
 			s.kills = e.kills;
 			s.hits = e.hits;
+			s.rolls = e.rolls;
+			s.landed = e.landed;
 			s.totalDamage = e.totalDamage;
 			s.biggestHit = e.biggestHit;
 			s.biggestHitStyle = e.biggestHitStyle;
@@ -710,6 +768,8 @@ public class MonsterTracker
 				e.kills = Math.max(0, s.kills);
 				e.hits = Math.max(0, s.hits);
 				e.totalDamage = Math.max(0, s.totalDamage);
+				e.rolls = Math.max(0, s.rolls);
+				e.landed = Math.max(0, Math.min(e.rolls, s.landed));
 				e.biggestHit = s.biggestHit;
 				e.biggestHitStyle = s.biggestHitStyle;
 				if (s.biggestByStyle != null)

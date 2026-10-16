@@ -57,14 +57,15 @@ final class SessionSummaryText
 	static String build(Map<Skill, SkillProgress> skills, HitStats hits, List<MonsterTracker.Snapshot> monsters, XpRateMode rateMode,
 		HitLuck.Result luck)
 	{
-		return build(skills, hits, monsters, rateMode, luck, -1);
+		return build(skills, hits, monsters, rateMode, luck, -1, -1);
 	}
 
 	/**
 	 * @param uptime this session's attack uptime from 0 to 100, or -1
+	 * @param dps    this session's damage per second of fighting, or -1
 	 */
 	static String build(Map<Skill, SkillProgress> skills, HitStats hits, List<MonsterTracker.Snapshot> monsters, XpRateMode rateMode,
-		HitLuck.Result luck, int uptime)
+		HitLuck.Result luck, int uptime, double dps)
 	{
 		StringBuilder sb = new StringBuilder("Combat & XP Tracker - session summary\n");
 
@@ -105,9 +106,18 @@ final class SessionSummaryText
 		{
 			sb.append(luckLine(luck)).append('\n');
 		}
-		if (uptime >= 0)
+		if (uptime >= 0 || dps >= 0)
 		{
-			sb.append("Attack uptime: ").append(uptime).append("%\n");
+			List<String> parts = new ArrayList<>();
+			if (uptime >= 0)
+			{
+				parts.add("Attack uptime: " + uptime + "%");
+			}
+			if (dps >= 0)
+			{
+				parts.add(String.format(Locale.US, "DPS: %.1f", dps));
+			}
+			sb.append(String.join(" | ", parts)).append('\n');
 		}
 
 		// Monsters

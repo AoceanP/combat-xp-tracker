@@ -64,6 +64,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.TileItem;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -159,6 +160,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final int SUPPLY_TICKS = 50;
 	// The cannon's ball count drops by one a shot; bigger drops are it being picked up.
 	private static final int MAX_CANNON_SHOT = 2;
+	// Combat XP this soon after a cannon shot may be the cannon's.
+	private static final int CANNON_XP_TICKS = 4;
 	// Prayer drained within this many ticks (6s) of hitting a monster counts towards it.
 	private static final int FIGHT_TICKS = 10;
 	// Hits this soon after a special attack (6 ticks, for projectiles) don't count for luck.
@@ -352,6 +355,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	private String lastKillCountBoss;
 	private int lastKillCountBossTick;
 	private final MaxHitFlash maxHitFlash = new MaxHitFlash();
+	private final AttackDetector attackDetector = new AttackDetector(NON_ATTACK_ANIMATIONS);
+	// The monster being fought now, for the target card.
+	private volatile TargetInfo targetInfo;
+	private int targetSeenTick = -1;
+	// Cannon XP isn't the player attacking.
+	private int lastCannonShotTick = -1;
 	private volatile int maxHitChange;
 	private Map<Integer, Long> lastInventory;
 	private SupplyLedger.Category pendingConsume;
@@ -475,6 +484,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		pendingConsume = null;
 		lastCannonBalls = -1;
 		attackTimer.reset();
+		attackDetector.reset();
 		slayerLog.importState(null);
 		savedSlayerLogRevision = -1;
 		slayerStatus = SlayerStatus.NONE;
@@ -553,6 +563,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			clearFights();
 			xpPerKill.clearPending();
 			attackTimer.reset();
+			attackDetector.reset();
 			saveSlayerLog();
 			saveAreaMemory();
 			savePrayerDrain();
@@ -674,10 +685,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		refreshCombatState();
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
-			if (attackTimer.onTick(client.getTickCount(), isAttacking(), attackSpeedTicks))
-			{
-				recordAttack();
-			}
+			trackAttacks();
 		}
 		pruneKillTracking();
 		pruneFights();
@@ -765,8 +773,9 @@ public class CombatXpTrackerPlugin extends Plugin
 				taskSession.recordXp(skill == Skill.SLAYER, delta);
 			}
 			if (skill != Skill.HITPOINTS && skill != Skill.SLAYER && XpPerKill.COMBAT_SKILLS.contains(skill)
-				&& isFromCurrentStyle(skill))
+				&& isFromCurrentStyle(skill) && !cannonFiredRecently())
 			{
+				attackDetector.onXpDrop();
 				// Combat XP comes the moment you attack.
 				if (attackTimer.onAttackSignal(client.getTickCount(), attackSpeedTicks))
 				{
@@ -792,7 +801,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		Hitsplat hitsplat = event.getHitsplat();
 		if (event.getActor() == client.getLocalPlayer())
 		{
-			// Damage taken, not dealt.
+			// Damage taken, not dealt. A block animation may come with it.
+			attackDetector.onHitTaken();
 			return;
 		}
 		if (!hitsplat.isMine())
@@ -804,6 +814,12 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			fightMonster = BossGroups.trackedName(cleanName(((NPC) event.getActor()).getName()));
 			lastFightTick = client.getTickCount();
+			// Accuracy counts 0s whatever the "Include 0-damage hits" setting.
+			boolean landed = hitsplat.getAmount() > 0;
+			monsterTracker.recordRoll(fightMonster, landed);
+			sessionMonsters.recordRoll(fightMonster, landed);
+			allTimeUptime.onDamage(fightMonster, hitsplat.getAmount(), lastFightTick);
+			sessionUptime.onDamage(fightMonster, hitsplat.getAmount(), lastFightTick);
 		}
 
 		int damage = hitsplat.getAmount();
@@ -1108,18 +1124,94 @@ public class CombatXpTrackerPlugin extends Plugin
 		sessionUptime.onAttack(name, tick, attackSpeedTicks);
 	}
 
-	private boolean isAttacking()
+	/**
+	 * Once a tick: whether the player started an attack, for the attack timer and uptime.
+	 */
+	private void trackAttacks()
 	{
 		Player local = client.getLocalPlayer();
 		if (local == null)
 		{
-			return false;
+			return;
 		}
-		int animation = local.getAnimation();
-		if (animation == -1 || NON_ATTACK_ANIMATIONS.contains(animation))
+		int tick = client.getTickCount();
+		AttackDetector.Result seen = attackDetector.onTick(tick, local.getAnimation(), local.getAnimationFrame(),
+			hasCombatTarget(local));
+		boolean attacked = seen == AttackDetector.Result.CERTAIN
+			? attackTimer.onCertainAttack(tick)
+			: attackTimer.onTick(tick, seen == AttackDetector.Result.LIKELY, attackSpeedTicks);
+		if (attacked)
 		{
-			return false;
+			recordAttack();
 		}
+		updateTarget(local, tick);
+	}
+
+	/**
+	 * The monster the player is fighting and its health, for the target card. Kept for a
+	 * few seconds after they stop, so it doesn't flicker between kills.
+	 */
+	private void updateTarget(Player local, int tick)
+	{
+		Actor target = local.getInteracting();
+		if (target instanceof NPC && hasCombatTarget(local))
+		{
+			NPC npc = (NPC) target;
+			String name = BossGroups.trackedName(cleanName(npc.getName()));
+			if (name != null)
+			{
+				Integer max = npcManager.getHealth(npc.getId());
+				int maxHp = max == null ? -1 : max;
+				TargetInfo info = new TargetInfo(name, TargetInfo.hitpoints(npc.getHealthRatio(), npc.getHealthScale(), maxHp),
+					maxHp);
+				targetSeenTick = tick;
+				if (!info.equals(targetInfo))
+				{
+					targetInfo = info;
+					panelDirty = true;
+				}
+				return;
+			}
+		}
+		if (targetInfo != null && tick - targetSeenTick > AttackTimer.IDLE_TICKS)
+		{
+			targetInfo = null;
+			panelDirty = true;
+		}
+	}
+
+	/**
+	 * @return the monster being fought now, or null
+	 */
+	public TargetInfo getTargetInfo()
+	{
+		return config.showTargetCard() ? targetInfo : null;
+	}
+
+	/**
+	 * The player's animation was set. Attacks are worked out once a tick in trackAttacks.
+	 */
+	@Subscribe
+	public void onAnimationChanged(AnimationChanged event)
+	{
+		if (event.getActor() == client.getLocalPlayer())
+		{
+			attackDetector.onAnimationSet();
+		}
+	}
+
+	private boolean cannonFiredRecently()
+	{
+		// Cannon XP comes when the ball lands, a few ticks after the shot.
+		return lastCannonShotTick >= 0 && client.getTickCount() - lastCannonShotTick <= CANNON_XP_TICKS;
+	}
+
+	/**
+	 * Whether the player is targeting something that can be fought: an NPC with hitpoints or
+	 * an Attack option, or another player.
+	 */
+	private boolean hasCombatTarget(Player local)
+	{
 		Actor target = local.getInteracting();
 		if (target instanceof Player)
 		{
@@ -2067,6 +2159,31 @@ public class CombatXpTrackerPlugin extends Plugin
 	/**
 	 * Kills of the last target to each combat skill's next level, in skill order.
 	 */
+	/**
+	 * @return kills of the monster being fought to the next combat level, or null
+	 */
+	public LevelForecast.CombatRow getKillsToCombatLevel()
+	{
+		if (lastTargetName == null || prayerLevel <= 0)
+		{
+			return null;
+		}
+		int[] xp = new int[LevelForecast.COMBAT_SKILLS.length];
+		double[] perKill = new double[xp.length];
+		for (int i = 0; i < xp.length; i++)
+		{
+			Skill skill = LevelForecast.COMBAT_SKILLS[i];
+			SkillProgress progress = skillProgress.get(skill);
+			if (progress == null || !progress.isXpKnown())
+			{
+				return null;
+			}
+			xp[i] = progress.getCurrentXp();
+			perKill[i] = Math.max(0, getXpPerKill(skill));
+		}
+		return LevelForecast.killsToCombatLevel(xp, perKill, prayerLevel);
+	}
+
 	public List<LevelForecast.Row> getKillsToLevel()
 	{
 		if (lastTargetName == null)
@@ -2629,6 +2746,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		// Picking the cannon up empties it at once; only single shots are used up.
 		if (lastCannonBalls >= 0 && fired > 0 && fired <= MAX_CANNON_SHOT)
 		{
+			lastCannonShotTick = client.getTickCount();
 			recordSupply(SupplyLedger.Category.CANNONBALLS, fired * (long) itemManager.getItemPrice(ItemID.MCANNONBALL), fired);
 		}
 		lastCannonBalls = balls;
@@ -2699,6 +2817,22 @@ public class CombatXpTrackerPlugin extends Plugin
 	public int getUptime(String monster, MonsterRange range)
 	{
 		return (range == MonsterRange.SESSION ? sessionUptime : allTimeUptime).percent(monster);
+	}
+
+	/**
+	 * @return damage per second fighting a monster, for the range shown, or -1
+	 */
+	public double getDps(String monster, MonsterRange range)
+	{
+		return (range == MonsterRange.SESSION ? sessionUptime : allTimeUptime).dps(monster);
+	}
+
+	/**
+	 * @return this session's damage per second over every monster, or -1
+	 */
+	public double getSessionDps()
+	{
+		return sessionUptime.totalDps();
 	}
 
 	/**

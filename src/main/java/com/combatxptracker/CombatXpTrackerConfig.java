@@ -409,11 +409,25 @@ public interface CombatXpTrackerConfig extends Config
 		keyName = "killsToLevel",
 		name = "Kills to next level",
 		description = "Shows how many more kills of the monster you're fighting each combat skill needs for its next level, "
-			+ "and what the rest of your slayer task will give. Uses your real XP per kill once you've killed one.",
+			+ "your next combat level, and what the rest of your slayer task will give. Uses your real XP per kill once "
+			+ "you've killed one.",
 		position = 13,
 		section = combatSection
 	)
 	default boolean killsToLevel()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showTargetCard",
+		name = "Target card",
+		description = "A card at the top of the Monsters tab for the monster you're fighting: its health, hits left to kill it, "
+			+ "your time per kill and your damage per second.",
+		position = 13,
+		section = combatSection
+	)
+	default boolean showTargetCard()
 	{
 		return true;
 	}

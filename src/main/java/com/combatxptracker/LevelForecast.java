@@ -156,4 +156,85 @@ final class LevelForecast
 		int after = (int) Math.min(Experience.MAX_SKILL_XP, (long) currentXp + gain);
 		return new TaskGain(skill, after - currentXp, Experience.getLevelForXp(currentXp), Experience.getLevelForXp(after));
 	}
+
+	/**
+	 * Kills left to the next combat level.
+	 */
+	static final class CombatRow
+	{
+		private final int nextLevel;
+		private final int kills;
+
+		CombatRow(int nextLevel, int kills)
+		{
+			this.nextLevel = nextLevel;
+			this.kills = kills;
+		}
+
+		int getNextLevel()
+		{
+			return nextLevel;
+		}
+
+		int getKills()
+		{
+			return kills;
+		}
+	}
+
+	// The combat skills, in the order Experience.getCombatLevel takes them (prayer apart).
+	static final Skill[] COMBAT_SKILLS = {Skill.ATTACK, Skill.STRENGTH, Skill.DEFENCE, Skill.HITPOINTS, Skill.MAGIC,
+		Skill.RANGED};
+
+	// Further away than this isn't worth showing.
+	private static final int MAX_COMBAT_KILLS = 100_000;
+
+	/**
+	 * Kills until the combat level goes up, with each skill gaining its XP per kill.
+	 *
+	 * @param xp        current XP in each of {@link #COMBAT_SKILLS}
+	 * @param xpPerKill XP per kill in each of them (0 for none)
+	 * @return the row, or null if no XP is coming, the player is maxed or it's very far away
+	 */
+	static CombatRow killsToCombatLevel(int[] xp, double[] xpPerKill, int prayerLevel)
+	{
+		boolean gaining = false;
+		for (double perKill : xpPerKill)
+		{
+			gaining |= perKill > 0;
+		}
+		int now = combatLevel(xp, xpPerKill, 0, prayerLevel);
+		if (!gaining || now >= Experience.MAX_COMBAT_LEVEL
+			|| combatLevel(xp, xpPerKill, MAX_COMBAT_KILLS, prayerLevel) <= now)
+		{
+			return null;
+		}
+		// The level only goes up with more kills, so search for the first kill that raises it.
+		int low = 0;
+		int high = MAX_COMBAT_KILLS;
+		while (high - low > 1)
+		{
+			int mid = (low + high) >>> 1;
+			if (combatLevel(xp, xpPerKill, mid, prayerLevel) > now)
+			{
+				high = mid;
+			}
+			else
+			{
+				low = mid;
+			}
+		}
+		return new CombatRow(combatLevel(xp, xpPerKill, high, prayerLevel), high);
+	}
+
+	private static int combatLevel(int[] xp, double[] xpPerKill, int kills, int prayerLevel)
+	{
+		int[] levels = new int[COMBAT_SKILLS.length];
+		for (int i = 0; i < levels.length; i++)
+		{
+			long after = Math.min(Experience.MAX_SKILL_XP, xp[i] + Math.round(xpPerKill[i] * kills));
+			levels[i] = Math.min(Experience.MAX_REAL_LEVEL, Experience.getLevelForXp((int) after));
+		}
+		return Experience.getCombatLevel(levels[0], levels[1], levels[2], levels[3], levels[4], levels[5], prayerLevel);
+	}
 }

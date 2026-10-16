@@ -34,6 +34,8 @@ import java.util.Map;
  * walking, a late click) are lost. A gap longer than {@link AttackTimer#IDLE_TICKS} means
  * the fight ended, and isn't counted.
  *
+ * Damage dealt during fights is kept too, for damage per second of fighting.
+ *
  * Kept per monster, plus a total. Saved per account as JSON, so field names are the save
  * format. Synchronized: recorded on the client thread and read by the panel.
  */
@@ -48,6 +50,8 @@ final class AttackUptime
 	{
 		long busy;
 		long idle;
+		// Damage dealt while fighting, for DPS.
+		long damage;
 
 		/**
 		 * @return uptime from 0 to 100, or -1 if there's too little fighting to say
@@ -57,7 +61,18 @@ final class AttackUptime
 			long total = busy + idle;
 			return total < MIN_TICKS ? -1 : (int) Math.round(busy * 100.0 / total);
 		}
+
+		/**
+		 * @return damage per second of fighting, or -1 if there's too little fighting to say
+		 */
+		double dps()
+		{
+			long total = busy + idle;
+			return total < MIN_TICKS ? -1 : damage / (total * SECONDS_PER_TICK);
+		}
 	}
+
+	private static final double SECONDS_PER_TICK = 0.6;
 
 	private Map<String, Ticks> byMonster = new HashMap<>();
 	private final Ticks total = new Ticks();
@@ -78,7 +93,11 @@ final class AttackUptime
 	synchronized void onAttack(String monster, int tick, int speed)
 	{
 		int gap = tick - lastTick;
-		if (lastTick >= 0 && lastMonster != null && gap > 0 && gap <= AttackTimer.IDLE_TICKS)
+		if (lastTick >= 0 && (gap > AttackTimer.IDLE_TICKS || gap < 0))
+		{
+			closeFight();
+		}
+		else if (lastTick >= 0 && lastMonster != null && gap > 0)
 		{
 			int busy = Math.min(gap, lastSpeed);
 			Ticks t = byMonster.computeIfAbsent(key(lastMonster), k -> new Ticks());
@@ -98,8 +117,55 @@ final class AttackUptime
 	 */
 	synchronized void endFight()
 	{
+		closeFight();
 		lastTick = -1;
 		lastMonster = null;
+	}
+
+	/**
+	 * The last attack of a fight keeps the weapon busy for its attack speed too.
+	 */
+	private void closeFight()
+	{
+		if (lastTick < 0 || lastMonster == null)
+		{
+			return;
+		}
+		byMonster.computeIfAbsent(key(lastMonster), k -> new Ticks()).busy += lastSpeed;
+		total.busy += lastSpeed;
+		lastMonster = null;
+		revision++;
+	}
+
+	/**
+	 * Damage the player dealt. Only counted during a fight, so it matches the time.
+	 */
+	synchronized void onDamage(String monster, int amount, int tick)
+	{
+		if (monster == null || amount <= 0 || lastTick < 0 || tick - lastTick > AttackTimer.IDLE_TICKS)
+		{
+			return;
+		}
+		byMonster.computeIfAbsent(key(monster), k -> new Ticks()).damage += amount;
+		total.damage += amount;
+		revision++;
+	}
+
+	/**
+	 * @return damage per second fighting a monster, or -1 if there isn't enough to say
+	 */
+	synchronized double dps(String monster)
+	{
+		Ticks t = monster == null ? null : byMonster.get(key(monster));
+		return t == null ? -1 : t.dps();
+	}
+
+	/**
+	 * @return damage per second over every monster, or -1 if there isn't enough to say
+	 */
+	synchronized double totalDps()
+	{
+		return total.dps();
 	}
 
 	/**
@@ -126,6 +192,7 @@ final class AttackUptime
 		{
 			total.busy -= t.busy;
 			total.idle -= t.idle;
+			total.damage -= t.damage;
 			revision++;
 		}
 	}
@@ -135,7 +202,9 @@ final class AttackUptime
 		byMonster.clear();
 		total.busy = 0;
 		total.idle = 0;
-		endFight();
+		total.damage = 0;
+		lastTick = -1;
+		lastMonster = null;
 		revision++;
 	}
 
@@ -167,13 +236,14 @@ final class AttackUptime
 		for (Map.Entry<String, Ticks> e : saved.entrySet())
 		{
 			Ticks t = e.getValue();
-			if (e.getKey() == null || t == null || t.busy < 0 || t.idle < 0)
+			if (e.getKey() == null || t == null || t.busy < 0 || t.idle < 0 || t.damage < 0)
 			{
 				continue;
 			}
 			byMonster.put(key(e.getKey()), t);
 			total.busy += t.busy;
 			total.idle += t.idle;
+			total.damage += t.damage;
 		}
 	}
 }

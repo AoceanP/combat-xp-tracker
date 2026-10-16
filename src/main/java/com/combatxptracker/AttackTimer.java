@@ -28,8 +28,8 @@ package com.combatxptracker;
  * Ticks until the player can attack again, from their weapon's attack speed (OSRS Wiki,
  * "Attack speed").
  *
- * Attacks are spotted once a tick: when the weapon is ready and the player has a target and
- * an attack animation playing. Combat XP drops, which come on the tick of an attack that
+ * Attacks are spotted once a tick by {@link AttackDetector}: an attack animation starting
+ * while the player has a target. Combat XP drops, which come on the tick of an attack that
  * lands, correct it. A close estimate rather than the game's own timer. Client thread only.
  */
 final class AttackTimer
@@ -115,6 +115,23 @@ final class AttackTimer
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * An animation known to be the player's attack started. The game never lets the player
+	 * attack before their weapon is ready, so if the timer thought it wasn't, the last attack
+	 * it counted was wrong and this one replaces it.
+	 *
+	 * @return whether it counted as a new attack
+	 */
+	boolean onCertainAttack(int tick)
+	{
+		if (tick == lastAttackTick)
+		{
+			return false;
+		}
+		lastAttackTick = tick;
+		return true;
 	}
 
 	/**

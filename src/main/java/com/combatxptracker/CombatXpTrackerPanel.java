@@ -117,6 +117,7 @@ class CombatXpTrackerPanel extends PluginPanel
 	private List<Skill> shownGoals = new ArrayList<>();
 
 	// Monsters tab
+	private final TargetCard targetCard = new TargetCard();
 	private final DragReorder.ListPanel monstersList = new DragReorder.ListPanel(new DynamicGridLayout(0, 1, 0, 0));
 	// How many cards at the top of the Monsters list are pinned, the only ones that can be dragged.
 	private int pinnedShown;
@@ -379,7 +380,9 @@ class CombatXpTrackerPanel extends PluginPanel
 		});
 		searchField.addClearListener(this::updateMonsters);
 
+		targetCard.setVisible(false);
 		view.add(rangeRow);
+		view.add(collapsible(targetCard));
 		view.add(summary);
 		view.add(searchField);
 		view.add(sortRow);
@@ -492,6 +495,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		updateCombatCard();
 		updateLevelDetails();
 		updateGoals();
+		updateTargetCard();
 		updateMonsters();
 		if (slayerView != null)
 		{
@@ -622,6 +626,20 @@ class CombatXpTrackerPanel extends PluginPanel
 			}
 		}
 
+		LevelForecast.CombatRow combat = plugin.getKillsToCombatLevel();
+		if (combat != null)
+		{
+			if (rows.isEmpty())
+			{
+				JLabel header = Theme.label("<html><div style='width:175px'>Kills to level: " + target + "</div></html>", Theme.SUBTLE);
+				header.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
+				levelDetails.add(header);
+			}
+			levelDetails.add(detailRow("Combat " + combat.getNextLevel(),
+				Formatting.withCommas(combat.getKills()) + (combat.getKills() == 1 ? " kill" : " kills"), false,
+				"Kills until your combat level goes up, with every combat skill gaining its XP per kill"));
+		}
+
 		List<LevelForecast.TaskGain> gains = plugin.getTaskForecast();
 		if (!gains.isEmpty())
 		{
@@ -749,6 +767,32 @@ class CombatXpTrackerPanel extends PluginPanel
 		plugin.setPinnedOrder(order);
 	}
 
+	/**
+	 * The card for the monster being fought now, from this session's stats on it.
+	 */
+	private void updateTargetCard()
+	{
+		TargetInfo target = plugin.getTargetInfo();
+		if (target == null)
+		{
+			targetCard.setVisible(false);
+			return;
+		}
+		MonsterTracker.Snapshot stats = null;
+		for (MonsterTracker.Snapshot s : plugin.getMonsterTracker(MonsterRange.SESSION).snapshot())
+		{
+			if (s.getName().equalsIgnoreCase(target.getName()))
+			{
+				stats = s;
+				break;
+			}
+		}
+		double averagePerHit = stats == null || stats.getRolls() == 0 ? 0 : stats.getTotalDamage() / (double) stats.getRolls();
+		long perKill = stats == null || stats.getKills() == 0 ? -1 : stats.getActiveMillis() / stats.getKills();
+		targetCard.update(target, averagePerHit, perKill, plugin.getDps(target.getName(), MonsterRange.SESSION));
+		targetCard.setVisible(true);
+	}
+
 	private void updateMonsters()
 	{
 		MonsterRange range = config.monsterRange();
@@ -809,7 +853,8 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
 				pinned.contains(s.getName().toLowerCase()));
 			card.updateSupplies(plugin.getSupplies(s.getName(), range));
-			card.updateFight(plugin.getUptime(s.getName(), range), plugin.getBossTimes(s.getName()));
+			card.updateFight(s.getAccuracy(), plugin.getDps(s.getName(), range), plugin.getUptime(s.getName(), range),
+				plugin.getBossTimes(s.getName()));
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();
@@ -853,7 +898,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			tracker.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems())),
 			config.monsterSort(), MonsterTracker.parseNames(config.hiddenMonsters()));
 		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode(),
-			plugin.getLuck(), plugin.getSessionUptime());
+			plugin.getLuck(), plugin.getSessionUptime(), plugin.getSessionDps());
 
 		try
 		{

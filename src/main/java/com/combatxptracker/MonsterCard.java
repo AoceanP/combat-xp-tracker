@@ -86,7 +86,10 @@ class MonsterCard extends JPanel
 	private final JLabel prayerLabel = Theme.label("", Theme.MUTED);
 	private final JLabel collectionLabel = Theme.label("", Theme.GOLD);
 	private final JLabel suppliesLabel = Theme.label("", Theme.MUTED);
-	private final JLabel uptimeLabel = Theme.label("", Theme.MUTED);
+	private final JLabel accuracyValue = Theme.boldLabel("-", Theme.TEXT);
+	private final JLabel dpsValue = Theme.boldLabel("-", Theme.TEXT);
+	private final JLabel uptimeValue = Theme.boldLabel("-", Theme.TEXT);
+	private final JPanel fightRow = new JPanel(new GridLayout(1, 3, 3, 0));
 	private final JLabel bestLabel = Theme.label("", Theme.TEXT);
 	private final JLabel missingLabel = Theme.label("", Theme.MUTED);
 	private final CombatXpTrackerPlugin plugin;
@@ -138,10 +141,29 @@ class MonsterCard extends JPanel
 			styleRow.add(tile);
 		}
 
+		fightRow.setOpaque(false);
+		JPanel accuracyTile = tile(accuracyValue, "Accuracy");
+		accuracyTile.setToolTipText("<html>The share of your hits on " + monsterName + " that did damage.<br>"
+			+ "A 0 counts as a miss, though a hit can also roll 0.</html>");
+		JPanel dpsTile = tile(dpsValue, "DPS");
+		dpsTile.setToolTipText("Your damage per second while fighting " + monsterName);
+		JPanel uptimeTile = tile(uptimeValue, "Uptime");
+		uptimeTile.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
+			+ "before the next attack<br>(eating, moving, a late click) count against it. Breaks over 10 seconds aren't counted.</html>");
+		fightRow.add(accuracyTile);
+		fightRow.add(dpsTile);
+		fightRow.add(uptimeTile);
+		fightRow.setVisible(false);
+
+		JPanel tileRows = new JPanel(new BorderLayout(0, 3));
+		tileRows.setOpaque(false);
+		tileRows.add(styleRow, BorderLayout.NORTH);
+		tileRows.add(fightRow, BorderLayout.SOUTH);
+
 		JPanel stats = new JPanel(new BorderLayout(0, 3));
 		stats.setOpaque(false);
 		stats.add(statsRow, BorderLayout.NORTH);
-		stats.add(styleRow, BorderLayout.CENTER);
+		stats.add(tileRows, BorderLayout.CENTER);
 		ratesLabel.setToolTipText("Per hour of fighting this monster. Breaks over 5 minutes aren't counted.");
 		taskLabel.setToolTipText("Your current slayer task. Time left uses your kills/hr on this monster.");
 		// BoxLayout skips hidden lines; a grid would leave blank rows for them.
@@ -166,11 +188,6 @@ class MonsterCard extends JPanel
 		suppliesLabel.setAlignmentX(LEFT_ALIGNMENT);
 		suppliesLabel.setVisible(false);
 		extra.add(suppliesLabel);
-		uptimeLabel.setAlignmentX(LEFT_ALIGNMENT);
-		uptimeLabel.setVisible(false);
-		uptimeLabel.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
-			+ "before the next attack<br>(eating, moving, a late click) count against it. Breaks over 10 seconds aren't counted.</html>");
-		extra.add(uptimeLabel);
 		bestLabel.setAlignmentX(LEFT_ALIGNMENT);
 		bestLabel.setVisible(false);
 		bestLabel.setToolTipText("Your fastest kill and your last kill, from the game's own fight duration message.");
@@ -273,15 +290,15 @@ class MonsterCard extends JPanel
 	}
 
 	/**
-	 * Attack uptime (0 to 100, or -1 to hide) and boss kill times (or null).
+	 * Accuracy and uptime (0 to 100, or -1 if unknown), damage per second (or -1) and boss
+	 * kill times (or null).
 	 */
-	void updateFight(int uptime, BossTimes.Times times)
+	void updateFight(int accuracy, double dps, int uptime, BossTimes.Times times)
 	{
-		uptimeLabel.setVisible(uptime >= 0);
-		if (uptime >= 0)
-		{
-			uptimeLabel.setText("Attack uptime: " + uptime + "%");
-		}
+		fightRow.setVisible(accuracy >= 0 || dps >= 0 || uptime >= 0);
+		accuracyValue.setText(accuracy >= 0 ? accuracy + "%" : "-");
+		dpsValue.setText(dps >= 0 ? String.format(java.util.Locale.US, "%.1f", dps) : "-");
+		uptimeValue.setText(uptime >= 0 ? uptime + "%" : "-");
 		String best = BossTimes.label(times);
 		bestLabel.setVisible(best != null);
 		if (best != null)
@@ -294,7 +311,7 @@ class MonsterCard extends JPanel
 	 * A small stat tile: the value above a caption, centred, like the tiles at the top of the
 	 * panel.
 	 */
-	private static JPanel tile(JLabel value, String caption)
+	static JPanel tile(JLabel value, String caption)
 	{
 		JPanel tile = new JPanel(new BorderLayout(0, 0));
 		tile.setBackground(Theme.HEADER);
