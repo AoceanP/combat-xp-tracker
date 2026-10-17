@@ -72,6 +72,7 @@ import net.runelite.client.ui.components.IconTextField;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 import net.runelite.client.util.Filepath;
+import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.util.QuantityFormatter;
 
 /**
@@ -118,6 +119,7 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	// Monsters tab
 	private final TargetCard targetCard = new TargetCard();
+	private DropRevealCard revealCard;
 	private final DragReorder.ListPanel monstersList = new DragReorder.ListPanel(new DynamicGridLayout(0, 1, 0, 0));
 	// How many cards at the top of the Monsters list are pinned, the only ones that can be dragged.
 	private int pinnedShown;
@@ -182,6 +184,9 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	// ---- Construction ------------------------------------------------------------
 
+	private static final String ISSUES = "https://github.com/AoceanP/combat-xp-tracker/issues/new";
+
+
 	private JPanel buildHeader()
 	{
 		JPanel header = new JPanel(new BorderLayout(0, 6));
@@ -191,7 +196,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		header.add(title, BorderLayout.NORTH);
 
 		// Two rows, so "Wrapped" fits the sidebar.
-		JPanel buttons = new JPanel(new GridLayout(2, 2, 4, 4));
+		JPanel buttons = new JPanel(new GridLayout(3, 2, 4, 4));
 		buttons.setOpaque(false);
 		JLabel[] copy = new JLabel[1];
 		copy[0] = Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post",
@@ -204,6 +209,10 @@ class CombatXpTrackerPanel extends PluginPanel
 			() -> exportMenu().show(export[0], 0, export[0].getHeight()));
 		buttons.add(export[0]);
 		buttons.add(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset));
+		buttons.add(Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
+			() -> LinkBrowser.browse(ISSUES + "?labels=bug")));
+		buttons.add(Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
+			() -> LinkBrowser.browse(ISSUES + "?labels=enhancement")));
 		header.add(buttons, BorderLayout.CENTER);
 		return header;
 	}
@@ -382,6 +391,8 @@ class CombatXpTrackerPanel extends PluginPanel
 
 		targetCard.setVisible(false);
 		view.add(rangeRow);
+		revealCard = new DropRevealCard(itemManager);
+		view.add(collapsible(revealCard));
 		view.add(collapsible(targetCard));
 		view.add(summary);
 		view.add(searchField);
@@ -496,6 +507,10 @@ class CombatXpTrackerPanel extends PluginPanel
 		updateLevelDetails();
 		updateGoals();
 		updateTargetCard();
+		if (revealCard != null)
+		{
+			revealCard.play(plugin.getDropReveal());
+		}
 		updateMonsters();
 		if (slayerView != null)
 		{
@@ -781,7 +796,8 @@ class CombatXpTrackerPanel extends PluginPanel
 		MonsterTracker.Snapshot stats = plugin.getMonsterTracker(MonsterRange.SESSION).snapshotOf(target.getName());
 		double averagePerHit = stats == null || stats.getRolls() == 0 ? 0 : stats.getTotalDamage() / (double) stats.getRolls();
 		long perKill = stats == null || stats.getKills() == 0 ? -1 : stats.getActiveMillis() / stats.getKills();
-		targetCard.update(target, averagePerHit, perKill, plugin.getDps(target.getName(), MonsterRange.SESSION));
+		targetCard.update(target, averagePerHit, perKill, plugin.getDps(target.getName(), MonsterRange.SESSION),
+			plugin.getFoodKills(target.getName()), plugin.getPrayerMinutes(target.getName()));
 		targetCard.setVisible(true);
 	}
 
@@ -799,7 +815,8 @@ class CombatXpTrackerPanel extends PluginPanel
 		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
 			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
 			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision()
-			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision();
+			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision()
+			+ "|" + plugin.getCombatAchievementsRevision();
 		if (key.equals(monsterViewKey))
 		{
 			return;
@@ -845,9 +862,11 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
 				pinned.contains(s.getName().toLowerCase()));
 			card.updateSupplies(plugin.getSupplies(s.getName(), range));
-			card.updateFight(s.getAccuracy(), plugin.getDps(s.getName(), range), plugin.getUptime(s.getName(), range),
-				plugin.getBossTimes(s.getName()));
+			card.updateFight(s.getAccuracy(), plugin.getDps(s.getName(), range), plugin.getUptime(s.getName(), range));
 			card.updateDeaths(plugin.getDeaths(s.getName(), range));
+			card.updateFightExtras(plugin.getDamageTaken(s.getName(), range), plugin.getIdleTicks(s.getName(), range));
+			card.updateBoss(plugin.getBossTimes(s.getName()), plugin.getDryItems(s.getName()),
+				plugin.getCombatAchievements(s.getName()));
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();

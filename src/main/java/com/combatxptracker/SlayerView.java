@@ -184,7 +184,10 @@ class SlayerView extends JPanel
 		int potions, int killsLeft)
 	{
 		guideCard.removeAll();
-		if (guide.getTask() == null || (guide.getAreas().isEmpty() && guide.getNeeds().isEmpty() && potions < 0))
+		TaskForecast forecast = plugin.getTaskRunForecast();
+		TaskForecast.Cannon cannon = plugin.getTaskCannon();
+		if (guide.getTask() == null || (guide.getAreas().isEmpty() && guide.getNeeds().isEmpty() && potions < 0
+			&& forecast == null && cannon == null))
 		{
 			guideCard.setVisible(false);
 			return;
@@ -253,6 +256,33 @@ class SlayerView extends JPanel
 			guideCard.add(row("Prayer potions", potions == 0 ? "None" : "About " + potions, Theme.TEXT,
 				"<html>For the " + Formatting.withCommas(killsLeft) + " kills left, at your own measured prayer drain "
 					+ "on this monster.<br>Super restores restore a little more per dose.</html>"));
+		}
+		if (forecast != null || cannon != null)
+		{
+			JLabel heading = Theme.label(forecast == null ? "From your task log"
+				: "Rest of task (your last " + (forecast.getRuns() == 1 ? "run" : forecast.getRuns() + " runs") + ")", Theme.MUTED);
+			heading.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+			guideCard.add(heading);
+		}
+		if (forecast != null)
+		{
+			String tip = "At your own pace on this task, scaled to the " + Formatting.withCommas(killsLeft) + " kills left";
+			guideCard.add(row("Time", "~" + Formatting.duration(forecast.getMillis() / 3_600_000.0), Theme.TEXT, tip));
+			guideCard.add(row("Slayer XP", "+" + Formatting.compactXp(forecast.getSlayerXp()), Theme.SUCCESS, tip));
+			if (forecast.getLoot() > 0)
+			{
+				guideCard.add(row("Loot", "~" + Formatting.compactXp(forecast.getLoot()) + " gp", Theme.GOLD, tip));
+			}
+			if (forecast.getSupplies() > 0)
+			{
+				guideCard.add(row("Supplies", "~" + Formatting.compactXp(forecast.getSupplies()) + " gp", Theme.TEXT, tip));
+			}
+		}
+		if (cannon != null)
+		{
+			guideCard.add(row("Cannon XP", cannon.gain(),
+				cannon.getXpPerHourWith() > cannon.getXpPerHourWithout() ? Theme.SUCCESS : Theme.MUTED, cannon.tooltip()));
+			guideCard.add(row("Cannon cost", cannon.cost(), Theme.TEXT, cannon.tooltip()));
 		}
 	}
 

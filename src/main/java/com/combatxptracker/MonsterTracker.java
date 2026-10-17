@@ -120,6 +120,16 @@ public class MonsterTracker
 		{
 			return (mode == LootPrice.HIGH_ALCHEMY ? haPrice : unitPrice) * quantity;
 		}
+
+		public int getItemId()
+		{
+			return itemId;
+		}
+
+		public String getName()
+		{
+			return name;
+		}
 	}
 
 	/**

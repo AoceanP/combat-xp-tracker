@@ -24,7 +24,10 @@
  */
 package com.combatxptracker;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -55,7 +58,19 @@ final class BossTimes
 	{
 		double best;
 		double last;
+		// The last few kill times, oldest first. Null in saves from before 2.0.
+		List<Double> recent;
+
+		List<Double> recentOrEmpty()
+		{
+			return recent == null ? Collections.emptyList() : recent;
+		}
 	}
+
+	/**
+	 * How many recent kill times are kept for each boss.
+	 */
+	static final int RECENT_KILLS = 20;
 
 	/**
 	 * A parsed duration message.
@@ -166,6 +181,15 @@ final class BossTimes
 		Times t = byBoss.computeIfAbsent(key(boss), k -> new Times());
 		double before = d.previousBest > 0 ? d.previousBest : t.best;
 		t.last = d.seconds;
+		if (t.recent == null)
+		{
+			t.recent = new ArrayList<>();
+		}
+		t.recent.add(d.seconds);
+		while (t.recent.size() > RECENT_KILLS)
+		{
+			t.recent.remove(0);
+		}
 		if (d.newBest)
 		{
 			t.best = d.seconds;
@@ -196,6 +220,7 @@ final class BossTimes
 		Times copy = new Times();
 		copy.best = t.best;
 		copy.last = t.last;
+		copy.recent = new ArrayList<>(t.recentOrEmpty());
 		return copy;
 	}
 

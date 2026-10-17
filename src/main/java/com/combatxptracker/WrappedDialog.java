@@ -163,6 +163,24 @@ final class WrappedDialog
 		}
 	}
 
+	/**
+	 * Puts an image on the clipboard.
+	 *
+	 * @return whether it worked (the clipboard can be busy)
+	 */
+	static boolean copyImage(Image image)
+	{
+		try
+		{
+			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new ImageSelection(image), null);
+			return true;
+		}
+		catch (IllegalStateException e)
+		{
+			return false;
+		}
+	}
+
 	private static void copy(JLabel button, String label, Transferable contents)
 	{
 		try

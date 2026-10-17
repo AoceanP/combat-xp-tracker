@@ -53,8 +53,10 @@ import net.runelite.api.EquipmentInventorySlot;
 import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
+import net.runelite.api.HitsplatID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
@@ -79,6 +81,7 @@ import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.ScriptID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
@@ -155,6 +158,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String UPTIME_KEY = "attackUptime";
 	private static final String BOSS_TIMES_KEY = "bossTimes";
 	private static final String DEATHS_KEY = "deaths";
+	private static final String DAMAGE_TAKEN_KEY = "damageTaken";
+	private static final int ARCEUUS_SPELLBOOK = 3;
+	// A reward chest's items should be there within this many ticks of it opening.
+	private static final int REWARD_WAIT_TICKS = 3;
+	// Drops below this never get a reveal, whatever the rare drop value.
+	private static final long MIN_REVEAL_VALUE = 1_000_000;
 	// A boss's duration message and kill count message come within this many ticks.
 	private static final int BOSS_TIME_WINDOW_TICKS = 3;
 	// Supplies used within this many ticks (30s) of hitting a monster count towards it.
@@ -237,6 +246,12 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	@Inject
 	private AttackTimerOverlay attackTimerOverlay;
+
+	@Inject
+	private KillTimerOverlay killTimerOverlay;
+
+	@Inject
+	private DropRevealOverlay dropRevealOverlay;
 
 	@Inject
 	private LootDespawnOverlay lootDespawnOverlay;
@@ -356,6 +371,37 @@ public class CombatXpTrackerPlugin extends Plugin
 	private String lastKillCountBoss;
 	private int lastKillCountBossTick;
 	private final MaxHitFlash maxHitFlash = new MaxHitFlash();
+	private final KillTimer killTimer = new KillTimer();
+	// Damage taken per boss kill (all time and this session), and taken since the last kill.
+	private final DamageTaken allTimeDamageTaken = new DamageTaken();
+	private final DamageTaken sessionDamageTaken = new DamageTaken();
+	private int savedDamageTakenRevision = -1;
+	private int damageSinceKill;
+	private ElementalWeakness elementalWeakness = new ElementalWeakness(null);
+	// The latest big drop for the panel's reveal.
+	private volatile DropReveal dropReveal;
+	private volatile long revealStartMillis;
+	// A reward chest's interface opened, waiting to read its items; and the last one read, so
+	// looking at the same reward again isn't counted twice.
+	private RewardSources pendingReward;
+	private int pendingRewardTick;
+	private String lastRewardSignature;
+	private long lastRewardMillis;
+	// With the reveal on screen, its screenshot waits until it has landed.
+	private String pendingRevealScreenshot;
+	private long revealScreenshotAt;
+	private int revealSequence;
+	// What the player carries, for the supply forecast.
+	private volatile int carriedFood = -1;
+	private volatile int carriedPrayerDoses;
+	private volatile int prayerPointsNow = -1;
+	// Prep check: the bank was open last tick, and the tick to check on after it closes.
+	private boolean bankWasOpen;
+	private int prepCheckTick = -1;
+	// Drop rates for the dry calculator, bundled with the plugin.
+	private DryCalculator dryCalculator = new DryCalculator(null);
+	private final CombatAchievements combatAchievements = new CombatAchievements();
+	private boolean combatAchievementsLoaded;
 	// Deaths per monster (all time and this session).
 	private final DeathLedger allTimeDeaths = new DeathLedger();
 	private final DeathLedger sessionDeaths = new DeathLedger();
@@ -433,7 +479,14 @@ public class CombatXpTrackerPlugin extends Plugin
 		buildPanel();
 		overlayManager.add(overlay);
 		overlayManager.add(attackTimerOverlay);
+		overlayManager.add(killTimerOverlay);
+		overlayManager.add(dropRevealOverlay);
 		overlayManager.add(lootDespawnOverlay);
+		dryCalculator = loadDryCalculator();
+		elementalWeakness = new ElementalWeakness(loadResource("elemental_weakness.json",
+			new TypeToken<Map<String, List<Integer>>>()
+			{
+			}.getType()));
 		syncInfoBoxes();
 
 		// Turned on while already logged in: GameStateChanged and RuneScapeProfileChanged
@@ -458,6 +511,11 @@ public class CombatXpTrackerPlugin extends Plugin
 		saveAreaMemory();
 		savePrayerDrain();
 		overlayManager.remove(attackTimerOverlay);
+		overlayManager.remove(killTimerOverlay);
+		overlayManager.remove(dropRevealOverlay);
+		killTimer.reset();
+		combatAchievements.clear();
+		combatAchievementsLoaded = false;
 		overlayManager.remove(lootDespawnOverlay);
 		groundLoot.clear();
 		groundLootStatus = null;
@@ -484,6 +542,11 @@ public class CombatXpTrackerPlugin extends Plugin
 		allTimeDeaths.importState(null);
 		sessionDeaths.reset();
 		savedDeathsRevision = -1;
+		saveDamageTaken();
+		allTimeDamageTaken.importState(null);
+		sessionDamageTaken.reset();
+		savedDamageTakenRevision = -1;
+		damageSinceKill = 0;
 		pendingDuration = null;
 		lastKillCountBoss = null;
 		maxHitFlash.reset();
@@ -573,6 +636,8 @@ public class CombatXpTrackerPlugin extends Plugin
 			xpPerKill.clearPending();
 			attackTimer.reset();
 			attackDetector.reset();
+			killTimer.reset();
+			combatAchievementsLoaded = false;
 			saveSlayerLog();
 			saveAreaMemory();
 			savePrayerDrain();
@@ -580,6 +645,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveUptime();
 			saveBossTimes();
 			saveDeaths();
+			saveDamageTaken();
 			allTimeUptime.endFight();
 			sessionUptime.endFight();
 			maxHitFlash.reset();
@@ -598,6 +664,7 @@ public class CombatXpTrackerPlugin extends Plugin
 				sessionSupplies.reset();
 				sessionUptime.reset();
 				sessionDeaths.reset();
+				sessionDamageTaken.reset();
 				combinedDropTracker.reset();
 				sessionMonsters.reset();
 			}
@@ -700,6 +767,20 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		pruneKillTracking();
 		pruneFights();
+		killTimer.onTick(client.getTickCount());
+		readPendingReward();
+		if (pendingRevealScreenshot != null && System.currentTimeMillis() >= revealScreenshotAt)
+		{
+			screenshot(pendingRevealScreenshot);
+			pendingRevealScreenshot = null;
+		}
+		checkPrepAfterBank();
+		if (!combatAchievementsLoaded && config.combatAchievements() && client.getGameState() == GameState.LOGGED_IN)
+		{
+			combatAchievementsLoaded = true;
+			combatAchievements.load(client);
+			panelDirty = true;
+		}
 		finishPendingTaskRecord();
 		if (pendingLootNpc != null && client.getTickCount() - pendingLootTick > LOOT_WINDOW_TICKS)
 		{
@@ -718,6 +799,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			saveUptime();
 			saveBossTimes();
 			saveDeaths();
+			saveDamageTaken();
 		}
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -815,6 +897,12 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			// Damage taken, not dealt. A block animation may come with it.
 			attackDetector.onHitTaken();
+			int type = hitsplat.getHitsplatType();
+			if (type != HitsplatID.HEAL && type != HitsplatID.POISON && type != HitsplatID.VENOM && type != HitsplatID.DISEASE
+				&& fightMonster != null && client.getTickCount() - lastFightTick <= AttackTimer.IDLE_TICKS)
+			{
+				damageSinceKill += hitsplat.getAmount();
+			}
 			return;
 		}
 		if (!hitsplat.isMine())
@@ -915,6 +1003,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			countKill(name, System.currentTimeMillis());
 			if (BossGroups.countsAsKill(name))
 			{
+				killTimer.onKill(BossGroups.trackedName(name), client.getTickCount());
 				String key = fightKey(npc, name);
 				BossFight fight = fights.get(key);
 				if (fight != null && pendingKillFight == null)
@@ -1027,6 +1116,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			return;
 		}
+		if (text.startsWith(CollectionLog.NEW_ITEM_PREFIX))
+		{
+			revealUnique(text.substring(CollectionLog.NEW_ITEM_PREFIX.length()).trim());
+		}
 		if (collectionLog.onNewItem(text))
 		{
 			saveCollectionLog();
@@ -1068,6 +1161,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		pendingDuration = null;
 		lastKillCountBoss = null;
 		double before = bossTimes.record(boss, duration);
+		killTimer.onDuration(boss, duration.seconds, duration.newBest, client.getTickCount());
 		if (before >= 0)
 		{
 			boolean precise = BossTimes.isPrecise(duration.seconds) || BossTimes.isPrecise(before);
@@ -1213,6 +1307,46 @@ public class CombatXpTrackerPlugin extends Plugin
 		int tick = client.getTickCount();
 		allTimeUptime.onAttack(name, tick, attackSpeedTicks);
 		sessionUptime.onAttack(name, tick, attackSpeedTicks);
+		if (isBoss(name) && killTimer.onAttack(name, tick) && config.boostReminder())
+		{
+			remindBoosts(name);
+		}
+	}
+
+	/**
+	 * At the start of a boss fight: says if the style's skill isn't boosted, no offensive
+	 * prayer is on, or there's no thrall out on the Arceuus spellbook.
+	 */
+	private void remindBoosts(String boss)
+	{
+		CombatStyle style = attackStyle == null ? null : attackStyle.getStyle();
+		Skill skill = style == null ? null : BoostReminder.boostedSkill(style);
+		if (skill == null)
+		{
+			return;
+		}
+		boolean boosted = client.getBoostedSkillLevel(skill) > client.getRealSkillLevel(skill);
+		boolean prayer = false;
+		for (Prayer p : BoostReminder.offensivePrayers(style))
+		{
+			prayer |= client.isPrayerActive(p);
+		}
+		NPC follower = client.getFollower();
+		boolean thrallWanted = client.getVarbitValue(VarbitID.SPELLBOOK) == ARCEUUS_SPELLBOOK
+			&& (follower == null || follower.getName() == null || !follower.getName().toLowerCase().contains("thrall"));
+		String message = BoostReminder.message(boss, style, boosted, prayer, thrallWanted);
+		if (message != null)
+		{
+			chat(message);
+		}
+	}
+
+	/**
+	 * A boss: one with a recorded kill time or known unique drops.
+	 */
+	private boolean isBoss(String name)
+	{
+		return bossTimes.get(name) != null || dryCalculator.hasBoss(name);
 	}
 
 	/**
@@ -1253,8 +1387,11 @@ public class CombatXpTrackerPlugin extends Plugin
 			{
 				Integer max = npcManager.getHealth(npc.getId());
 				int maxHp = max == null ? -1 : max;
+				ElementalWeakness.Weakness weakness = elementalWeakness.of(npc.getId());
+				boolean spellMatches = weakness != null && attackStyle != null && attackStyle.getStyle() == CombatStyle.MAGIC
+					&& weakness.getElement() == ElementalWeakness.Element.ofSpell(maxHitCalculator.autocastSpell());
 				TargetInfo info = new TargetInfo(name, TargetInfo.hitpoints(npc.getHealthRatio(), npc.getHealthScale(), maxHp),
-					maxHp);
+					maxHp, weakness, spellMatches);
 				targetSeenTick = tick;
 				if (!info.equals(targetInfo))
 				{
@@ -1353,6 +1490,12 @@ public class CombatXpTrackerPlugin extends Plugin
 			lastGroupKillTick.put(group, tick);
 		}
 		String tracked = BossGroups.trackedName(npcName);
+		if (isBoss(tracked))
+		{
+			allTimeDamageTaken.record(tracked, damageSinceKill);
+			sessionDamageTaken.record(tracked, damageSinceKill);
+		}
+		damageSinceKill = 0;
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
 		if (config.rememberMonsters())
@@ -1412,6 +1555,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		if (event.getContainerId() == InventoryID.INV)
 		{
+			countCarriedSupplies(event.getItemContainer());
 			Map<Integer, Long> now = inventoryCounts(event.getItemContainer());
 			if (pendingConsume != null && lastInventory != null && client.getTickCount() - pendingConsumeTick <= 2)
 			{
@@ -1455,8 +1599,73 @@ public class CombatXpTrackerPlugin extends Plugin
 			monsterTracker.recordLoot(name, drops, now);
 			sessionMonsters.recordLoot(name, drops, now);
 			recordTaskLoot(name, drops, now);
+			revealRareDrops(name, drops);
 			panelDirty = true;
 		}
+	}
+
+	/**
+	 * A reward interface opened (a raid chest, the Barrows chest): its items are read on the
+	 * next tick, once the game has filled them in.
+	 */
+	@Subscribe
+	public void onWidgetLoaded(WidgetLoaded event)
+	{
+		RewardSources source = RewardSources.ofInterface(event.getGroupId());
+		if (source != null)
+		{
+			pendingReward = source;
+			pendingRewardTick = client.getTickCount();
+		}
+	}
+
+	/**
+	 * Records a reward chest's items as a completion of it, unless it's the same reward
+	 * looked at again.
+	 */
+	private void readPendingReward()
+	{
+		RewardSources source = pendingReward;
+		if (source == null || client.getTickCount() <= pendingRewardTick)
+		{
+			return;
+		}
+		ItemContainer container = client.getItemContainer(source.getContainerId());
+		Map<Integer, Long> items = container == null ? Collections.emptyMap() : inventoryCounts(container);
+		if (items.isEmpty())
+		{
+			// Not filled in yet: give it a few ticks.
+			if (client.getTickCount() - pendingRewardTick > REWARD_WAIT_TICKS)
+			{
+				pendingReward = null;
+			}
+			return;
+		}
+		pendingReward = null;
+		long now = System.currentTimeMillis();
+		String signature = source.name() + ":" + RewardSources.signature(items);
+		if (signature.equals(lastRewardSignature) && now - lastRewardMillis < RewardSources.SAME_REWARD_MILLIS)
+		{
+			return;
+		}
+		lastRewardSignature = signature;
+		lastRewardMillis = now;
+		if (!config.trackMonsterLoot())
+		{
+			return;
+		}
+		String name = source.getDisplayName();
+		List<MonsterTracker.Drop> drops = new ArrayList<>();
+		for (Map.Entry<Integer, Long> e : items.entrySet())
+		{
+			drops.add(drop(e.getKey(), (int) Math.min(Integer.MAX_VALUE, e.getValue())));
+		}
+		monsterTracker.recordKill(name, now);
+		sessionMonsters.recordKill(name, now);
+		monsterTracker.recordLoot(name, drops, now);
+		sessionMonsters.recordLoot(name, drops, now);
+		revealRareDrops(name, drops);
+		panelDirty = true;
 	}
 
 	/**
@@ -1519,8 +1728,175 @@ public class CombatXpTrackerPlugin extends Plugin
 			monsterTracker.recordLoot(tracked, drops, now);
 			sessionMonsters.recordLoot(tracked, drops, now);
 			recordTaskLoot(name, drops, now);
+			revealRareDrops(tracked, drops);
 		}
 		panelDirty = true;
+	}
+
+	// ---- Big drops ------------------------------------------------------------------------------
+
+	/**
+	 * A new collection log item: reveal it, with how dry the player was.
+	 */
+	private void revealUnique(String item)
+	{
+		String page = collectionLog.pageOf(item);
+		String monster = page;
+		int itemId = -1;
+		List<Integer> strip = new ArrayList<>();
+		String detail = null;
+		if (page != null)
+		{
+			for (CollectionLog.Item i : collectionLog.items(page))
+			{
+				strip.add(i.id);
+				if (i.name != null && i.name.equalsIgnoreCase(item))
+				{
+					itemId = i.id;
+				}
+			}
+			CollectionLog.Status status = getCollectionStatus(page);
+			int kc = status == null ? -1 : status.getKillCount();
+			List<DryCalculator.Dry> dry = kc > 0 ? dryCalculator.dry(page, Collections.singletonList(item), kc)
+				: Collections.emptyList();
+			detail = page + (kc > 0 ? ", kc " + Formatting.withCommas(kc) : "")
+				+ (dry.isEmpty() ? "" : String.format(java.util.Locale.US, ", %.1fx the rate", dry.get(0).getRatio()));
+		}
+		reveal(new DropReveal(++revealSequence, item, itemId, itemId > 0 ? itemManager.getItemPrice(itemId) : 0, monster,
+			true, detail, strip));
+	}
+
+	/**
+	 * Drops worth more than the rare drop value get a reveal too, unless they're a missing
+	 * collection log item: that one's revealed when the game's message for it comes.
+	 */
+	private void revealRareDrops(String monster, List<MonsterTracker.Drop> drops)
+	{
+		// At least a million, so a low rare drop value doesn't reveal (and screenshot) every kill.
+		long rareValue = Math.max(MIN_REVEAL_VALUE, config.rareDropValue());
+		LootPrice price = config.lootPrice();
+		MonsterTracker.Drop best = null;
+		for (MonsterTracker.Drop d : drops)
+		{
+			if (d.totalValue(price) >= rareValue && !collectionLog.isMissing(d.getName())
+				&& (best == null || d.totalValue(price) > best.totalValue(price)))
+			{
+				best = d;
+			}
+		}
+		if (best == null)
+		{
+			return;
+		}
+		List<Integer> strip = new ArrayList<>();
+		for (MonsterTracker.Drop d : drops)
+		{
+			strip.add(d.getItemId());
+		}
+		int kills = monsterTracker.getKills(monster);
+		reveal(new DropReveal(++revealSequence, best.getName(), best.getItemId(), best.totalValue(price), monster, false,
+			monster + (kills > 0 ? ", kill " + Formatting.withCommas(kills) : ""), strip));
+	}
+
+	private void reveal(DropReveal drop)
+	{
+		dropReveal = drop;
+		revealStartMillis = System.currentTimeMillis();
+		panelDirty = true;
+		if (!config.uniqueScreenshot())
+		{
+			return;
+		}
+		if (config.dropRevealOnScreen())
+		{
+			// Taken once the reveal has landed, so the picture shows it.
+			pendingRevealScreenshot = drop.screenshotName();
+			revealScreenshotAt = revealStartMillis + DropRevealCard.SPIN_MILLIS + 300;
+		}
+		else
+		{
+			screenshot(drop.screenshotName());
+		}
+	}
+
+	private void screenshot(String fileName)
+	{
+		drawManager.requestNextFrameListener(frame ->
+		{
+			BufferedImage image = ImageUtil.bufferedImageFromImage(frame);
+			executor.submit(() -> imageCapture.saveScreenshot(image, fileName, "Uniques", false, false));
+		});
+	}
+
+	/**
+	 * @return the big drop to show on the game screen, or null when that's turned off
+	 */
+	public DropReveal getScreenReveal()
+	{
+		return config.dropReveal() && config.dropRevealOnScreen() ? dropReveal : null;
+	}
+
+	public long getRevealStartMillis()
+	{
+		return revealStartMillis;
+	}
+
+	/**
+	 * @return the latest big drop, or null
+	 */
+	public DropReveal getDropReveal()
+	{
+		return config.dropReveal() ? dropReveal : null;
+	}
+
+	// ---- Supply forecast ----------------------------------------------------------------------
+
+	/**
+	 * Food pieces and prayer restoring doses in the inventory. Client thread.
+	 */
+	private void countCarriedSupplies(ItemContainer inventory)
+	{
+		int food = 0;
+		int doses = 0;
+		for (Item item : inventory.getItems())
+		{
+			if (item.getId() <= 0 || item.getQuantity() <= 0)
+			{
+				continue;
+			}
+			ItemComposition comp = itemManager.getItemComposition(item.getId());
+			String[] actions = comp.getInventoryActions();
+			if (actions != null && Arrays.asList(actions).contains("Eat"))
+			{
+				food += item.getQuantity();
+			}
+			else if (SupplyForecast.restoresPrayer(comp.getName()))
+			{
+				doses += SupplyForecast.doses(comp.getName()) * item.getQuantity();
+			}
+		}
+		carriedFood = food;
+		carriedPrayerDoses = doses;
+	}
+
+	/**
+	 * @return kills the food carried lasts against a monster, or -1
+	 */
+	public int getFoodKills(String monster)
+	{
+		SupplyLedger.Totals totals = allTimeSupplies.get(monster);
+		Long eaten = totals == null ? null : totals.count.get(SupplyLedger.Category.FOOD);
+		return SupplyForecast.foodKills(carriedFood, eaten == null ? 0 : eaten, monsterTracker.getKills(monster));
+	}
+
+	/**
+	 * @return minutes the prayer points and doses carried last against a monster, or -1
+	 */
+	public double getPrayerMinutes(String monster)
+	{
+		PrayerDrain.Rate rate = prayerDrain.rate(monster);
+		return rate == null ? -1
+			: SupplyForecast.prayerMinutes(prayerPointsNow, carriedPrayerDoses, prayerLevel, rate.pointsPerMinute());
 	}
 
 	private void recordTaskLoot(String npcName, List<MonsterTracker.Drop> drops, long now)
@@ -1734,7 +2110,76 @@ public class CombatXpTrackerPlugin extends Plugin
 			SlayerStatus status = slayerStatus;
 			SlayerPoints.Master master = status.getMaster();
 			taskSession.setDetails(status.getAssigned(), master == null ? null : master.getDisplayName(), status.getLocation());
+			// Only for a task just given out, not one picked up again at login.
+			if (config.taskForecast() && status.getAssigned() > 0 && newRemaining >= status.getAssigned())
+			{
+				TaskForecast forecast = TaskForecast.of(slayerLog.getTasks(), newTask, newRemaining, config.lootPrice());
+				if (forecast != null)
+				{
+					chat(forecast.message(newTask));
+				}
+			}
 		}
+	}
+
+	/**
+	 * A highlighted chat message from the plugin.
+	 */
+	private void chat(String text)
+	{
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.GAMEMESSAGE)
+			.runeLiteFormattedMessage(new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append(text)
+				.build())
+			.build());
+	}
+
+	/**
+	 * Once the bank closes on a slayer task, says what the task needs that isn't with you.
+	 * Checked a tick later, once the task guide has seen the new inventory.
+	 */
+	private void checkPrepAfterBank()
+	{
+		boolean open = client.getGameState() == GameState.LOGGED_IN && isBankOpen();
+		int tick = client.getTickCount();
+		if (bankWasOpen && !open)
+		{
+			prepCheckTick = tick + 1;
+		}
+		bankWasOpen = open;
+		if (prepCheckTick < 0 || tick < prepCheckTick)
+		{
+			return;
+		}
+		prepCheckTick = -1;
+		if (!config.prepCheck() || slayerGuide.getTask() == null)
+		{
+			return;
+		}
+		String missing = PrepCheck.missing(slayerGuide);
+		if (missing != null)
+		{
+			chat(missing);
+		}
+	}
+
+	/**
+	 * @return the forecast for the rest of the current task, or null
+	 */
+	public TaskForecast getTaskRunForecast()
+	{
+		SlayerStatus status = slayerStatus;
+		return TaskForecast.of(slayerLog.getTasks(), status.getTask(), status.getRemaining(), config.lootPrice());
+	}
+
+	/**
+	 * @return cannon against no cannon on the current task, or null
+	 */
+	public TaskForecast.Cannon getTaskCannon()
+	{
+		return TaskForecast.cannon(slayerLog.getTasks(), slayerStatus.getTask(), itemManager.getItemPrice(ItemID.MCANNONBALL));
 	}
 
 	/**
@@ -1961,11 +2406,13 @@ public class CombatXpTrackerPlugin extends Plugin
 		sessionSupplies.reset();
 		sessionUptime.reset();
 		sessionDeaths.reset();
+		sessionDamageTaken.reset();
 		combinedDropTracker.reset();
 		sessionMonsters.reset();
 		if (allTimeToo)
 		{
 			allTimeDeaths.reset();
+			allTimeDamageTaken.reset();
 			monsterTracker.reset();
 			allTimeSupplies.reset();
 			allTimeUptime.reset();
@@ -1991,6 +2438,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		bossTimes.remove(name);
 		allTimeDeaths.remove(name);
 		sessionDeaths.remove(name);
+		allTimeDamageTaken.remove(name);
+		sessionDamageTaken.remove(name);
 		refreshPanelNow();
 	}
 
@@ -2512,6 +2961,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		int points = client.getBoostedSkillLevel(Skill.PRAYER);
 		prayerLevel = client.getRealSkillLevel(Skill.PRAYER);
+		prayerPointsNow = points;
 		int drained = lastPrayerPoints >= 0 ? Math.max(0, lastPrayerPoints - points) : 0;
 		lastPrayerPoints = points;
 		int tick = client.getTickCount();
@@ -2832,6 +3282,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Subscribe
 	public void onVarbitChanged(VarbitChanged event)
 	{
+		if (CombatAchievements.isCompletionVarp(event.getVarpId()))
+		{
+			// A task was completed: read them again next tick.
+			combatAchievementsLoaded = false;
+			return;
+		}
 		if (event.getVarpId() != VarPlayerID.ROCKTHROWER)
 		{
 			return;
@@ -2949,7 +3405,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	public int getFightStatsRevision()
 	{
 		return allTimeUptime.getRevision() + sessionUptime.getRevision() + bossTimes.getRevision()
-			+ allTimeDeaths.getRevision() + sessionDeaths.getRevision();
+			+ allTimeDeaths.getRevision() + sessionDeaths.getRevision() + allTimeDamageTaken.getRevision()
+			+ sessionDamageTaken.getRevision();
 	}
 
 	private void saveUptime()
@@ -3004,6 +3461,62 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 		}.getType()));
 		savedDeathsRevision = allTimeDeaths.getRevision();
+	}
+
+	/**
+	 * @return damage taken per kill on a boss, for the range shown, or null
+	 */
+	public DamageTaken.Stats getDamageTaken(String monster, MonsterRange range)
+	{
+		return (range == MonsterRange.SESSION ? sessionDamageTaken : allTimeDamageTaken).get(monster);
+	}
+
+	/**
+	 * @return ticks lost between attacks on a monster, for the range shown, or -1
+	 */
+	public long getIdleTicks(String monster, MonsterRange range)
+	{
+		return (range == MonsterRange.SESSION ? sessionUptime : allTimeUptime).idleTicks(monster);
+	}
+
+	private void saveDamageTaken()
+	{
+		if (configManager.getRSProfileKey() == null || allTimeDamageTaken.getRevision() == savedDamageTakenRevision)
+		{
+			return;
+		}
+		savedDamageTakenRevision = allTimeDamageTaken.getRevision();
+		if (!config.rememberMonsters() || allTimeDamageTaken.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, DAMAGE_TAKEN_KEY);
+			return;
+		}
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, DAMAGE_TAKEN_KEY,
+			gson.toJson(allTimeDamageTaken.exportState()));
+	}
+
+	private void loadDamageTaken()
+	{
+		allTimeDamageTaken.importState(loadJson(DAMAGE_TAKEN_KEY, new TypeToken<Map<String, DamageTaken.Stats>>()
+		{
+		}.getType()));
+		savedDamageTakenRevision = allTimeDamageTaken.getRevision();
+	}
+
+	/**
+	 * A JSON file bundled with the plugin, or null if it can't be read.
+	 */
+	private <T> T loadResource(String name, java.lang.reflect.Type type)
+	{
+		try (java.io.InputStream in = CombatXpTrackerPlugin.class.getResourceAsStream(name))
+		{
+			return in == null ? null
+				: gson.fromJson(new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8), type);
+		}
+		catch (java.io.IOException | JsonParseException e)
+		{
+			return null;
+		}
 	}
 
 	private void saveBossTimes()
@@ -3163,12 +3676,64 @@ public class CombatXpTrackerPlugin extends Plugin
 	}
 
 	/**
+	 * @return the live kill timer, or null when it's turned off
+	 */
+	public KillTimer getKillTimer()
+	{
+		return config.liveKillTimer() ? killTimer : null;
+	}
+
+	/**
+	 * @return missing collection log items with a known drop rate, driest first
+	 */
+	public List<DryCalculator.Dry> getDryItems(String monster)
+	{
+		CollectionLog.Status log = getCollectionStatus(monster);
+		if (log == null || log.isComplete())
+		{
+			return Collections.emptyList();
+		}
+		return dryCalculator.dry(monster, log.getMissing(), log.getKillCount());
+	}
+
+	/**
+	 * @return a boss's Combat Achievements, or an empty list
+	 */
+	public List<CombatAchievements.Task> getCombatAchievements(String monster)
+	{
+		return config.combatAchievements() ? combatAchievements.tasks(monster) : Collections.emptyList();
+	}
+
+	public int getCombatAchievementsRevision()
+	{
+		return combatAchievements.getRevision();
+	}
+
+	/**
+	 * The bundled drop rates (from the OSRS Wiki). An empty calculator if they can't be read.
+	 */
+	private DryCalculator loadDryCalculator()
+	{
+		return new DryCalculator(loadResource("unique_rates.json", new TypeToken<Map<String, Map<String, Double>>>()
+		{
+		}.getType()));
+	}
+
+	/**
 	 * @return the monster's collection log progress, or null if its page hasn't been opened
 	 */
 	public CollectionLog.Status getCollectionStatus(String monster)
 	{
 		String title = collectionLog.titleFor(monster);
 		return title == null ? null : collectionLog.status(monster, pageKills(title));
+	}
+
+	/**
+	 * @return the items on the monster's collection log page, or an empty list
+	 */
+	public List<CollectionLog.Item> getCollectionItems(String monster)
+	{
+		return collectionLog.items(monster);
 	}
 
 	public int getCollectionRevision()
@@ -3467,6 +4032,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		loadUptime();
 		loadBossTimes();
 		loadDeaths();
+		loadDamageTaken();
 		savedBank = bank;
 		bankNames = null;
 		if (bank != null && config.checkBank())

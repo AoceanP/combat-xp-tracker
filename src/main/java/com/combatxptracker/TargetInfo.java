@@ -35,6 +35,8 @@ final class TargetInfo
 	private final String name;
 	private final int hitpoints;
 	private final int maxHitpoints;
+	private final ElementalWeakness.Weakness weakness;
+	private final boolean spellMatches;
 
 	/**
 	 * @param hitpoints    its hitpoints left, or -1 if unknown
@@ -42,9 +44,30 @@ final class TargetInfo
 	 */
 	TargetInfo(String name, int hitpoints, int maxHitpoints)
 	{
+		this(name, hitpoints, maxHitpoints, null, false);
+	}
+
+	/**
+	 * @param weakness     its elemental weakness, or null
+	 * @param spellMatches whether the player's autocast spell is of that element
+	 */
+	TargetInfo(String name, int hitpoints, int maxHitpoints, ElementalWeakness.Weakness weakness, boolean spellMatches)
+	{
 		this.name = name;
 		this.hitpoints = hitpoints;
 		this.maxHitpoints = maxHitpoints;
+		this.weakness = weakness;
+		this.spellMatches = spellMatches;
+	}
+
+	ElementalWeakness.Weakness getWeakness()
+	{
+		return weakness;
+	}
+
+	boolean isSpellMatching()
+	{
+		return spellMatches;
 	}
 
 	/**
@@ -115,12 +138,13 @@ final class TargetInfo
 			return false;
 		}
 		TargetInfo t = (TargetInfo) o;
-		return hitpoints == t.hitpoints && maxHitpoints == t.maxHitpoints && Objects.equals(name, t.name);
+		return hitpoints == t.hitpoints && maxHitpoints == t.maxHitpoints && Objects.equals(name, t.name)
+			&& Objects.equals(weakness, t.weakness) && spellMatches == t.spellMatches;
 	}
 
 	@Override
 	public int hashCode()
 	{
-		return Objects.hash(name, hitpoints, maxHitpoints);
+		return Objects.hash(name, hitpoints, maxHitpoints, weakness, spellMatches);
 	}
 }

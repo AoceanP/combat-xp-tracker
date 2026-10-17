@@ -433,6 +433,45 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "combatAchievements",
+		name = "Combat Achievements",
+		description = "Shows each boss's Combat Achievements on its card, how many are done, and whether your best kill "
+			+ "is fast enough for its speed tasks.",
+		position = 11,
+		section = monstersSection
+	)
+	default boolean combatAchievements()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "dropReveal",
+		name = "Big drop reveal",
+		description = "A short case-opening style reveal at the top of the Monsters tab for a new collection log item, or a "
+			+ "drop worth more than your rare drop value (1M at least).",
+		position = 12,
+		section = monstersSection
+	)
+	default boolean dropReveal()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "uniqueScreenshot",
+		name = "Screenshot big drops",
+		description = "Saves a screenshot of each new collection log item and rare drop, in RuneLite's screenshots "
+			+ "folder under Uniques.",
+		position = 13,
+		section = monstersSection
+	)
+	default boolean uniqueScreenshot()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "killsToLevel",
 		name = "Kills to next level",
 		description = "Shows how many more kills of the monster you're fighting each combat skill needs for its next level, "
@@ -483,6 +522,45 @@ public interface CombatXpTrackerConfig extends Config
 	default Notification superiorNotification()
 	{
 		return Notification.OFF;
+	}
+
+	@ConfigItem(
+		keyName = "prepCheck",
+		name = "Prep check",
+		description = "When you close your bank on a slayer task, a chat message if anything the task needs isn't with you, "
+			+ "e.g. a mirror shield for basilisks.",
+		position = 4,
+		section = slayerSection
+	)
+	default boolean prepCheck()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "taskForecast",
+		name = "Task forecast",
+		description = "When you get a slayer task you've done before, a chat message with how long it took you, the XP, "
+			+ "loot and supplies, from your last runs of it in the task log.",
+		position = 5,
+		section = slayerSection
+	)
+	default boolean taskForecast()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "boostReminder",
+		name = "Boost reminder",
+		description = "At the start of a boss fight, a chat message if you have no potion boost, no offensive prayer, or "
+			+ "(on the Arceuus spellbook) no thrall for the style you're attacking with.",
+		position = 8,
+		section = combatSection
+	)
+	default boolean boostReminder()
+	{
+		return false;
 	}
 
 	@ConfigItem(
@@ -688,6 +766,32 @@ public interface CombatXpTrackerConfig extends Config
 		section = overlaySection
 	)
 	default boolean overlayShowKillsToLevel()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "liveKillTimer",
+		name = "Live kill timer",
+		description = "A timer during boss fights, from your first attack, next to your personal best. It's gold while "
+			+ "you're on pace for a new best.",
+		position = 11,
+		section = overlaySection
+	)
+	default boolean liveKillTimer()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "dropRevealOnScreen",
+		name = "Drop reveal on screen",
+		description = "Also shows the big drop reveal on the game screen for a few seconds, not just in the sidebar. "
+			+ "Off by default.",
+		position = 12,
+		section = overlaySection
+	)
+	default boolean dropRevealOnScreen()
 	{
 		return false;
 	}

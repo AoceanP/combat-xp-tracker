@@ -48,6 +48,10 @@ final class TargetCard extends JPanel
 	private final JLabel hitsLeftValue = Theme.boldLabel("-", Theme.TEXT);
 	private final JLabel perKillValue = Theme.boldLabel("-", Theme.TEXT);
 	private final JLabel dpsValue = Theme.boldLabel("-", Theme.TEXT);
+	private final InfoRow weaknessRow = new InfoRow("Weak to");
+	private final InfoRow foodRow = new InfoRow("Food lasts");
+	private final InfoRow prayerRow = new InfoRow("Prayer lasts");
+	private final InfoRow.Section rows = new InfoRow.Section(null);
 
 	TargetCard()
 	{
@@ -80,15 +84,24 @@ final class TargetCard extends JPanel
 		top.add(bar, BorderLayout.CENTER);
 		add(top, BorderLayout.NORTH);
 		add(tiles, BorderLayout.CENTER);
+		rows.with(weaknessRow).with(foodRow).with(prayerRow);
+		add(rows, BorderLayout.SOUTH);
 	}
 
 	/**
 	 * @param averagePerHit your average damage per hit on it, 0s included, or 0 if unknown
 	 * @param perKillMillis your time per kill, or -1 if unknown
 	 * @param dps           your damage per second on it, or -1 if unknown
+	 * @param foodKills     kills your food lasts, or -1 if unknown
+	 * @param prayerMinutes minutes your prayer lasts, or -1 if unknown
 	 */
-	void update(TargetInfo target, double averagePerHit, long perKillMillis, double dps)
+	void update(TargetInfo target, double averagePerHit, long perKillMillis, double dps, int foodKills, double prayerMinutes)
 	{
+		foodRow.set(foodKills < 0 ? null : SupplyForecast.killsLabel(foodKills), foodKills <= 2 ? MonsterCard.BAD : Theme.TEXT,
+			"From the food you've eaten per kill on this monster");
+		prayerRow.set(prayerMinutes < 0 ? null : SupplyForecast.minutesLabel(prayerMinutes),
+			prayerMinutes < 2 ? MonsterCard.BAD : Theme.TEXT,
+			"Your prayer points and the restore doses you carry, at your measured prayer drain on this monster");
 		nameLabel.setText(target.getName());
 		bar.set(target.getHealthShare(), target.getHitpoints() >= 0 && target.getMaxHitpoints() > 0
 			? Formatting.withCommas(target.getHitpoints()) + " / " + Formatting.withCommas(target.getMaxHitpoints())
@@ -97,6 +110,21 @@ final class TargetCard extends JPanel
 		hitsLeftValue.setText(hits >= 0 ? "~" + Formatting.withCommas(hits) : "-");
 		perKillValue.setText(perKillMillis > 0 ? BossTimes.format(Math.round(perKillMillis / 1000.0)) : "-");
 		dpsValue.setText(dps >= 0 ? String.format(java.util.Locale.US, "%.1f", dps) : "-");
+
+		ElementalWeakness.Weakness weakness = target.getWeakness();
+		if (weakness == null)
+		{
+			weaknessRow.set(null);
+		}
+		else
+		{
+			// Green once the autocast spell is of that element.
+			weaknessRow.setLabel(target.isSpellMatching() ? "Weak to (your spell)" : "Weak to");
+			weaknessRow.set(weakness.label(), target.isSpellMatching() ? Theme.SUCCESS : weakness.getElement().getColour(),
+				"<html>" + weakness.getElement().getDisplayName() + " spells get " + weakness.getPercent()
+					+ "% more accuracy and damage against it.<br>Elemental weaknesses from the OSRS Wiki.</html>");
+		}
+		rows.refresh();
 	}
 
 	/**

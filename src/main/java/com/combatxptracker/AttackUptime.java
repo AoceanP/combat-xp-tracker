@@ -169,6 +169,15 @@ final class AttackUptime
 	}
 
 	/**
+	 * @return ticks lost between attacks fighting a monster, or -1 if there isn't enough to say
+	 */
+	synchronized long idleTicks(String monster)
+	{
+		Ticks t = monster == null ? null : byMonster.get(key(monster));
+		return t == null || t.percent() < 0 ? -1 : t.idle;
+	}
+
+	/**
 	 * @return uptime fighting a monster from 0 to 100, or -1 if there isn't enough to say
 	 */
 	synchronized int percent(String monster)

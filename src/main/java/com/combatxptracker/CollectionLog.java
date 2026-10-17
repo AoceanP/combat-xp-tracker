@@ -225,6 +225,59 @@ final class CollectionLog
 	}
 
 	/**
+	 * @return the title of the saved page an item is on, or null
+	 */
+	synchronized String pageOf(String itemName)
+	{
+		for (Page page : pages.values())
+		{
+			for (Item item : page.items)
+			{
+				if (item.name != null && item.name.equalsIgnoreCase(itemName))
+				{
+					return page.title;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * @return whether an item is on a saved page and not obtained yet
+	 */
+	synchronized boolean isMissing(String itemName)
+	{
+		for (Page page : pages.values())
+		{
+			for (Item item : page.items)
+			{
+				if (!item.obtained && item.name != null && item.name.equalsIgnoreCase(itemName))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @return copies of the items on a monster's saved page, in page order, or an empty list
+	 */
+	synchronized List<Item> items(String monster)
+	{
+		Page page = pageFor(monster);
+		List<Item> out = new ArrayList<>();
+		if (page != null)
+		{
+			for (Item item : page.items)
+			{
+				out.add(new Item(item.id, item.name, item.obtained));
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * @return the saved page title for a monster card, or null
 	 */
 	synchronized String titleFor(String monster)
