@@ -2,6 +2,8 @@
 
 A RuneLite plugin for skill goals, max hits for every combat style, and per-monster hits, kills and drops, all in one sidebar panel.
 
+> **Lost your stats after updating to 2.0?** See the [2.0 data loss FAQ](RECOVERY.md).
+
 ## Goals
 - Set a goal from the panel (**+ Add goal**) or by right-clicking a skill in the stats tab and choosing **Set goal**
 - Goals can be a level from 2 to 126 (virtual levels past 99 work) or an XP amount up to 200M: `99`, `126`, `13.03m`, `200m`, `500k`
