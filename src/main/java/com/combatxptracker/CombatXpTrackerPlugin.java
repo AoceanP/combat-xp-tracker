@@ -293,6 +293,8 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private CombatXpTrackerPanel panel;
 	private NavigationButton navButton;
+	// The item price can only be read on the client thread; the panel reads this copy.
+	private volatile long cannonballPrice;
 
 	// Client-thread only.
 	private boolean panelDirty;
@@ -575,7 +577,10 @@ public class CombatXpTrackerPlugin extends Plugin
 		pendingLootNpc = null;
 		pendingLootBefore = null;
 		savedMonsterRevision = -1;
-		clientToolbar.removeNavigation(navButton);
+		if (navButton != null)
+		{
+			clientToolbar.removeNavigation(navButton);
+		}
 		overlayManager.remove(overlay);
 		removeAllInfoBoxes();
 		skillProgress.clear();
@@ -760,6 +765,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick tick)
 	{
+		cannonballPrice = itemManager.getItemPrice(ItemID.MCANNONBALL);
 		refreshCombatState();
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -2179,7 +2185,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	public TaskForecast.Cannon getTaskCannon()
 	{
-		return TaskForecast.cannon(slayerLog.getTasks(), slayerStatus.getTask(), itemManager.getItemPrice(ItemID.MCANNONBALL));
+		return TaskForecast.cannon(slayerLog.getTasks(), slayerStatus.getTask(), cannonballPrice);
 	}
 
 	/**
