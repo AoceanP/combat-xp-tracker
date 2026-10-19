@@ -617,9 +617,17 @@ class MonsterCard extends JPanel
 		{
 			String value = QuantityFormatter.quantityToStackSize(rareValue) + "+";
 			rareRow.setLabel("Rare drop (" + value + ")");
-			rareRow.set(kills(s.hasEverDroppedRare() ? s.getKillsSinceRare() : s.getKills()) + " dry", Theme.TEXT,
-				s.hasEverDroppedRare() ? "Kills since this monster last dropped an item worth " + value
-					: "This monster hasn't dropped an item worth " + value + " yet");
+			if (s.isRareSinceRestore())
+			{
+				rareRow.set(Formatting.withCommas(s.getKillsSinceRare()) + " since restore", Theme.TEXT,
+					"Your rare drops were restored, but not which kill they came on, so this counts from the restore");
+			}
+			else
+			{
+				rareRow.set(kills(s.hasEverDroppedRare() ? s.getKillsSinceRare() : s.getKills()) + " dry", Theme.TEXT,
+					s.hasEverDroppedRare() ? "Kills since this monster last dropped an item worth " + value
+						: "This monster hasn't dropped an item worth " + value + " yet");
+			}
 		}
 		else
 		{

@@ -126,6 +126,10 @@ class CombatXpTrackerPanel extends PluginPanel
 	private List<String> shownMonsterNames = new ArrayList<>();
 	private SlayerView slayerView;
 	private final JPanel monstersEmpty;
+	private final JLabel restoreText = new JLabel();
+	// Set while the restore card is built, for its menu to open under.
+	private JLabel restoreButton;
+	private final JPanel restoreCard = restoreCard();
 	private final JLabel killsValue = tileValue();
 	private final JLabel lootValue = tileValue();
 	private final JLabel monsterCountValue = tileValue();
@@ -195,24 +199,28 @@ class CombatXpTrackerPanel extends PluginPanel
 		JLabel title = Theme.boldLabel("Combat & XP Tracker", Theme.TEXT);
 		header.add(title, BorderLayout.NORTH);
 
-		// Two rows, so "Wrapped" fits the sidebar.
-		JPanel buttons = new JPanel(new GridLayout(3, 2, 4, 4));
+		// Grouped by what they do: sharing, export, your data, feedback.
+		JPanel buttons = new JPanel(new GridLayout(4, 1, 0, 4));
 		buttons.setOpaque(false);
 		JLabel[] copy = new JLabel[1];
 		copy[0] = Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post",
 			() -> copySummary(copy[0]));
-		buttons.add(copy[0]);
-		buttons.add(Theme.flatButton("Wrapped", "Gielinor Wrapped: your lifetime stats, to look back on or share",
-			this::showWrapped));
+		buttons.add(buttonRow(copy[0], Theme.flatButton("Wrapped",
+			"Gielinor Wrapped: your lifetime stats, to look back on or share", this::showWrapped)));
 		JLabel[] export = new JLabel[1];
 		export[0] = Theme.flatButton("Export", "Save your monsters, slayer task log or goals as a spreadsheet (CSV)",
 			() -> exportMenu().show(export[0], 0, export[0].getHeight()));
 		buttons.add(export[0]);
-		buttons.add(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset));
-		buttons.add(Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
-			() -> LinkBrowser.browse(ISSUES + "?labels=bug")));
-		buttons.add(Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
-			() -> LinkBrowser.browse(ISSUES + "?labels=enhancement")));
+		JLabel[] restore = new JLabel[1];
+		restore[0] = Theme.flatButton("Restore", "Bring back kills and drops from RuneLite's Loot Tracker",
+			() -> restoreMenu(restore[0]));
+		buttons.add(buttonRow(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.",
+			this::confirmReset), restore[0]));
+		buttons.add(buttonRow(
+			Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
+				() -> LinkBrowser.browse(ISSUES + "?labels=bug")),
+			Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
+				() -> LinkBrowser.browse(ISSUES + "?labels=enhancement"))));
 		header.add(buttons, BorderLayout.CENTER);
 		return header;
 	}
@@ -394,6 +402,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		revealCard = new DropRevealCard(itemManager);
 		view.add(collapsible(revealCard));
 		view.add(collapsible(targetCard));
+		view.add(collapsible(restoreCard));
 		view.add(summary);
 		view.add(searchField);
 		view.add(sortRow);
@@ -499,6 +508,139 @@ class CombatXpTrackerPanel extends PluginPanel
 		return panel;
 	}
 
+	/**
+	 * Offered to accounts with Loot Tracker records: for players whose stats 2.0 erased, and
+	 * after removing a monster or resetting everything, in case it was by accident.
+	 */
+	private JPanel restoreCard()
+	{
+		JLabel text = restoreText;
+		text.setFont(FontManager.getRunescapeSmallFont());
+		text.setForeground(Theme.MUTED);
+
+		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
+		buttons.setOpaque(false);
+		restoreButton = Theme.flatButton("Restore", "Rebuild your Monsters tab from the Loot Tracker", this::restoreClicked);
+		buttons.add(restoreButton);
+		buttons.add(Theme.flatButton("Dismiss", "Hide this for this account", () -> plugin.dismissRestore()));
+
+		JPanel card = new JPanel(new BorderLayout(0, 8));
+		card.setBackground(Theme.CARD);
+		card.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 2, 0, 0, Theme.GOLD),
+			BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+		card.add(text, BorderLayout.CENTER);
+		card.add(buttons, BorderLayout.SOUTH);
+		card.setVisible(false);
+		return card;
+	}
+
+	private void updateRestoreCard()
+	{
+		boolean offered = plugin.isRestoreOffered();
+		restoreCard.setVisible(offered);
+		if (!offered)
+		{
+			return;
+		}
+		String monster = plugin.getRestoreMonster();
+		String title;
+		String body = "Rebuild kills and drops from RuneLite's Loot Tracker.";
+		if (monster != null)
+		{
+			title = "Removed " + monster + " by accident?";
+			body = "Bring its kills and drops back from RuneLite's Loot Tracker.";
+		}
+		else if (plugin.getMonsterTracker().isEmpty())
+		{
+			title = "Lost your stats?";
+		}
+		else
+		{
+			title = "Lost your stats in 2.0?";
+		}
+		restoreText.setText("<html><div style='width:150px'><b>" + title + "</b><br>" + body + "</div></html>");
+	}
+
+	private static JPanel buttonRow(JLabel left, JLabel right)
+	{
+		JPanel row = new JPanel(new GridLayout(1, 2, 4, 0));
+		row.setOpaque(false);
+		row.add(left);
+		row.add(right);
+		return row;
+	}
+
+	/**
+	 * A monster removed by accident is restored straight away; otherwise all monsters, or the
+	 * ones chosen from a list.
+	 */
+	private void restoreClicked()
+	{
+		String monster = plugin.getRestoreMonster();
+		if (monster != null)
+		{
+			confirmRestore(java.util.Collections.singleton(monster));
+			return;
+		}
+		restoreMenu(restoreButton);
+	}
+
+	/**
+	 * All monsters, or the ones chosen from a list. From the restore card or the header.
+	 */
+	private void restoreMenu(JLabel under)
+	{
+		if (!plugin.canRestore())
+		{
+			JOptionPane.showMessageDialog(this, "Log in to the account you want to restore first.",
+				"Restore from Loot Tracker", JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+		javax.swing.JMenuItem all = new javax.swing.JMenuItem("All monsters");
+		all.addActionListener(e -> confirmRestore(null));
+		javax.swing.JMenuItem choose = new javax.swing.JMenuItem("Choose monsters...");
+		choose.addActionListener(e -> plugin.loadRestoreChoices(choices ->
+		{
+			if (choices.isEmpty())
+			{
+				JOptionPane.showMessageDialog(this, "RuneLite's Loot Tracker has nothing saved for this account.",
+					"Restore from Loot Tracker", JOptionPane.INFORMATION_MESSAGE);
+				return;
+			}
+			Map<String, Integer> tracked = new java.util.HashMap<>();
+			for (MonsterTracker.Saved s : plugin.getMonsterTracker().exportState())
+			{
+				tracked.put(s.name, s.kills);
+			}
+			RestoreChooser.open(this, choices, tracked, plugin::restoreFromLootTracker);
+		}));
+		menu.add(all);
+		menu.add(choose);
+		menu.show(under, 0, under.getHeight());
+	}
+
+	private void confirmRestore(java.util.Set<String> only)
+	{
+		Object[] options = {"Restore", "Cancel"};
+		String question = only != null && only.size() == 1
+			? "Bring back " + only.iterator().next() + "'s kills and drops from RuneLite's Loot Tracker?\n\n"
+			: "Rebuild your Monsters tab from RuneLite's Loot Tracker and boss kill counts?\n\n";
+		int choice = JOptionPane.showOptionDialog(this,
+			question
+				+ "Kills and drops are combined with what's tracked now, keeping the\n"
+				+ "higher number, so nothing is counted twice.\n\n"
+				+ "Hit stats, boss times and supplies weren't recorded anywhere else,\n"
+				+ "so they can't be restored. Open your in-game Collection Log pages\n"
+				+ "to fill the collection log back in.",
+			"Restore from Loot Tracker", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+		if (choice == 0)
+		{
+			plugin.restoreFromLootTracker(only);
+		}
+	}
+
 	// ---- Refresh --------------------------------------------------------------
 
 	void refresh()
@@ -511,6 +653,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		{
 			revealCard.play(plugin.getDropReveal());
 		}
+		updateRestoreCard();
 		updateMonsters();
 		if (slayerView != null)
 		{

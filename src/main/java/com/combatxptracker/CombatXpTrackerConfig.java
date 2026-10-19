@@ -320,6 +320,19 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "restoreFromLootTracker",
+		name = "Restore from Loot Tracker",
+		description = "Tick to bring back kills and drops from RuneLite's Loot Tracker, for all monsters or the ones you choose."
+			+ " It shows the Restore card in the Monsters tab, then unticks itself. Combined with what's tracked now, never doubled.",
+		position = 30,
+		section = monstersSection
+	)
+	default boolean restoreFromLootTracker()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "monsterSort",
 		name = "Sort monsters by",
 		description = "Order of the Monsters tab. You can also change it at the top of the tab.",

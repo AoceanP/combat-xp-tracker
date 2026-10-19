@@ -41,6 +41,7 @@ import java.util.Set;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
@@ -114,6 +115,7 @@ import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.ImageCapture;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.QuantityFormatter;
 import net.runelite.client.util.Text;
 
 @PluginDescriptor(
@@ -144,6 +146,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final int SAVE_INTERVAL_TICKS = 50;
 
 	private static final String MONSTERS_KEY = "monsters";
+	// Set once the Loot Tracker restore was used or dismissed for an account.
+	private static final String RESTORE_KEY = "lootTrackerRestore";
 	private static final String SLAYER_LOG_KEY = "slayerLog";
 	// The streak and points update a moment after the task count reaches 0.
 	private static final int TASK_RECORD_DELAY_TICKS = 2;
@@ -440,6 +444,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	// NPCs already counted as a kill on death -> tick, so their loot doesn't count again.
 	private final Map<NPC, Integer> countedKills = new HashMap<>();
 	private int savedMonsterRevision = -1;
+	// The account whose saved data is loaded. Nothing is saved for any other.
+	private volatile String loadedProfile;
+	private volatile boolean restoreOffered;
+	// The one monster the restore offer is for (removed by accident), or null for all.
+	private volatile String restoreMonster;
 	private int ticksSinceSave;
 	// A "Loot" click on a boss (e.g. the Royal Titans) waiting for its reward to arrive
 	// in the inventory: which NPC, when, and what the inventory held at the click.
@@ -497,9 +506,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			clientThread.invokeLater(() ->
 			{
-				loadMonsters();
-				loadSlayerLog();
-				loadSlayerExtras();
+				loadProfileData();
 				onLoggedIn();
 			});
 		}
@@ -606,6 +613,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		panelDirty = false;
 		panel = null;
 		navButton = null;
+		loadedProfile = null;
 	}
 
 	// ---- Events ------------------------------------------------------------------
@@ -683,9 +691,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	{
 		// Each account keeps its own Monsters tab. The previous account's stats were
 		// already saved on logout.
-		loadMonsters();
-		loadSlayerLog();
-		loadSlayerExtras();
+		loadProfileData();
 		// Another account's blocked tasks.
 		oddsKey = null;
 		taskSources = TaskSources.NONE;
@@ -702,6 +708,19 @@ public class CombatXpTrackerPlugin extends Plugin
 		if ("showInfobox".equals(event.getKey()))
 		{
 			syncInfoBoxes();
+		}
+		if ("restoreFromLootTracker".equals(event.getKey()) && config.restoreFromLootTracker())
+		{
+			// A tick box standing in for a button: untick it and show the Restore card.
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "restoreFromLootTracker", false);
+			offerRestore(null);
+			SwingUtilities.invokeLater(() ->
+			{
+				if (navButton != null)
+				{
+					clientToolbar.openPanel(navButton);
+				}
+			});
 		}
 		if ("panelTheme".equals(event.getKey()))
 		{
@@ -2229,6 +2248,219 @@ public class CombatXpTrackerPlugin extends Plugin
 	 * Loads the current account's saved monsters, or starts empty. Called when the
 	 * RuneLite profile switches to a (possibly different) account.
 	 */
+	/**
+	 * Loads everything saved for the current account. Only after this finishes can
+	 * anything be saved again, so a start that failed before loading never writes empty
+	 * stats over the saved ones.
+	 */
+	private void loadProfileData()
+	{
+		loadedProfile = null;
+		loadMonsters();
+		loadSlayerLog();
+		loadSlayerExtras();
+		loadedProfile = configManager.getRSProfileKey();
+		restoreMonster = null;
+		restoreOffered = loadedProfile != null
+			&& configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RESTORE_KEY) == null
+			&& hasLootRecords(null);
+	}
+
+	/**
+	 * @param monster a monster's name, or null for any
+	 * @return whether the Loot Tracker has records to restore from
+	 */
+	private boolean hasLootRecords(String monster)
+	{
+		if (!config.rememberMonsters() || loadedProfile == null)
+		{
+			return false;
+		}
+		for (String key : configManager.getRSProfileConfigurationKeys(LOOT_TRACKER_GROUP, loadedProfile, LOOT_TRACKER_PREFIX))
+		{
+			if (monster == null || monster.equals(BossGroups.trackedName(key.substring(LOOT_TRACKER_PREFIX.length()))))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * After a monster (or everything) was removed: offers to bring it back, in case it was
+	 * by accident.
+	 */
+	private void offerRestore(String monster)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (canSave(configManager.getRSProfileKey(), loadedProfile) && hasLootRecords(monster))
+			{
+				restoreMonster = monster;
+				restoreOffered = true;
+				refreshPanelNow();
+			}
+		});
+	}
+
+	private static final String LOOT_TRACKER_GROUP = "loottracker";
+	private static final String LOOT_TRACKER_PREFIX = "drops_NPC_";
+	private static final String KILL_COUNT_GROUP = "killcount";
+
+	/**
+	 * @return whether this account can rebuild its Monsters tab from the Loot Tracker
+	 */
+	public boolean isRestoreOffered()
+	{
+		return restoreOffered;
+	}
+
+	/**
+	 * @return whether an account is logged in with its stats loaded, so it can be restored
+	 */
+	public boolean canRestore()
+	{
+		return loadedProfile != null;
+	}
+
+	/**
+	 * @return the one monster the restore is for, or null for all of them
+	 */
+	public String getRestoreMonster()
+	{
+		return restoreMonster;
+	}
+
+	/**
+	 * Rebuilds the Monsters tab (or the one monster offered) from RuneLite's Loot Tracker and
+	 * boss kill counts, combined with what's tracked now. Read only: the Loot Tracker's data
+	 * isn't changed.
+	 */
+	public void restoreFromLootTracker(Set<String> only)
+	{
+		clientThread.invokeLater(() ->
+		{
+			String profile = configManager.getRSProfileKey();
+			if (!canSave(profile, loadedProfile))
+			{
+				return;
+			}
+			LootTrackerRestore.Result result = LootTrackerRestore.merge(monsterTracker.exportState(), lootRecords(profile),
+				killCounts(profile), only, gson, restoreItems());
+			monsterTracker.importState(result.monsters);
+			milestones.setRecord(monsterTracker.getBiggestHit(), monsterTracker.getTotalHits());
+			saveMonsters();
+			configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RESTORE_KEY, "restored");
+			restoreOffered = false;
+			restoreMonster = null;
+			String what = only != null && only.size() == 1 ? only.iterator().next()
+				: result.restored == 1 ? "1 monster" : result.restored + " monsters";
+			chat(result.restored == 0 ? "Combat & XP Tracker: the Loot Tracker has nothing saved to restore."
+				: "Combat & XP Tracker: restored " + what + " (" + QuantityFormatter.formatNumber(result.kills)
+					+ " kills) from the Loot Tracker.");
+			refreshPanelNow();
+		});
+	}
+
+	/**
+	 * Lists what the Loot Tracker can bring back, for choosing which monsters to restore.
+	 * The list is handed to {@code then} on the Swing thread.
+	 */
+	public void loadRestoreChoices(Consumer<List<MonsterTracker.Saved>> then)
+	{
+		clientThread.invokeLater(() ->
+		{
+			String profile = configManager.getRSProfileKey();
+			if (!canSave(profile, loadedProfile))
+			{
+				return;
+			}
+			List<MonsterTracker.Saved> choices = LootTrackerRestore.read(lootRecords(profile), killCounts(profile), null,
+				gson, restoreItems());
+			SwingUtilities.invokeLater(() -> then.accept(choices));
+		});
+	}
+
+	private List<String> lootRecords(String profile)
+	{
+		List<String> records = new ArrayList<>();
+		for (String key : configManager.getRSProfileConfigurationKeys(LOOT_TRACKER_GROUP, profile, LOOT_TRACKER_PREFIX))
+		{
+			String json = configManager.getConfiguration(LOOT_TRACKER_GROUP, profile, key);
+			if (json != null)
+			{
+				records.add(json);
+			}
+		}
+		return records;
+	}
+
+	private Map<String, Integer> killCounts(String profile)
+	{
+		Map<String, Integer> killCounts = new HashMap<>();
+		for (String boss : configManager.getRSProfileConfigurationKeys(KILL_COUNT_GROUP, profile, ""))
+		{
+			Integer kc = configManager.getConfiguration(KILL_COUNT_GROUP, profile, boss, int.class);
+			if (kc != null)
+			{
+				killCounts.put(boss, kc);
+			}
+		}
+		return killCounts;
+	}
+
+	/**
+	 * Item names and prices for restored loot. Client thread only.
+	 */
+	private LootTrackerRestore.Items restoreItems()
+	{
+		return new LootTrackerRestore.Items()
+		{
+			@Override
+			public String name(int itemId)
+			{
+				return itemManager.getItemComposition(itemId).getName();
+			}
+
+			@Override
+			public long price(int itemId)
+			{
+				return itemId == ItemID.COINS ? 1 : itemManager.getItemPrice(itemId);
+			}
+
+			@Override
+			public long haPrice(int itemId)
+			{
+				return itemId == ItemID.COINS ? 1 : itemManager.getItemComposition(itemId).getHaPrice();
+			}
+		};
+	}
+
+	/**
+	 * Hides the restore offer for this account.
+	 */
+	public void dismissRestore()
+	{
+		restoreOffered = false;
+		restoreMonster = null;
+		refreshPanelNow();
+		clientThread.invokeLater(() ->
+		{
+			if (canSave(configManager.getRSProfileKey(), loadedProfile))
+			{
+				configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RESTORE_KEY, "dismissed");
+			}
+		});
+	}
+
+	/**
+	 * @return whether it's safe to save: logged in, to the account whose data was loaded
+	 */
+	static boolean canSave(String currentProfile, String loadedProfile)
+	{
+		return currentProfile != null && currentProfile.equals(loadedProfile);
+	}
+
 	private void loadMonsters()
 	{
 		List<MonsterTracker.Saved> saved = null;
@@ -2265,7 +2497,7 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void saveMonsters()
 	{
-		if (configManager.getRSProfileKey() == null)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
 		{
 			return;
 		}
@@ -2424,6 +2656,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			allTimeUptime.reset();
 			bossTimes.reset();
 			prayerDrain.importState(null);
+			offerRestore(null);
 		}
 		for (SkillProgress progress : skillProgress.values())
 		{
@@ -2446,6 +2679,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		sessionDeaths.remove(name);
 		allTimeDamageTaken.remove(name);
 		sessionDamageTaken.remove(name);
+		offerRestore(name);
 		refreshPanelNow();
 	}
 
@@ -3028,7 +3262,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void savePrayerDrain()
 	{
-		if (configManager.getRSProfileKey() == null)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
 		{
 			return;
 		}
@@ -3324,7 +3558,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveSupplies()
 	{
-		if (configManager.getRSProfileKey() == null)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
 		{
 			return;
 		}
@@ -3417,7 +3651,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveUptime()
 	{
-		if (configManager.getRSProfileKey() == null || allTimeUptime.getRevision() == savedUptimeRevision)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile) || allTimeUptime.getRevision() == savedUptimeRevision)
 		{
 			return;
 		}
@@ -3448,7 +3682,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveDeaths()
 	{
-		if (configManager.getRSProfileKey() == null || allTimeDeaths.getRevision() == savedDeathsRevision)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile) || allTimeDeaths.getRevision() == savedDeathsRevision)
 		{
 			return;
 		}
@@ -3487,7 +3721,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveDamageTaken()
 	{
-		if (configManager.getRSProfileKey() == null || allTimeDamageTaken.getRevision() == savedDamageTakenRevision)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile) || allTimeDamageTaken.getRevision() == savedDamageTakenRevision)
 		{
 			return;
 		}
@@ -3527,7 +3761,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveBossTimes()
 	{
-		if (configManager.getRSProfileKey() == null || bossTimes.getRevision() == savedBossTimesRevision)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile) || bossTimes.getRevision() == savedBossTimesRevision)
 		{
 			return;
 		}
@@ -3749,7 +3983,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveCollectionLog()
 	{
-		if (configManager.getRSProfileKey() == null)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
 		{
 			return;
 		}
@@ -3989,7 +4223,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveAreaMemory()
 	{
-		if (configManager.getRSProfileKey() == null)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
 		{
 			return;
 		}
@@ -4211,7 +4445,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private void saveSlayerLog()
 	{
-		if (configManager.getRSProfileKey() == null)
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
 		{
 			return;
 		}

@@ -224,6 +224,7 @@ public class MonsterTracker
 		private final long lastActivityMillis;
 		private final int killsSinceRare;
 		private final boolean everHadRare;
+		private final boolean rareSinceRestore;
 
 		Snapshot(Entry e)
 		{
@@ -271,8 +272,17 @@ public class MonsterTracker
 					lastRareKill = Math.max(lastRareKill, r.kill);
 				}
 			}
-			everHadRare = lastRareKill >= 0;
-			killsSinceRare = everHadRare ? e.kills - lastRareKill : e.kills;
+			boolean rareLoot = false;
+			for (LootLine line : lines)
+			{
+				rareLoot |= line.isRare();
+			}
+			// Restored from the Loot Tracker with a rare in the loot: which kill it came on isn't
+			// known, so the streak counts from the restore instead of claiming none ever dropped.
+			rareSinceRestore = e.restoredAt > 0 && lastRareKill < e.restoredAt && rareLoot;
+			everHadRare = lastRareKill >= 0 || rareSinceRestore;
+			killsSinceRare = rareSinceRestore ? e.kills - e.restoredAt
+				: everHadRare ? e.kills - lastRareKill : e.kills;
 		}
 
 		private static String nameOf(Entry e, int itemId)
@@ -288,6 +298,14 @@ public class MonsterTracker
 		public int getKillsSinceRare()
 		{
 			return killsSinceRare;
+		}
+
+		/**
+		 * @return whether the dry streak counts from a Loot Tracker restore
+		 */
+		public boolean isRareSinceRestore()
+		{
+			return rareSinceRestore;
 		}
 
 		public boolean hasEverDroppedRare()
@@ -414,6 +432,8 @@ public class MonsterTracker
 		List<RareDrop> rareDrops;
 		long activeMillis;
 		long lastActivityMillis = -1;
+		// Kills when restored from the Loot Tracker, which doesn't say which kill a drop came on.
+		int restoredAt;
 	}
 
 	static final class SavedLoot
@@ -439,6 +459,7 @@ public class MonsterTracker
 		final Map<Integer, LootLine> loot = new LinkedHashMap<>();
 		final List<RareDrop> rareDrops = new ArrayList<>();
 		final ActivityTimer activity = new ActivityTimer();
+		int restoredAt;
 
 		Entry(String name)
 		{
@@ -689,6 +710,10 @@ public class MonsterTracker
 		{
 			target.rareDrops.add(new RareDrop(r.kill + target.kills, r.itemId, r.unitPrice, r.haPrice));
 		}
+		if (source.restoredAt > 0)
+		{
+			target.restoredAt = Math.max(target.restoredAt, target.kills + source.restoredAt);
+		}
 		target.kills += source.kills;
 		target.hits += source.hits;
 		target.totalDamage += source.totalDamage;
@@ -773,6 +798,7 @@ public class MonsterTracker
 			s.rareDrops = new ArrayList<>(e.rareDrops);
 			s.activeMillis = e.activity.getActiveMillis();
 			s.lastActivityMillis = e.activity.getLastMillis();
+			s.restoredAt = e.restoredAt;
 			out.add(s);
 		}
 		return out;
@@ -832,6 +858,7 @@ public class MonsterTracker
 					}
 				}
 				e.activity.restore(s.activeMillis, s.lastActivityMillis);
+				e.restoredAt = Math.max(0, Math.min(e.kills, s.restoredAt));
 				entries.put(e.name, e);
 			}
 		}
