@@ -84,7 +84,10 @@ class AttackTimerOverlay extends Overlay
 		Point location = player.getCanvasTextLocation(graphics, text, player.getLogicalHeight() + HEIGHT_ABOVE_HEAD);
 		if (location != null)
 		{
-			OverlayUtil.renderTextLocation(graphics, location, text, ticks == 0 ? READY : config.attackTimerColour());
+			CombatStyle style = plugin.getTimerStyle();
+			Color colour = ticks == 0 ? READY
+				: config.attackTimerStyleColours() && style != null ? style.getColor() : config.attackTimerColour();
+			OverlayUtil.renderTextLocation(graphics, location, text, colour);
 		}
 		return null;
 	}

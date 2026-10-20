@@ -404,8 +404,11 @@ public interface CombatXpTrackerConfig extends Config
 	@Range(min = 1_000)
 	default int rareDropValue()
 	{
-		return 1_000_000;
+		return RARE_DROP_DEFAULT;
 	}
+
+	/** The rare drop value's default since 2.1.2. It was 1M. */
+	int RARE_DROP_DEFAULT = 150_000;
 
 	@ConfigItem(
 		keyName = "taskSummary",
@@ -748,6 +751,19 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "overlayGpPerHour",
+		name = "Overlay: GP/hr",
+		description = "Show gold per hour for the monster you're doing on the on-screen overlay. It counts the whole trip,"
+			+ " banking and walking included, and updates every 5 ticks.",
+		position = 13,
+		section = overlaySection
+	)
+	default boolean overlayGpPerHour()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "overlayShowTask",
 		name = "Overlay: slayer task",
 		description = "Show your slayer task's kills left on the on-screen overlay.",
@@ -812,8 +828,8 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "attackTimer",
 		name = "Attack timer",
-		description = "While fighting, shows the ticks until your next attack above your character, from your weapon's "
-			+ "attack speed. It turns green at 0 when you can attack.",
+		description = "While fighting, shows the ticks until your next attack above your character. It learns the real speed of"
+			+ " each weapon and attack style from your attacks, and follows weapon swaps. It turns green at 0 when you can attack.",
 		position = 9,
 		section = overlaySection
 	)
@@ -833,5 +849,18 @@ public interface CombatXpTrackerConfig extends Config
 	default Color attackTimerColour()
 	{
 		return Color.WHITE;
+	}
+
+	@ConfigItem(
+		keyName = "attackTimerStyleColours",
+		name = "Attack timer: colour by style",
+		description = "Colour the attack timer by what you attacked with: red for melee, green for ranged, blue for magic."
+			+ " Turn off to use the attack timer colour above.",
+		position = 10,
+		section = overlaySection
+	)
+	default boolean attackTimerStyleColours()
+	{
+		return true;
 	}
 }

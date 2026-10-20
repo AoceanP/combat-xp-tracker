@@ -160,10 +160,23 @@ final class LootTrackerRestore
 			MonsterTracker.Saved now = merged.get(restored.name);
 			if (now == null)
 			{
+				// Nothing about these was timed: keep them out of per-hour rates.
+				restored.untimedKills = restored.kills;
+				restored.untimedLoot = new java.util.HashMap<>();
+				for (MonsterTracker.SavedLoot l : restored.loot)
+				{
+					restored.untimedLoot.put(l.id, l.quantity);
+				}
 				merged.put(restored.name, restored);
 				kills += restored.kills;
 				continue;
 			}
+			if (now.untimedLoot == null)
+			{
+				now.untimedLoot = new java.util.HashMap<>();
+			}
+			// What the restore adds wasn't timed.
+			now.untimedKills = Math.max(0, now.untimedKills) + Math.max(0, restored.kills - now.kills);
 			// Both counted the kills since the stats were lost, so the larger, never the sum.
 			kills += Math.max(0, restored.kills - now.kills);
 			now.kills = Math.max(now.kills, restored.kills);
@@ -181,6 +194,7 @@ final class LootTrackerRestore
 				MonsterTracker.SavedLoot have = lines.get(l.id);
 				if (have == null || have.quantity < l.quantity)
 				{
+					now.untimedLoot.merge(l.id, l.quantity - (have == null ? 0 : have.quantity), Long::sum);
 					lines.put(l.id, l);
 				}
 			}

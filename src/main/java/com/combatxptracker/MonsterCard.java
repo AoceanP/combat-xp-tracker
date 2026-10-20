@@ -101,11 +101,13 @@ class MonsterCard extends JPanel
 	private String collectionKey;
 	// Label and value rows, in sections.
 	private final InfoRow killsRateRow = new InfoRow("Kills/hr");
-	private final InfoRow gpRateRow = new InfoRow("GP/hr");
+	private final InfoRow gpRateRow = new InfoRow("GP/hr (trip)");
+	private final InfoRow fightRateRow = new InfoRow("GP/hr (in fight)");
 	private final InfoRow taskRow = new InfoRow("Task");
 	private final InfoRow rareRow = new InfoRow("Rare drop");
 	private final InfoRow prayerRow = new InfoRow("Prayer");
 	private final InfoRow driestRow = new InfoRow("Driest");
+	private final InfoRow sinceUniqueRow = new InfoRow("Since last unique");
 	private final InfoRow achievementsRow = new InfoRow("Combat Achievements");
 	private final InfoRow suppliesRow = new InfoRow("Supplies");
 	private final InfoRow deathsRow = new InfoRow("Deaths");
@@ -214,7 +216,7 @@ class MonsterCard extends JPanel
 		collectionGrid.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		collectionGrid.setVisible(false);
 		timesRow.setBorder(BorderFactory.createEmptyBorder(0, 0, 2, 0));
-		overview.with(killsRateRow).with(gpRateRow).with(taskRow).with(rareRow).with(prayerRow);
+		overview.with(killsRateRow).with(gpRateRow).with(fightRateRow).with(taskRow).with(rareRow).with(sinceUniqueRow).with(prayerRow);
 		collectionSection.with(collectionGrid).with(driestRow);
 		bossSection.with(timesRow).with(achievementsRow);
 		costsSection.with(suppliesRow).with(netRow).with(netRateRow).with(deathsRow);
@@ -619,8 +621,8 @@ class MonsterCard extends JPanel
 			rareRow.setLabel("Rare drop (" + value + ")");
 			if (s.isRareSinceRestore())
 			{
-				rareRow.set(Formatting.withCommas(s.getKillsSinceRare()) + " since restore", Theme.TEXT,
-					"Your rare drops were restored, but not which kill they came on, so this counts from the restore");
+				rareRow.set(kills(s.getKillsSinceRare()) + " dry", Theme.TEXT,
+					"Which kill your last rare came on wasn't saved, so this started from 0. It starts again from 0 at your next one.");
 			}
 			else
 			{
@@ -633,6 +635,8 @@ class MonsterCard extends JPanel
 		{
 			rareRow.set(null);
 		}
+
+		updateSinceUnique(s);
 
 		CollectionLog.Status log = plugin.getCollectionStatus(monsterName);
 		if (log != null)
@@ -695,11 +699,20 @@ class MonsterCard extends JPanel
 		styleRow.setVisible(s.getBiggestByStyle().size() > 1);
 
 		double killsPerHour = s.getKillsPerHour();
-		double gpPerHour = s.getGpPerHour();
 		String perHour = "Per hour of fighting this monster. Breaks over 5 minutes aren't counted.";
 		killsRateRow.set(killsPerHour < 0 ? null : String.format(java.util.Locale.US, "%.1f", killsPerHour), Theme.TEXT, perHour);
-		gpRateRow.set(killsPerHour < 0 || gpPerHour <= 0 ? null : QuantityFormatter.quantityToStackSize(Math.round(gpPerHour)),
-			Theme.GOLD, perHour);
+		double tripPerHour = s.getTripGpPerHour();
+		double fightPerHour = s.getFightGpPerHour();
+		gpRateRow.set(tripPerHour <= 0 ? null : QuantityFormatter.quantityToStackSize(Math.round(tripPerHour))
+				+ (s.isAway() ? " (away)" : ""),
+			s.isAway() ? Theme.MUTED : Theme.GOLD,
+			"<html>Loot per hour of the whole trip, banking and walking included. Updates every 5 ticks.<br>"
+				+ "It keeps counting after you leave, so it falls while you're away and climbs again with new loot.<br>"
+				+ "Logging out, a break over 20 minutes or moving on to another monster ends the trip.</html>");
+		// Only worth a second row when banking and walking make a real difference.
+		boolean showFight = fightPerHour > 0 && tripPerHour > 0 && fightPerHour > tripPerHour * 1.05;
+		fightRateRow.set(showFight ? QuantityFormatter.quantityToStackSize(Math.round(fightPerHour)) : null, Theme.MUTED,
+			"Loot per hour of fighting only: gaps over 30 seconds between kills, hits and drops are left out.");
 		overview.refresh();
 		collectionSection.refresh();
 
@@ -803,6 +816,22 @@ class MonsterCard extends JPanel
 			default:
 				return "mel";
 		}
+	}
+
+	/**
+	 * Kills since the last collection log unique. Starts again from 0 each time one drops.
+	 */
+	private void updateSinceUnique(MonsterTracker.Snapshot s)
+	{
+		if (s.getKills() <= 0 || !plugin.hasUniques(monsterName))
+		{
+			sinceUniqueRow.set(null);
+			return;
+		}
+		int since = s.getKillsSinceUnique();
+		sinceUniqueRow.set(kills(since), Theme.TEXT, s.isUniqueSinceRestore()
+			? "Which kill your last unique came on wasn't saved, so this started from 0. It starts again from 0 at your next one."
+			: "Kills since your last unique from " + monsterName + ", new or a duplicate. Starts again from 0 each time one drops.");
 	}
 
 	private static String kills(int count)

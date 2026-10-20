@@ -36,6 +36,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiPredicate;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 import java.util.function.UnaryOperator;
@@ -225,14 +227,30 @@ public class MonsterTracker
 		private final int killsSinceRare;
 		private final boolean everHadRare;
 		private final boolean rareSinceRestore;
+		private final long tripMillis;
+		private final long fightMillis;
+		private final boolean away;
+		private final boolean liveTrip;
+		private final int killsSinceUnique;
+		private final int timedKills;
+		private final long timedLootValue;
+		private final boolean uniqueSinceRestore;
 
 		Snapshot(Entry e)
 		{
-			this(e, LootPrice.GRAND_EXCHANGE, name -> false, Long.MAX_VALUE);
+			this(e, LootPrice.GRAND_EXCHANGE, name -> false, Long.MAX_VALUE, false, 0);
 		}
 
-		Snapshot(Entry e, LootPrice price, Predicate<String> ignoredItem, long rareValue)
+		Snapshot(Entry e, LootPrice price, Predicate<String> ignoredItem, long rareValue, boolean liveTrip, long nowMillis)
 		{
+			// When the last unique's kill isn't known, count from where tracking started (0 for a
+			// monster tracked from its first kill) rather than claiming the whole kill count.
+			uniqueSinceRestore = e.lastUniqueKill < 0 && e.restoredAt > 0;
+			killsSinceUnique = e.lastUniqueKill >= 0 ? e.kills - e.lastUniqueKill : e.kills - e.restoredAt;
+			tripMillis = e.trip.getTripMillis(nowMillis, liveTrip);
+			fightMillis = e.trip.getFightMillis();
+			away = e.trip.isAway(nowMillis, liveTrip);
+			this.liveTrip = liveTrip && !away;
 			name = e.name;
 			kills = e.kills;
 			hits = e.hits;
@@ -256,11 +274,19 @@ public class MonsterTracker
 				: Long.compare(b.getTotalValue(), a.getTotalValue()));
 			loot = Collections.unmodifiableList(lines);
 			long value = 0;
+			long untimed = 0;
 			for (LootLine line : lines)
 			{
 				value += line.getTotalValue();
+				Long n = e.untimedLoot.get(line.getItemId());
+				if (n != null)
+				{
+					untimed += Math.min(n, line.getQuantity()) * line.getUnitPrice();
+				}
 			}
 			lootValue = value;
+			timedLootValue = Math.max(0, value - untimed);
+			timedKills = Math.max(0, e.kills - e.untimedKills);
 			activeMillis = e.activity.getActiveMillis();
 			lastActivityMillis = e.activity.getLastMillis();
 
@@ -272,17 +298,11 @@ public class MonsterTracker
 					lastRareKill = Math.max(lastRareKill, r.kill);
 				}
 			}
-			boolean rareLoot = false;
-			for (LootLine line : lines)
-			{
-				rareLoot |= line.isRare();
-			}
-			// Restored from the Loot Tracker with a rare in the loot: which kill it came on isn't
-			// known, so the streak counts from the restore instead of claiming none ever dropped.
-			rareSinceRestore = e.restoredAt > 0 && lastRareKill < e.restoredAt && rareLoot;
-			everHadRare = lastRareKill >= 0 || rareSinceRestore;
-			killsSinceRare = rareSinceRestore ? e.kills - e.restoredAt
-				: everHadRare ? e.kills - lastRareKill : e.kills;
+			// When the last rare's kill isn't known (restored, or saved before 2.1.2), the streak
+			// counts from then instead of claiming the whole kill count.
+			rareSinceRestore = lastRareKill < 0 && e.restoredAt > 0;
+			everHadRare = lastRareKill >= 0;
+			killsSinceRare = everHadRare ? e.kills - lastRareKill : e.kills - e.restoredAt;
 		}
 
 		private static String nameOf(Entry e, int itemId)
@@ -402,7 +422,7 @@ public class MonsterTracker
 		 */
 		public double getKillsPerHour()
 		{
-			return ActivityTimer.perHour(kills, activeMillis);
+			return ActivityTimer.perHour(timedKills, activeMillis);
 		}
 
 		/**
@@ -410,7 +430,57 @@ public class MonsterTracker
 		 */
 		public double getGpPerHour()
 		{
-			return ActivityTimer.perHour(lootValue, activeMillis);
+			return ActivityTimer.perHour(timedLootValue, activeMillis);
+		}
+
+		/**
+		 * @return loot per hour of the whole trip, banking and walking included, or -1 until
+		 * there's a minute of it
+		 */
+		public double getTripGpPerHour()
+		{
+			return ActivityTimer.perHour(timedLootValue, tripMillis);
+		}
+
+		/**
+		 * @return loot per hour of fighting only, or -1 until there's a minute of it
+		 */
+		public double getFightGpPerHour()
+		{
+			return ActivityTimer.perHour(timedLootValue, fightMillis);
+		}
+
+		/**
+		 * @return whether this monster's trip is going and the player is away from it, so its
+		 * trip rate is falling
+		 */
+		public boolean isAway()
+		{
+			return away;
+		}
+
+		/**
+		 * @return kills since the last collection log unique, or -1 if none has been seen
+		 */
+		public int getKillsSinceUnique()
+		{
+			return killsSinceUnique;
+		}
+
+		/**
+		 * @return whether {@link #getKillsSinceUnique} counts from a Loot Tracker restore
+		 */
+		public boolean isUniqueSinceRestore()
+		{
+			return uniqueSinceRestore;
+		}
+
+		/**
+		 * @return whether the player is fighting this monster right now
+		 */
+		public boolean isLiveTrip()
+		{
+			return liveTrip;
 		}
 	}
 
@@ -434,6 +504,13 @@ public class MonsterTracker
 		long lastActivityMillis = -1;
 		// Kills when restored from the Loot Tracker, which doesn't say which kill a drop came on.
 		int restoredAt;
+		// Gold per hour time: the whole trip, and fighting only. -1 in data saved before 2.1.2.
+		long tripMillis = -1;
+		long fightMillis = -1;
+		int lastUniqueKill = -1;
+		// -1 in data saved before 2.1.2.
+		int untimedKills = -1;
+		Map<Integer, Long> untimedLoot;
 	}
 
 	static final class SavedLoot
@@ -459,17 +536,42 @@ public class MonsterTracker
 		final Map<Integer, LootLine> loot = new LinkedHashMap<>();
 		final List<RareDrop> rareDrops = new ArrayList<>();
 		final ActivityTimer activity = new ActivityTimer();
+		final TripTimer trip = new TripTimer();
 		int restoredAt;
+		// The kill a collection log unique last dropped on, or -1 if none has been seen.
+		int lastUniqueKill = -1;
+		// Kills and items that weren't timed (restored from the Loot Tracker): left out of per-hour rates.
+		int untimedKills;
+		final Map<Integer, Long> untimedLoot = new HashMap<>();
 
 		Entry(String name)
 		{
 			this.name = name;
+		}
+
+		/**
+		 * Everything so far counts as untimed, so per-hour rates only use what comes next.
+		 */
+		void startRatesAgain()
+		{
+			untimedKills = kills;
+			untimedLoot.clear();
+			loot.forEach((id, line) -> untimedLoot.put(id, line.getQuantity()));
+			activity.restore(0, activity.getLastMillis());
+			trip.restore(0, 0);
 		}
 	}
 
 	// Keyed by NPC name, so every "Abyssal demon" shares one entry.
 	private final Map<String, Entry> entries = new LinkedHashMap<>();
 	private int revision;
+	// The monster whose trip is going: its gold per hour keeps counting after the last kill.
+	private String currentTrip;
+	private LongSupplier clock = System::currentTimeMillis;
+	// Whether an item is a collection log unique of a monster.
+	private BiPredicate<String, String> uniqueTest = (monster, item) -> false;
+	// Data saved before 2.1.2 was upgraded while loading, so it should be saved again.
+	private boolean upgraded;
 
 	/**
 	 * Hits that count towards accuracy fewer than this are too few to say.
@@ -515,7 +617,7 @@ public class MonsterTracker
 		{
 			e.biggestByStyle.merge(style, damage, Math::max);
 		}
-		e.activity.mark(nowMillis);
+		mark(e, nowMillis);
 		revision++;
 	}
 
@@ -527,7 +629,7 @@ public class MonsterTracker
 		}
 		Entry e = entries.computeIfAbsent(monsterName, Entry::new);
 		e.kills++;
-		e.activity.mark(nowMillis);
+		mark(e, nowMillis);
 		revision++;
 	}
 
@@ -588,6 +690,10 @@ public class MonsterTracker
 		Entry e = entries.computeIfAbsent(monsterName, Entry::new);
 		for (Drop d : drops)
 		{
+			if (uniqueTest.test(monsterName, d.name))
+			{
+				e.lastUniqueKill = e.kills;
+			}
 			LootLine existing = e.loot.get(d.itemId);
 			long qty = d.quantity + (existing == null ? 0 : existing.quantity);
 			// Keep the latest price so the total tracks the current market.
@@ -601,7 +707,7 @@ public class MonsterTracker
 				}
 			}
 		}
-		e.activity.mark(nowMillis);
+		mark(e, nowMillis);
 		revision++;
 	}
 
@@ -647,9 +753,10 @@ public class MonsterTracker
 	public synchronized List<Snapshot> snapshot(LootPrice price, Predicate<String> ignoredItem, long rareValue)
 	{
 		List<Snapshot> out = new ArrayList<>(entries.size());
+		long now = clock.getAsLong();
 		for (Entry e : entries.values())
 		{
-			out.add(new Snapshot(e, price, ignoredItem, rareValue));
+			out.add(new Snapshot(e, price, ignoredItem, rareValue, e.name.equals(currentTrip), now));
 		}
 		out.sort(MonsterSort.RECENT.comparator());
 		return out;
@@ -700,6 +807,7 @@ public class MonsterTracker
 		{
 			entries.clear();
 			entries.putAll(merged);
+			currentTrip = null;
 			revision++;
 		}
 	}
@@ -713,6 +821,10 @@ public class MonsterTracker
 		if (source.restoredAt > 0)
 		{
 			target.restoredAt = Math.max(target.restoredAt, target.kills + source.restoredAt);
+		}
+		if (source.lastUniqueKill >= 0)
+		{
+			target.lastUniqueKill = Math.max(target.lastUniqueKill, target.kills + source.lastUniqueKill);
 		}
 		target.kills += source.kills;
 		target.hits += source.hits;
@@ -737,6 +849,79 @@ public class MonsterTracker
 		target.activity.restore(
 			target.activity.getActiveMillis() + source.activity.getActiveMillis(),
 			Math.max(target.activity.getLastMillis(), source.activity.getLastMillis()));
+		target.trip.add(source.trip);
+		target.untimedKills += source.untimedKills;
+		source.untimedLoot.forEach((id, n) -> target.untimedLoot.merge(id, n, Long::sum));
+	}
+
+	/**
+	 * @return whether the last load upgraded data saved before 2.1.2, then forgets it
+	 */
+	public synchronized boolean takeUpgraded()
+	{
+		boolean was = upgraded;
+		upgraded = false;
+		return was;
+	}
+
+	/**
+	 * Per-hour rates start again from now, for data whose timed part can't be told apart.
+	 */
+	public synchronized void startRatesAgain()
+	{
+		for (Entry e : entries.values())
+		{
+			e.startRatesAgain();
+		}
+		revision++;
+	}
+
+	/**
+	 * A kill, hit or drop: counts towards the time it's fought, and starts or continues its trip.
+	 * Moving on to another monster ends the last one's trip.
+	 */
+	private void mark(Entry e, long nowMillis)
+	{
+		e.activity.mark(nowMillis);
+		if (currentTrip != null && !currentTrip.equals(e.name))
+		{
+			Entry last = entries.get(currentTrip);
+			if (last != null)
+			{
+				last.trip.end();
+			}
+		}
+		currentTrip = e.name;
+		e.trip.mark(nowMillis);
+	}
+
+	/**
+	 * Ends the current trip, e.g. on logout: time from now on isn't counted.
+	 */
+	public synchronized void endTrip()
+	{
+		Entry last = currentTrip == null ? null : entries.get(currentTrip);
+		if (last != null)
+		{
+			last.trip.end();
+		}
+		currentTrip = null;
+	}
+
+	/**
+	 * @return the monster whose trip is going, or null
+	 */
+	public synchronized String getCurrentTrip()
+	{
+		return currentTrip;
+	}
+
+	/**
+	 * For tests: what "now" is.
+	 */
+	void setClock(LongSupplier clock)
+	{
+		this.clock = clock;
 	}
 
 	/**
@@ -754,11 +939,16 @@ public class MonsterTracker
 		{
 			revision++;
 		}
+		if (monsterName.equals(currentTrip))
+		{
+			currentTrip = null;
+		}
 	}
 
 	public synchronized void reset()
 	{
 		entries.clear();
+		currentTrip = null;
 		revision++;
 	}
 
@@ -799,6 +989,11 @@ public class MonsterTracker
 			s.activeMillis = e.activity.getActiveMillis();
 			s.lastActivityMillis = e.activity.getLastMillis();
 			s.restoredAt = e.restoredAt;
+			s.tripMillis = e.trip.getTripMillis(0, false);
+			s.fightMillis = e.trip.getFightMillis();
+			s.lastUniqueKill = e.lastUniqueKill;
+			s.untimedKills = e.untimedKills;
+			s.untimedLoot = new HashMap<>(e.untimedLoot);
 			out.add(s);
 		}
 		return out;
@@ -811,6 +1006,8 @@ public class MonsterTracker
 	public synchronized void importState(Collection<Saved> saved)
 	{
 		entries.clear();
+		currentTrip = null;
+		upgraded = false;
 		if (saved != null)
 		{
 			for (Saved s : saved)
@@ -858,11 +1055,70 @@ public class MonsterTracker
 					}
 				}
 				e.activity.restore(s.activeMillis, s.lastActivityMillis);
-				e.restoredAt = Math.max(0, Math.min(e.kills, s.restoredAt));
+				// Saved before 2.1.2: streaks whose last drop isn't known count from now.
+				e.restoredAt = s.tripMillis < 0 ? e.kills : Math.max(0, Math.min(e.kills, s.restoredAt));
+				// Saved before 2.1.2: start from the fighting time there was.
+				e.trip.restore(s.tripMillis < 0 ? s.activeMillis : s.tripMillis,
+					s.fightMillis < 0 ? s.activeMillis : s.fightMillis);
+				e.lastUniqueKill = Math.min(e.kills, s.lastUniqueKill);
+				upgraded |= s.untimedKills < 0 || s.tripMillis < 0;
+				if (s.untimedKills >= 0)
+				{
+					e.untimedKills = Math.min(e.kills, s.untimedKills);
+					if (s.untimedLoot != null)
+					{
+						s.untimedLoot.forEach((id, n) ->
+						{
+							if (id != null && n != null && n > 0)
+							{
+								e.untimedLoot.put(id, n);
+							}
+						});
+					}
+				}
+				else if (s.restoredAt > 0)
+				{
+					// Restored before 2.1.2, when restored kills weren't kept apart: rates start again.
+					e.startRatesAgain();
+				}
 				entries.put(e.name, e);
 			}
 		}
+		backfillUniques();
 		revision++;
+	}
+
+	/**
+	 * Saved before 2.1.2: the last unique's kill isn't stored, but valuable drops were saved
+	 * with their kill, so take it from those.
+	 */
+	private void backfillUniques()
+	{
+		for (Entry e : entries.values())
+		{
+			if (e.lastUniqueKill >= 0)
+			{
+				continue;
+			}
+			for (RareDrop r : e.rareDrops)
+			{
+				LootLine line = e.loot.get(r.itemId);
+				String item = line == null ? null : line.getName();
+				if (item != null && uniqueTest.test(e.name, item))
+				{
+					e.lastUniqueKill = Math.max(e.lastUniqueKill, r.kill);
+				}
+			}
+		}
+	}
+
+	/**
+	 * @param test whether an item is a collection log unique of a monster
+	 */
+	public synchronized void setUniqueTest(BiPredicate<String, String> test)
+	{
+		uniqueTest = test;
+		backfillUniques();
 	}
 
 	// ---- View helpers -----------------------------------------------------------

@@ -238,15 +238,16 @@ public class Release202Test
 	}
 
 	@Test
-	public void noRareInTheRestoredLootIsStillADryStreak()
+	public void noRareInTheRestoredLootStartsFromZero()
 	{
 		LootTrackerRestore.Result result = restore(new ArrayList<>(),
 			Arrays.asList(record("Cow", 40, 526, 40)), Collections.emptyMap());
 		MonsterTracker tracker = new MonsterTracker();
 		tracker.importState(result.monsters);
 		MonsterTracker.Snapshot cow = tracker.snapshot(LootPrice.GRAND_EXCHANGE, name -> false, 1_000).get(0);
-		assertFalse(cow.isRareSinceRestore());
-		assertEquals(40, cow.getKillsSinceRare());
+		// 2.1.2: a streak whose start isn't known starts from 0, not the whole kill count.
+		assertTrue(cow.isRareSinceRestore());
+		assertEquals(0, cow.getKillsSinceRare());
 	}
 
 	@Test

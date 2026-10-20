@@ -51,6 +51,7 @@ final class SlayerTaskSession
 	private int cannonballs;
 	private int deaths;
 	private final ActivityTimer activity = new ActivityTimer();
+	private final TripTimer trip = new TripTimer();
 
 	void start(String taskName)
 	{
@@ -70,6 +71,7 @@ final class SlayerTaskSession
 		cannonballs = 0;
 		deaths = 0;
 		activity.reset();
+		trip.reset();
 	}
 
 	/**
@@ -205,12 +207,14 @@ final class SlayerTaskSession
 	{
 		biggestHit = Math.max(biggestHit, damage);
 		activity.mark(nowMillis);
+		trip.mark(nowMillis);
 	}
 
 	void recordKill(long nowMillis)
 	{
 		kills++;
 		activity.mark(nowMillis);
+		trip.mark(nowMillis);
 	}
 
 	void recordLoot(long geValue, long haValue, long nowMillis)
@@ -218,6 +222,30 @@ final class SlayerTaskSession
 		lootGe += geValue;
 		lootHa += haValue;
 		activity.mark(nowMillis);
+		trip.mark(nowMillis);
+	}
+
+	/**
+	 * @param live whether the task's clock is still running (logged in)
+	 * @return loot per hour of the task so far, banking and walking included, or -1 until
+	 * there's a minute of it
+	 */
+	double getTripGpPerHour(LootPrice price, long nowMillis, boolean live)
+	{
+		return ActivityTimer.perHour(price == LootPrice.HIGH_ALCHEMY ? lootHa : lootGe, trip.getTripMillis(nowMillis, live));
+	}
+
+	boolean isAway(long nowMillis, boolean live)
+	{
+		return trip.isAway(nowMillis, live);
+	}
+
+	/**
+	 * Logged out: the time away isn't counted.
+	 */
+	void endTrip()
+	{
+		trip.end();
 	}
 
 	/**

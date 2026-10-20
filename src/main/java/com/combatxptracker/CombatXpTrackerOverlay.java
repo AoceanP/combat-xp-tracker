@@ -38,6 +38,7 @@ import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
+import net.runelite.client.util.QuantityFormatter;
 
 /**
  * Optional on-screen overlay with the panel's key numbers: average and biggest hit, max
@@ -121,6 +122,19 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 					.left("Spec max:")
 					.right(spec.getHits() > 1 ? spec.getHits() + " x " + maxHit.getSpecMaxHit() : String.valueOf(maxHit.getSpecMaxHit()))
 					.rightColor(SPEC_COLOR)
+					.build());
+			}
+		}
+
+		if (config.overlayGpPerHour())
+		{
+			MonsterTracker.Snapshot trip = plugin.getTripSnapshot();
+			if (trip != null && trip.getTripGpPerHour() > 0)
+			{
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left("GP/hr:")
+					.right(QuantityFormatter.quantityToStackSize(Math.round(trip.getTripGpPerHour())))
+					.rightColor(trip.isAway() ? Color.LIGHT_GRAY : SPEC_COLOR)
 					.build());
 			}
 		}

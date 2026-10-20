@@ -146,6 +146,14 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final int SAVE_INTERVAL_TICKS = 50;
 
 	private static final String MONSTERS_KEY = "monsters";
+	// How often gold per hour redraws while a trip is going: 5 ticks, 3 seconds.
+	private static final int RATE_TICKS = 5;
+	private static final int OLD_RARE_DROP_DEFAULT = 1_000_000;
+	private static final String LEGACY_RESTORE_KEY = "restoredFromLootTracker";
+	private static final String RATES_RESTARTED_KEY = "ratesRestarted212";
+	private static final String RARE_DROP_MIGRATED_KEY = "rareDropValue212";
+	// Attack speeds learned from the player's attacks. Weapons are the same on every account.
+	private static final String ATTACK_SPEEDS_KEY = "learnedAttackSpeeds";
 	// Set once the Loot Tracker restore was used or dismissed for an account.
 	private static final String RESTORE_KEY = "lootTrackerRestore";
 	private static final String SLAYER_LOG_KEY = "slayerLog";
@@ -427,6 +435,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	private long lastAmmoQty;
 	private int lastCannonBalls = -1;
 	private volatile int attackSpeedTicks = AttackTimer.UNARMED_TICKS;
+	// Real speeds learned from the player's attacks, per weapon and attack style.
+	private final AttackSpeeds attackSpeeds = new AttackSpeeds();
+	private String attackKey;
+	// The last attack spotted for certain (its animation is known), to learn from the gap to the next.
+	private String lastCertainKey;
+	private int lastCertainTick = -1;
+	// The combat style of the last attack, for the timer's colour.
+	private volatile CombatStyle timerStyle;
+	// Each boss's collection log uniques, bundled from the OSRS Wiki.
+	private volatile BossUniques bossUniques;
 	// The monster XP is currently being pooled for, so XP from another monster isn't mixed in.
 	private String xpTarget;
 	// Boss fight logs by fight key (a boss group, or one NPC), for the kill summary.
@@ -447,6 +465,11 @@ public class CombatXpTrackerPlugin extends Plugin
 	// The account whose saved data is loaded. Nothing is saved for any other.
 	private volatile String loadedProfile;
 	private volatile boolean restoreOffered;
+	// Bumped every 5 ticks while a trip is going, so gold per hour redraws as time passes.
+	private volatile int rateTick;
+	// The monster being done, for the overlay's gold per hour. Updated every 5 ticks.
+	private volatile MonsterTracker.Snapshot tripSnapshot;
+	private int ticksSinceRate;
 	// The one monster the restore offer is for (removed by accident), or null for all.
 	private volatile String restoreMonster;
 	private int ticksSinceSave;
@@ -494,6 +517,13 @@ public class CombatXpTrackerPlugin extends Plugin
 		overlayManager.add(dropRevealOverlay);
 		overlayManager.add(lootDespawnOverlay);
 		dryCalculator = loadDryCalculator();
+		bossUniques = new BossUniques(loadResource("collection_uniques.json", new TypeToken<Map<String, List<String>>>()
+		{
+		}.getType()));
+		migrateRareDropValue();
+		monsterTracker.setUniqueTest(this::isUnique);
+		sessionMonsters.setUniqueTest(this::isUnique);
+		loadAttackSpeeds();
 		elementalWeakness = new ElementalWeakness(loadResource("elemental_weakness.json",
 			new TypeToken<Map<String, List<Integer>>>()
 			{
@@ -565,6 +595,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		pendingConsume = null;
 		lastCannonBalls = -1;
 		attackTimer.reset();
+		lastCertainTick = -1;
 		attackDetector.reset();
 		slayerLog.importState(null);
 		savedSlayerLogRevision = -1;
@@ -645,9 +676,14 @@ public class CombatXpTrackerPlugin extends Plugin
 			countedKills.clear();
 			pendingLootNpc = null;
 			pendingLootBefore = null;
+			// Time logged out isn't part of a trip.
+			monsterTracker.endTrip();
+			sessionMonsters.endTrip();
+			taskSession.endTrip();
 			clearFights();
 			xpPerKill.clearPending();
 			attackTimer.reset();
+		lastCertainTick = -1;
 			attackDetector.reset();
 			killTimer.reset();
 			combatAchievementsLoaded = false;
@@ -785,6 +821,16 @@ public class CombatXpTrackerPlugin extends Plugin
 	public void onGameTick(GameTick tick)
 	{
 		cannonballPrice = itemManager.getItemPrice(ItemID.MCANNONBALL);
+		if (++ticksSinceRate >= RATE_TICKS)
+		{
+			ticksSinceRate = 0;
+			if (monsterTracker.getCurrentTrip() != null || taskSession.isActive())
+			{
+				rateTick++;
+				panelDirty = true;
+			}
+			tripSnapshot = config.overlayGpPerHour() ? currentTripSnapshot() : null;
+		}
 		refreshCombatState();
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -1318,6 +1364,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void recordAttack()
 	{
+		CombatStyle.AttackStyle style = attackStyle;
+		timerStyle = style == null ? null : style.getStyle();
 		Player local = client.getLocalPlayer();
 		Actor target = local == null ? null : local.getInteracting();
 		if (!(target instanceof NPC))
@@ -1388,11 +1436,15 @@ public class CombatXpTrackerPlugin extends Plugin
 		AttackDetector.Result seen = attackDetector.onTick(tick, local.getAnimation(), local.getAnimationFrame(),
 			hasCombatTarget(local));
 		boolean attacked = seen == AttackDetector.Result.CERTAIN
-			? attackTimer.onCertainAttack(tick)
+			? attackTimer.onCertainAttack(tick, attackSpeedTicks)
 			: attackTimer.onTick(tick, seen == AttackDetector.Result.LIKELY, attackSpeedTicks);
 		if (attacked)
 		{
 			recordAttack();
+		}
+		if (seen == AttackDetector.Result.CERTAIN && attacked)
+		{
+			learnAttackSpeed(tick);
 		}
 		updateTarget(local, tick);
 	}
@@ -1482,6 +1534,50 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		String[] actions = npc.getComposition() == null ? null : npc.getComposition().getActions();
 		return actions != null && Arrays.asList(actions).contains("Attack");
+	}
+
+	/**
+	 * Two certain attacks in a row with the same weapon and style: the gap teaches its real speed.
+	 */
+	private void learnAttackSpeed(int tick)
+	{
+		String key = attackKey;
+		if (key != null && key.equals(lastCertainKey) && lastCertainTick >= 0
+			&& attackSpeeds.observe(key, tick - lastCertainTick))
+		{
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, ATTACK_SPEEDS_KEY,
+				gson.toJson(attackSpeeds.exportState()));
+		}
+		lastCertainKey = key;
+		lastCertainTick = tick;
+	}
+
+	private void loadAttackSpeeds()
+	{
+		String json = configManager.getConfiguration(CombatXpTrackerConfig.GROUP, ATTACK_SPEEDS_KEY);
+		Map<String, AttackSpeeds.Learned> saved = null;
+		if (json != null && !json.isEmpty())
+		{
+			try
+			{
+				saved = gson.fromJson(json, new TypeToken<Map<String, AttackSpeeds.Learned>>()
+				{
+				}.getType());
+			}
+			catch (JsonParseException e)
+			{
+				saved = null;
+			}
+		}
+		attackSpeeds.importState(saved);
+	}
+
+	/**
+	 * @return the combat style of the last attack, for the timer's colour, or null
+	 */
+	CombatStyle getTimerStyle()
+	{
+		return timerStyle;
 	}
 
 	/**
@@ -2045,7 +2141,8 @@ public class CombatXpTrackerPlugin extends Plugin
 			accountName = me.getName();
 		}
 		attackStyle = maxHitCalculator.readAttackStyle();
-		attackSpeedTicks = maxHitCalculator.attackSpeed(attackStyle);
+		attackKey = AttackSpeeds.key(maxHitCalculator.weaponId(), attackStyle == null ? null : attackStyle.getName());
+		attackSpeedTicks = attackSpeeds.speed(attackKey, maxHitCalculator.attackSpeed(attackStyle));
 		String task = maxHitCalculator.readSlayerTaskName();
 		int remaining = task == null ? 0 : client.getVarpValue(VarPlayerID.SLAYER_COUNT);
 		SlayerStatus status = maxHitCalculator.readSlayerStatus(task, remaining);
@@ -2260,6 +2357,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		loadSlayerLog();
 		loadSlayerExtras();
 		loadedProfile = configManager.getRSProfileKey();
+		upgradeSavedMonsters();
 		restoreMonster = null;
 		restoreOffered = loadedProfile != null
 			&& configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RESTORE_KEY) == null
@@ -2451,6 +2549,29 @@ public class CombatXpTrackerPlugin extends Plugin
 				configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RESTORE_KEY, "dismissed");
 			}
 		});
+	}
+
+	/**
+	 * Saves data from before 2.1.2 once it's been upgraded, so the upgrade (streaks starting
+	 * from 0, rates kept apart from restored kills) happens once rather than every login.
+	 */
+	private void upgradeSavedMonsters()
+	{
+		boolean upgraded = monsterTracker.takeUpgraded();
+		// Stats rebuilt by the one-time restore build made before 2.0.2 kept no record of what
+		// was restored: rates start again from now.
+		if (configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, LEGACY_RESTORE_KEY) != null
+			&& configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RATES_RESTARTED_KEY) == null)
+		{
+			monsterTracker.startRatesAgain();
+			configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, RATES_RESTARTED_KEY, "true");
+			upgraded = true;
+		}
+		if (upgraded)
+		{
+			savedMonsterRevision = -1;
+			saveMonsters();
+		}
 	}
 
 	/**
@@ -3937,6 +4058,63 @@ public class CombatXpTrackerPlugin extends Plugin
 	}
 
 	/**
+	 * 2.1.2 lowered the rare drop value's default from 1M to 150K. RuneLite saves defaults, so
+	 * players still on the old one are moved once; a value they picked themselves is kept.
+	 */
+	private void migrateRareDropValue()
+	{
+		if (configManager.getConfiguration(CombatXpTrackerConfig.GROUP, RARE_DROP_MIGRATED_KEY) != null)
+		{
+			return;
+		}
+		int saved = config.rareDropValue();
+		if (migratedRareDropValue(saved) != saved)
+		{
+			configManager.setConfiguration(CombatXpTrackerConfig.GROUP, "rareDropValue", migratedRareDropValue(saved));
+		}
+		configManager.setConfiguration(CombatXpTrackerConfig.GROUP, RARE_DROP_MIGRATED_KEY, true);
+	}
+
+	static int migratedRareDropValue(int saved)
+	{
+		return saved == OLD_RARE_DROP_DEFAULT ? CombatXpTrackerConfig.RARE_DROP_DEFAULT : saved;
+	}
+
+	/**
+	 * @return whether an item is one of a monster's collection log uniques
+	 */
+	private boolean isUnique(String monster, String item)
+	{
+		if (item == null)
+		{
+			return false;
+		}
+		BossUniques bundled = bossUniques;
+		if (bundled != null && bundled.isUnique(monster, item))
+		{
+			return true;
+		}
+		// A page opened in game also counts, for anything the bundled list doesn't have yet.
+		for (CollectionLog.Item i : collectionLog.items(monster))
+		{
+			if (item.equalsIgnoreCase(i.name))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @return whether the monster has collection log uniques to count kills since
+	 */
+	public boolean hasUniques(String monster)
+	{
+		BossUniques bundled = bossUniques;
+		return bundled != null && bundled.hasUniques(monster) || !collectionLog.items(monster).isEmpty();
+	}
+
+	/**
 	 * @return a boss's Combat Achievements, or an empty list
 	 */
 	public List<CombatAchievements.Task> getCombatAchievements(String monster)
@@ -4490,6 +4668,55 @@ public class CombatXpTrackerPlugin extends Plugin
 	public int getCurrentTaskKills()
 	{
 		return taskSession.isActive() ? taskSession.getKills() : 0;
+	}
+
+	/**
+	 * @return the current task's gold per hour, banking and walking included, or -1
+	 */
+	public double getTaskGpPerHour()
+	{
+		return taskSession.isActive() ? taskSession.getTripGpPerHour(config.lootPrice(), System.currentTimeMillis(), true) : -1;
+	}
+
+	/**
+	 * @return whether the player is away from the current task, so its gold per hour is falling
+	 */
+	public boolean isTaskAway()
+	{
+		return taskSession.isActive() && taskSession.isAway(System.currentTimeMillis(), true);
+	}
+
+	/**
+	 * @return the monster being done, for the overlay's gold per hour, or null
+	 */
+	public MonsterTracker.Snapshot getTripSnapshot()
+	{
+		return tripSnapshot;
+	}
+
+	private MonsterTracker.Snapshot currentTripSnapshot()
+	{
+		String name = monsterTracker.getCurrentTrip();
+		if (name == null)
+		{
+			return null;
+		}
+		for (MonsterTracker.Snapshot s : monsterTracker.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems())))
+		{
+			if (s.getName().equals(name))
+			{
+				return s;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * @return increases every 5 ticks while gold per hour is changing, for the panel to redraw
+	 */
+	public int getRateTick()
+	{
+		return rateTick;
 	}
 
 	public void removeTaskRecord(SlayerTaskRecord record)

@@ -959,7 +959,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
 			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision()
 			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision()
-			+ "|" + plugin.getCombatAchievementsRevision();
+			+ "|" + plugin.getCombatAchievementsRevision() + "|" + plugin.getRateTick();
 		if (key.equals(monsterViewKey))
 		{
 			return;

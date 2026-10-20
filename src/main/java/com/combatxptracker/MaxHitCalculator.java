@@ -949,6 +949,16 @@ public class MaxHitCalculator
 	}
 
 	/**
+	 * @return the wielded weapon's item id, or 0 unarmed
+	 */
+	public int weaponId()
+	{
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		Item weapon = worn == null ? null : worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
+		return weapon == null || weapon.getId() <= 0 ? 0 : weapon.getId();
+	}
+
+	/**
 	 * Ticks between attacks with the wielded weapon and the selected style.
 	 */
 	public int attackSpeed(CombatStyle.AttackStyle style)

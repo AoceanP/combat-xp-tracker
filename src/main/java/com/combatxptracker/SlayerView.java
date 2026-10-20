@@ -43,6 +43,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.SwingConstants;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
+import net.runelite.client.util.QuantityFormatter;
 
 /**
  * The Slayer tab: master, points and streak, what the next tasks are worth, superiors,
@@ -125,7 +126,7 @@ class SlayerView extends JPanel
 		int potions = plugin.getTaskPrayerPotions(status.getTask(), status.getRemaining());
 		String key = status + "|" + plugin.getSlayerLogRevision() + "|" + taskSuperiors + "|" + taskKills + "|" + price
 			+ "|" + guide + "|" + odds + "|" + sources + "|" + taskArea + "|" + plugin.getAreaRevision() + "|" + potions
-			+ "|" + plugin.getMasterOddsKey();
+			+ "|" + plugin.getMasterOddsKey() + "|" + plugin.getRateTick();
 		if (key.equals(viewKey))
 		{
 			return;
@@ -166,6 +167,14 @@ class SlayerView extends JPanel
 			taskRow.setComponentPopupMenu(findMenu(status.getTask()));
 			statusCard.add(taskRow);
 			statusCard.add(row("Left", left, Theme.SUCCESS, "Kills left out of the number assigned"));
+			double gpPerHour = plugin.getTaskGpPerHour();
+			if (gpPerHour > 0)
+			{
+				boolean away = plugin.isTaskAway();
+				statusCard.add(row("GP/hr", QuantityFormatter.quantityToStackSize(Math.round(gpPerHour)) + (away ? " (away)" : ""),
+					away ? Theme.MUTED : Theme.GOLD,
+					"Loot per hour of this task, banking and walking included. Updates every 5 ticks, and falls while you're away."));
+			}
 			if (status.getLocation() != null)
 			{
 				statusCard.add(row("Location", status.getLocation(), Theme.TEXT, "Konar's tasks must be done here"));

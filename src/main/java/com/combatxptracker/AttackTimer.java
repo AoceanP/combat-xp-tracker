@@ -52,6 +52,9 @@ final class AttackTimer
 	static final int IDLE_TICKS = 16;
 
 	private int lastAttackTick = -1;
+	// The speed of the weapon that made the last attack. Swapping weapons afterwards doesn't
+	// change the cooldown it started; the new weapon's speed counts from its first attack.
+	private int lastAttackSpeed = -1;
 
 	/**
 	 * @param weaponSpeed        the weapon's attack speed in ticks, or 0 when unarmed
@@ -90,9 +93,9 @@ final class AttackTimer
 	 */
 	boolean onAttackSignal(int tick, int speed)
 	{
-		if (lastAttackTick < 0 || tick - lastAttackTick >= speed - 1 || tick < lastAttackTick)
+		if (lastAttackTick < 0 || tick - lastAttackTick >= cooldown(speed) - 1 || tick < lastAttackTick)
 		{
-			lastAttackTick = tick;
+			attacked(tick, speed);
 			return true;
 		}
 		return false;
@@ -109,9 +112,9 @@ final class AttackTimer
 	 */
 	boolean onTick(int tick, boolean attacking, int speed)
 	{
-		if (attacking && (lastAttackTick < 0 || tick < lastAttackTick || tick - lastAttackTick >= speed))
+		if (attacking && (lastAttackTick < 0 || tick < lastAttackTick || tick - lastAttackTick >= cooldown(speed)))
 		{
-			lastAttackTick = tick;
+			attacked(tick, speed);
 			return true;
 		}
 		return false;
@@ -126,12 +129,45 @@ final class AttackTimer
 	 */
 	boolean onCertainAttack(int tick)
 	{
+		return onCertainAttack(tick, lastAttackSpeed);
+	}
+
+	/**
+	 * @param speed the speed of the weapon making this attack
+	 */
+	boolean onCertainAttack(int tick, int speed)
+	{
 		if (tick == lastAttackTick)
 		{
 			return false;
 		}
-		lastAttackTick = tick;
+		attacked(tick, speed);
 		return true;
+	}
+
+	private void attacked(int tick, int speed)
+	{
+		lastAttackTick = tick;
+		if (speed > 0)
+		{
+			lastAttackSpeed = speed;
+		}
+	}
+
+	/**
+	 * @return the cooldown the last attack started, or the current weapon's speed before any
+	 */
+	private int cooldown(int speed)
+	{
+		return lastAttackSpeed > 0 ? lastAttackSpeed : speed;
+	}
+
+	/**
+	 * @return the tick of the last attack counted, or -1
+	 */
+	int getLastAttackTick()
+	{
+		return lastAttackTick;
 	}
 
 	/**
@@ -143,11 +179,12 @@ final class AttackTimer
 		{
 			return -1;
 		}
-		return Math.max(0, speed - (tick - lastAttackTick));
+		return Math.max(0, cooldown(speed) - (tick - lastAttackTick));
 	}
 
 	void reset()
 	{
 		lastAttackTick = -1;
+		lastAttackSpeed = -1;
 	}
 }
