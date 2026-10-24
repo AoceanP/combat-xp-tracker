@@ -25,7 +25,6 @@
 package com.combatxptracker;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
@@ -39,7 +38,6 @@ import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
@@ -57,8 +55,6 @@ import javax.swing.ScrollPaneConstants;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
-import javax.swing.border.Border;
-import javax.swing.border.CompoundBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import net.runelite.api.Experience;
@@ -69,26 +65,23 @@ import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.IconTextField;
-import net.runelite.client.ui.components.materialtabs.MaterialTab;
-import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
-import net.runelite.client.util.Filepath;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.util.QuantityFormatter;
 
 /**
- * The sidebar:
+ * The sidebar (2.2):
  *
  * <pre>
- * Combat &amp; XP Tracker                 [Reset]
- * +-------------------------------------------+
- * | 18.3 Avg hit          |  45 Biggest hit   |
- * | 245 Hits              |  52 Melee max     |
- * | Aggressive, Piety, +132 str               |
- * | On task (Abyssal demons)             60   |
- * +-------------------------------------------+
- * [   Goals   ][  Monsters  ]
- * ...goal cards / monster cards...
+ * Combat &amp; XP Tracker                     [≡]
+ * +412K xp this session
+ * ( 69 Ranged max | 45 Biggest | 18.3 Avg | 245 Hits )
+ *   Aggressive, Piety, +132 str
+ *   On task (Abyssal demons)               60
+ * ( Goals )( Monsters )( Slayer )
+ * ...goal cards / monster cards / slayer cards...
  * </pre>
+ *
+ * The ≡ menu holds Copy, Wrapped, Export, Reset, Restore, Report a bug and Suggest a feature.
  *
  * Every method runs on the Swing thread. Data comes from the plugin's synchronized
  * trackers; nothing here touches the game client directly.
@@ -99,6 +92,11 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final CombatXpTrackerConfig config;
 	private final SkillIconManager skillIconManager;
 	private final ItemManager itemManager;
+
+	// Header: the session line under the title, which also confirms Copy for a moment.
+	private final JLabel sessionLine = Theme.label("", Theme.SUBTLE);
+	private long copiedUntil;
+	private String copiedText;
 
 	// Combat card
 	private final JLabel avgValue = tileValue();
@@ -113,7 +111,10 @@ class CombatXpTrackerPanel extends PluginPanel
 	// Goals tab
 	private final DragReorder.ListPanel goalsList = new DragReorder.ListPanel(new DynamicGridLayout(0, 1, 0, 0));
 	private final JPanel goalsEmpty;
-	private final JLabel sessionLabel = Theme.label("", Theme.MUTED);
+	// "Today" at the top of the Goals tab: goals, XP and levels gained this session.
+	private final JLabel goalCountValue = tileValue();
+	private final JLabel sessionXpValue = tileValue();
+	private final JLabel levelsValue = tileValue();
 	private final Map<Skill, GoalCard> goalCards = new EnumMap<>(Skill.class);
 	private List<Skill> shownGoals = new ArrayList<>();
 
@@ -134,15 +135,18 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final JLabel lootValue = tileValue();
 	private final JLabel monsterCountValue = tileValue();
 	private final Map<String, MonsterCard> monsterCards = new HashMap<>();
-	private final JComboBox<MonsterSort> sortBox = new JComboBox<>(MonsterSort.values());
+	// The sort order, as a small pill next to the search box that opens a menu.
+	private final JLabel sortPill = new UiKit.RoundLabel("", UiKit.BOX_RADIUS + 2);
 	private final JLabel hiddenLabel = Theme.label("", Theme.SUBTLE);
-	private final JLabel monstersCaption = Theme.label("Monsters", Theme.MUTED);
+	private final JLabel monstersCaption = UiKit.caption("monsters");
 	private final Map<MonsterRange, JLabel> rangeTabs = new EnumMap<>(MonsterRange.class);
 	private final IconTextField searchField = new IconTextField();
 	private final JLabel noMatchLabel = Theme.label("No monsters match your search", Theme.SUBTLE);
 	// Revision + sort + hidden list last shown, so the list is only rebuilt on changes.
 	private String monsterViewKey = "";
-	private boolean updatingSortBox;
+	// The main tabs, and where the selected tab's content goes.
+	private final List<JLabel> mainTabs = new ArrayList<>();
+	private final JPanel tabContent = new JPanel(new BorderLayout());
 
 	CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config,
 		SkillIconManager skillIconManager, ItemManager itemManager)
@@ -196,50 +200,44 @@ class CombatXpTrackerPanel extends PluginPanel
 		JPanel header = new JPanel(new BorderLayout(0, 6));
 		header.setOpaque(false);
 
-		JLabel title = Theme.boldLabel("Combat & XP Tracker", Theme.TEXT);
-		header.add(title, BorderLayout.NORTH);
+		JPanel titles = new JPanel(new GridLayout(2, 1, 0, 1));
+		titles.setOpaque(false);
+		titles.add(Theme.boldLabel("Combat & XP Tracker", Theme.TEXT));
+		titles.add(sessionLine);
+		header.add(titles, BorderLayout.NORTH);
 
-		// Grouped by what they do: sharing, export, your data, feedback.
-		JPanel buttons = new JPanel(new GridLayout(4, 1, 0, 4));
+		// Grouped by what they do: sharing, your data, feedback.
+		JPanel buttons = new JPanel(new GridLayout(3, 2, 4, 4));
 		buttons.setOpaque(false);
-		JLabel[] copy = new JLabel[1];
-		copy[0] = Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post",
-			() -> copySummary(copy[0]));
-		buttons.add(buttonRow(copy[0], Theme.flatButton("Wrapped",
-			"Gielinor Wrapped: your lifetime stats, to look back on or share", this::showWrapped)));
-		JLabel[] export = new JLabel[1];
-		export[0] = Theme.flatButton("Export", "Save your monsters, slayer task log or goals as a spreadsheet (CSV)",
-			() -> exportMenu().show(export[0], 0, export[0].getHeight()));
-		buttons.add(export[0]);
+		buttons.add(Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post", this::copySummary));
+		buttons.add(Theme.flatButton("Wrapped", "Gielinor Wrapped: your lifetime stats, to look back on or share",
+			this::showWrapped));
+		buttons.add(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.", this::confirmReset));
 		JLabel[] restore = new JLabel[1];
 		restore[0] = Theme.flatButton("Restore", "Bring back kills and drops from RuneLite's Loot Tracker",
 			() -> restoreMenu(restore[0]));
-		buttons.add(buttonRow(Theme.flatButton("Reset", "Clear damage, monsters and XP rates. Goals are kept.",
-			this::confirmReset), restore[0]));
-		buttons.add(buttonRow(
-			Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
-				() -> LinkBrowser.browse(ISSUES + "?labels=bug")),
-			Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
-				() -> LinkBrowser.browse(ISSUES + "?labels=enhancement"))));
+		buttons.add(restore[0]);
+		buttons.add(Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
+			() -> LinkBrowser.browse(ISSUES + "?labels=bug")));
+		buttons.add(Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
+			() -> LinkBrowser.browse(ISSUES + "?labels=enhancement")));
 		header.add(buttons, BorderLayout.CENTER);
 		return header;
 	}
 
 	private JPanel buildCombatCard()
 	{
-		JPanel tiles = new JPanel(new GridLayout(2, 2, 4, 4));
-		tiles.setOpaque(false);
-		tiles.add(tile(avgValue, Theme.label("Avg hit", Theme.MUTED)));
-		tiles.add(tile(biggestValue, Theme.label("Biggest hit", Theme.MUTED)));
-		tiles.add(tile(hitsValue, Theme.label("Hits", Theme.MUTED)));
-		tiles.add(tile(fourthValue, fourthCaption));
+		// One strip: your max hit first, in its style's colour, then the session's hits.
+		JPanel tiles = UiKit.stackedStrip(new JLabel[]{fourthValue, biggestValue, avgValue, hitsValue},
+			new JLabel[]{fourthCaption, UiKit.caption("Biggest"), UiKit.caption("Avg hit"), UiKit.caption("Hits")});
+		biggestValue.setToolTipText("Your biggest hit this session");
+		avgValue.setToolTipText("Your average hit this session, 0s included");
+		hitsValue.setToolTipText("Hits this session");
 
 		maxHitDetails.setOpaque(false);
 		levelDetails.setOpaque(false);
 
-		JPanel card = new JPanel(new BorderLayout(0, 6));
-		card.setBackground(Theme.CARD);
-		card.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
+		JPanel card = UiKit.card(new BorderLayout(0, 4));
 		card.add(tiles, BorderLayout.NORTH);
 		card.add(maxHitDetails, BorderLayout.CENTER);
 		card.add(levelDetails, BorderLayout.SOUTH);
@@ -248,60 +246,52 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private JPanel buildTabs()
 	{
-		JPanel display = new JPanel(new BorderLayout());
-		display.setOpaque(false);
-
-		MaterialTabGroup tabGroup = new MaterialTabGroup(display);
-		tabGroup.setLayout(new GridLayout(1, 3, 4, 0));
-		tabGroup.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
-		tabGroup.setOpaque(false);
-
-		MaterialTab goalsTab = narrowTab("Goals", tabGroup, buildGoalsView());
-		MaterialTab monstersTab = narrowTab("Monsters", tabGroup, buildMonstersView());
+		JPanel row = new JPanel(new GridLayout(1, 3, 4, 0));
+		row.setOpaque(false);
+		row.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
+		JPanel goals = buildGoalsView();
+		JPanel monsters = buildMonstersView();
 		slayerView = new SlayerView(plugin, config);
-		MaterialTab slayerTab = narrowTab("Slayer", tabGroup, slayerView);
-		tabGroup.addTab(goalsTab);
-		tabGroup.addTab(monstersTab);
-		tabGroup.addTab(slayerTab);
-
-		tabGroup.select(goalsTab);
+		String[] names = {"Goals", "Monsters", "Slayer"};
+		JComponent[] views = {goals, monsters, slayerView};
+		for (int i = 0; i < names.length; i++)
+		{
+			JComponent view = views[i];
+			JLabel tab = UiKit.tab(names[i], null, () -> showTab(view));
+			tab.putClientProperty(TAB_VIEW, view);
+			mainTabs.add(tab);
+			row.add(tab);
+		}
+		tabContent.setOpaque(false);
+		showTab(goals);
 
 		JPanel wrapper = new JPanel(new BorderLayout());
 		wrapper.setOpaque(false);
-		wrapper.add(tabGroup, BorderLayout.NORTH);
-		wrapper.add(display, BorderLayout.CENTER);
+		wrapper.add(row, BorderLayout.NORTH);
+		wrapper.add(tabContent, BorderLayout.CENTER);
 		return wrapper;
 	}
 
-	/**
-	 * A centred tab with less side padding than RuneLite's default, so three fit the
-	 * sidebar without "Monsters" being cut off. RuneLite sets the border again on every click.
-	 */
-	private static MaterialTab narrowTab(String name, MaterialTabGroup group, JComponent content)
-	{
-		MaterialTab tab = new MaterialTab(name, group, content)
-		{
-			@Override
-			public void setBorder(Border border)
-			{
-				boolean selected = border instanceof CompoundBorder;
-				Border padding = BorderFactory.createEmptyBorder(5, 2, selected ? 4 : 5, 2);
-				super.setBorder(selected
-					? new CompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.TAB_UNDERLINE), padding)
-					: padding);
-			}
+	private static final String TAB_VIEW = "cxt.tabView";
 
-			@Override
-			public void setForeground(Color colour)
-			{
-				// RuneLite paints tab text white (selected, hover) or grey; follow the theme so
-				// it stays readable on light themes.
-				super.setForeground(Color.GRAY.equals(colour) ? Theme.MUTED : Color.WHITE.equals(colour) ? Theme.TEXT : colour);
-			}
-		};
-		// Text tabs are left-aligned by default; centred looks even across the three.
-		tab.setHorizontalAlignment(SwingConstants.CENTER);
-		return tab;
+	/**
+	 * WHAT: Shows one tab's content and marks its tab as selected.
+	 * WHY: Only the open tab is laid out, so a long Slayer tab doesn't leave empty space under Goals.
+	 * PRE: view is one of the three tab views.
+	 * POST: The content area holds the view; the tabs are restyled.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void showTab(JComponent view)
+	{
+		tabContent.removeAll();
+		tabContent.add(view, BorderLayout.CENTER);
+		for (JLabel tab : mainTabs)
+		{
+			UiKit.select(tab, tab.getClientProperty(TAB_VIEW) == view);
+		}
+		tabContent.revalidate();
+		tabContent.repaint();
 	}
 
 	private JPanel buildGoalsView()
@@ -309,40 +299,47 @@ class CombatXpTrackerPanel extends PluginPanel
 		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
 		view.setOpaque(false);
 
+		// Today at a glance: how many goals, and what this session has brought.
+		JPanel today = UiKit.card(new BorderLayout());
+		today.setBorder(BorderFactory.createEmptyBorder(5, 4, 5, 4));
+		sessionXpValue.setForeground(Theme.SUCCESS);
+		today.add(UiKit.stackedStrip(new JLabel[]{goalCountValue, sessionXpValue, levelsValue},
+			new JLabel[]{UiKit.caption("Goals"), UiKit.caption("XP today"), UiKit.caption("Levels up")}), BorderLayout.CENTER);
+		today.setToolTipText("This session: since the client started or your last Reset");
+		view.add(today);
+
 		view.add(Theme.flatButton("+ Add goal", "Pick a skill and a level or XP target",
 			() -> promptGoalDialog(null)));
 
 		goalsList.setOpaque(false);
 		view.add(collapsible(goalsEmpty));
 		view.add(goalsList);
-
-		sessionLabel.setHorizontalAlignment(SwingConstants.CENTER);
-		view.add(sessionLabel);
 		return view;
 	}
 
 	private JPanel buildMonstersView()
 	{
-		JPanel summary = new JPanel(new GridLayout(1, 3, 4, 0));
-		summary.setOpaque(false);
-		summary.add(tile(killsValue, Theme.label("Kills", Theme.MUTED)));
-		summary.add(tile(lootValue, Theme.label("Loot", Theme.MUTED)));
-		summary.add(tile(monsterCountValue, monstersCaption));
+		JPanel summary = UiKit.strip(new JLabel[]{killsValue, lootValue, monsterCountValue},
+			new JLabel[]{UiKit.caption("kills"), UiKit.caption("loot"), monstersCaption});
 		lootValue.setForeground(Theme.GOLD);
 
-		sortBox.setFocusable(false);
-		sortBox.setToolTipText("Order of the monsters below");
-		sortBox.addActionListener(e ->
+		sortPill.setFont(FontManager.getRunescapeSmallFont());
+		sortPill.setForeground(Theme.TEXT);
+		sortPill.setBackground(Theme.CARD);
+		sortPill.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8));
+		sortPill.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		sortPill.setToolTipText("Order of the monsters below");
+		sortPill.addMouseListener(new MouseAdapter()
 		{
-			if (!updatingSortBox && sortBox.getSelectedItem() != null)
+			@Override
+			public void mouseReleased(MouseEvent e)
 			{
-				plugin.setMonsterSort((MonsterSort) sortBox.getSelectedItem());
+				if (sortPill.contains(e.getPoint()))
+				{
+					sortMenu().show(sortPill, 0, sortPill.getHeight());
+				}
 			}
 		});
-		JPanel sortRow = new JPanel(new BorderLayout(6, 0));
-		sortRow.setOpaque(false);
-		sortRow.add(Theme.label("Sort by", Theme.MUTED), BorderLayout.WEST);
-		sortRow.add(sortBox, BorderLayout.CENTER);
 
 		monstersList.setOpaque(false);
 
@@ -364,13 +361,15 @@ class CombatXpTrackerPanel extends PluginPanel
 		rangeRow.setOpaque(false);
 		for (MonsterRange range : MonsterRange.values())
 		{
-			JLabel tab = rangeTab(range);
+			JLabel tab = UiKit.tab(range.toString(), range == MonsterRange.SESSION
+				? "Since the client started or your last Reset"
+				: "Everything remembered for this account", () -> plugin.setMonsterRange(range));
 			rangeTabs.put(range, tab);
 			rangeRow.add(tab);
 		}
 
 		searchField.setIcon(IconTextField.Icon.SEARCH);
-		searchField.setPreferredSize(new Dimension(0, 28));
+		searchField.setPreferredSize(new Dimension(0, 26));
 		// Same look as the search boxes in RuneLite's own panels.
 		searchField.setBackground(Theme.CARD);
 		searchField.setHoverBackgroundColor(Theme.CARD_HOVER);
@@ -396,6 +395,10 @@ class CombatXpTrackerPanel extends PluginPanel
 			}
 		});
 		searchField.addClearListener(this::updateMonsters);
+		JPanel findRow = new JPanel(new BorderLayout(4, 0));
+		findRow.setOpaque(false);
+		findRow.add(searchField, BorderLayout.CENTER);
+		findRow.add(sortPill, BorderLayout.EAST);
 
 		targetCard.setVisible(false);
 		view.add(rangeRow);
@@ -404,8 +407,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		view.add(collapsible(targetCard));
 		view.add(collapsible(restoreCard));
 		view.add(summary);
-		view.add(searchField);
-		view.add(sortRow);
+		view.add(findRow);
 		view.add(collapsible(monstersEmpty));
 		noMatchLabel.setHorizontalAlignment(SwingConstants.CENTER);
 		noMatchLabel.setVisible(false);
@@ -421,22 +423,33 @@ class CombatXpTrackerPanel extends PluginPanel
 		return view;
 	}
 
+	/**
+	 * WHAT: The sort menu under the sort pill, with the current order ticked.
+	 * WHY: Replaces the old drop-down box, which took its own row.
+	 * PRE: Swing thread.
+	 * POST: Returns a new menu; picking an order saves it.
+	 * RETURN: the menu
+	 * THROWS: Nothing.
+	 */
+	private javax.swing.JPopupMenu sortMenu()
+	{
+		javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+		MonsterSort current = config.monsterSort();
+		for (MonsterSort sort : MonsterSort.values())
+		{
+			javax.swing.JRadioButtonMenuItem item = new javax.swing.JRadioButtonMenuItem(sort.toString(), sort == current);
+			item.addActionListener(e -> plugin.setMonsterSort(sort));
+			menu.add(item);
+		}
+		return menu;
+	}
+
 	private static JLabel tileValue()
 	{
 		JLabel value = new JLabel("-");
 		value.setFont(FontManager.getRunescapeBoldFont());
 		value.setForeground(Theme.TEXT);
 		return value;
-	}
-
-	private static JPanel tile(JLabel value, JLabel caption)
-	{
-		JPanel tile = new JPanel(new BorderLayout());
-		tile.setBackground(Theme.HEADER);
-		tile.setBorder(BorderFactory.createEmptyBorder(5, 7, 5, 7));
-		tile.add(value, BorderLayout.NORTH);
-		tile.add(caption, BorderLayout.SOUTH);
-		return tile;
 	}
 
 	/**
@@ -501,8 +514,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		label.setForeground(Theme.MUTED);
 		label.setHorizontalAlignment(SwingConstants.CENTER);
 
-		JPanel panel = new JPanel(new BorderLayout());
-		panel.setBackground(Theme.CARD);
+		JPanel panel = UiKit.card(new BorderLayout());
 		panel.setBorder(BorderFactory.createEmptyBorder(14, 10, 14, 10));
 		panel.add(label, BorderLayout.CENTER);
 		return panel;
@@ -520,15 +532,12 @@ class CombatXpTrackerPanel extends PluginPanel
 
 		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
 		buttons.setOpaque(false);
-		restoreButton = Theme.flatButton("Restore", "Rebuild your Monsters tab from the Loot Tracker", this::restoreClicked);
+		restoreButton = Theme.cardButton("Restore", "Rebuild your Monsters tab from the Loot Tracker", this::restoreClicked);
 		buttons.add(restoreButton);
-		buttons.add(Theme.flatButton("Dismiss", "Hide this for this account", () -> plugin.dismissRestore()));
+		buttons.add(Theme.cardButton("Dismiss", "Hide this for this account", () -> plugin.dismissRestore()));
 
-		JPanel card = new JPanel(new BorderLayout(0, 8));
-		card.setBackground(Theme.CARD);
-		card.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 2, 0, 0, Theme.GOLD),
-			BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+		UiKit.RoundPanel card = UiKit.card(new BorderLayout(0, 8)).outline(Theme.GOLD);
+		card.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 		card.add(text, BorderLayout.CENTER);
 		card.add(buttons, BorderLayout.SOUTH);
 		card.setVisible(false);
@@ -562,14 +571,6 @@ class CombatXpTrackerPanel extends PluginPanel
 		restoreText.setText("<html><div style='width:150px'><b>" + title + "</b><br>" + body + "</div></html>");
 	}
 
-	private static JPanel buttonRow(JLabel left, JLabel right)
-	{
-		JPanel row = new JPanel(new GridLayout(1, 2, 4, 0));
-		row.setOpaque(false);
-		row.add(left);
-		row.add(right);
-		return row;
-	}
 
 	/**
 	 * A monster removed by accident is restored straight away; otherwise all monsters, or the
@@ -828,9 +829,12 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private static JPanel detailRow(String label, String value, boolean highlight, String tooltip)
 	{
-		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.setBackground(highlight ? Theme.highlight(Theme.SUCCESS, 0.72f) : Theme.HEADER);
-		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
+		// Plain rows; a highlighted one (e.g. your target is on task) gets a soft green box.
+		JPanel row = highlight
+			? new UiKit.RoundPanel(new BorderLayout(6, 0), Theme.highlight(Theme.SUCCESS, 0.72f), UiKit.BOX_RADIUS)
+			: new JPanel(new BorderLayout(6, 0));
+		row.setOpaque(false);
+		row.setBorder(BorderFactory.createEmptyBorder(2, highlight ? 6 : 2, 2, highlight ? 6 : 2));
 		row.setToolTipText(tooltip);
 		row.add(Theme.label(label, highlight ? Theme.SUCCESS : Theme.MUTED), BorderLayout.CENTER);
 		row.add(Theme.boldLabel(value, highlight ? Theme.SUCCESS : Theme.TEXT), BorderLayout.EAST);
@@ -885,7 +889,54 @@ class CombatXpTrackerPanel extends PluginPanel
 
 		goalsEmpty.setVisible(active.isEmpty());
 		int session = totalSessionXp();
-		sessionLabel.setText(session > 0 ? "+" + Formatting.withCommas(session) + " xp this session" : "");
+		goalCountValue.setText(String.valueOf(active.size()));
+		sessionXpValue.setText(session > 0 ? "+" + Formatting.compactXp(session) : "0");
+		sessionXpValue.setToolTipText(Formatting.withCommas(session) + " xp this session");
+		levelsValue.setText(String.valueOf(levelsGained()));
+		updateSessionLine(session);
+	}
+
+	/**
+	 * WHAT: Levels gained this session, across every skill.
+	 * WHY: Shown in the Goals tab's Today card.
+	 * PRE: Swing thread.
+	 * POST: Nothing changes.
+	 * RETURN: the number of levels gained since the session started
+	 * THROWS: Nothing.
+	 */
+	private int levelsGained()
+	{
+		int levels = 0;
+		for (SkillProgress progress : plugin.getSkillProgress().values())
+		{
+			int gained = progress.getSessionXpGained();
+			if (gained > 0 && progress.isXpKnown())
+			{
+				int now = progress.getCurrentXp();
+				levels += Math.max(0, Experience.getLevelForXp(now) - Experience.getLevelForXp(Math.max(0, now - gained)));
+			}
+		}
+		return levels;
+	}
+
+	/**
+	 * WHAT: The line under the title: this session's XP, or "Copied!" for a moment after Copy.
+	 * WHY: Copy lives in the menu now, so the confirmation shows here instead of on a button.
+	 * PRE: Swing thread.
+	 * POST: The session line is updated.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updateSessionLine(int session)
+	{
+		if (System.currentTimeMillis() < copiedUntil)
+		{
+			sessionLine.setText(copiedText);
+			sessionLine.setForeground(Theme.SUCCESS);
+			return;
+		}
+		sessionLine.setForeground(Theme.SUBTLE);
+		sessionLine.setText(session > 0 ? "+" + Formatting.withCommas(session) + " xp this session" : "No XP yet this session");
 	}
 
 	private GoalCard newGoalCard(Skill skill)
@@ -960,6 +1011,11 @@ class CombatXpTrackerPanel extends PluginPanel
 			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision()
 			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision()
 			+ "|" + plugin.getCombatAchievementsRevision() + "|" + plugin.getRateTick();
+		// The card you're fighting gets a green outline; the session tracker gives "+12 today".
+		TargetInfo target = plugin.getTargetInfo();
+		String fightingName = target == null ? null : BossGroups.trackedName(target.getName());
+		MonsterTracker session = plugin.getMonsterTracker(MonsterRange.SESSION);
+		key += "|" + fightingName + "|" + session.getRevision();
 		if (key.equals(monsterViewKey))
 		{
 			return;
@@ -968,15 +1024,10 @@ class CombatXpTrackerPanel extends PluginPanel
 
 		for (Map.Entry<MonsterRange, JLabel> tab : rangeTabs.entrySet())
 		{
-			styleRangeTab(tab.getValue(), tab.getKey() == range);
+			UiKit.select(tab.getValue(), tab.getKey() == range);
 		}
 
-		if (sortBox.getSelectedItem() != sort)
-		{
-			updatingSortBox = true;
-			sortBox.setSelectedItem(sort);
-			updatingSortBox = false;
-		}
+		sortPill.setText(sort + "  ▾");
 
 		long rareValue = config.rareDropValue();
 		java.util.Set<String> pinned = MonsterTracker.parseNames(config.pinnedMonsters());
@@ -1010,6 +1061,8 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.updateFightExtras(plugin.getDamageTaken(s.getName(), range), plugin.getIdleTicks(s.getName(), range));
 			card.updateBoss(plugin.getBossTimes(s.getName()), plugin.getDryItems(s.getName()),
 				plugin.getCombatAchievements(s.getName()));
+			MonsterTracker.Snapshot today = range == MonsterRange.SESSION ? null : session.snapshotOf(s.getName());
+			card.setStatus(s.getName().equals(fightingName), today == null ? 0 : today.getKills(), range != MonsterRange.SESSION);
 			keep.put(s.getName(), card);
 			monstersList.add(card);
 			kills += s.getKills();
@@ -1045,7 +1098,7 @@ class CombatXpTrackerPanel extends PluginPanel
 	 * Puts a text summary of the session on the clipboard and briefly confirms it on
 	 * the button.
 	 */
-	private void copySummary(JLabel button)
+	private void copySummary()
 	{
 		// The summary is about this session, whichever range the tab is showing.
 		MonsterTracker tracker = plugin.getMonsterTracker(MonsterRange.SESSION);
@@ -1058,14 +1111,16 @@ class CombatXpTrackerPanel extends PluginPanel
 		try
 		{
 			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
-			button.setText("Copied!");
+			copiedText = "Copied to the clipboard";
 		}
 		catch (IllegalStateException e)
 		{
 			// Another program is holding the clipboard.
-			button.setText("Try again");
+			copiedText = "Clipboard busy, try again";
 		}
-		Timer restore = new Timer(1500, e -> button.setText("Copy"));
+		copiedUntil = System.currentTimeMillis() + 2000;
+		updateSessionLine(totalSessionXp());
+		Timer restore = new Timer(2100, e -> updateSessionLine(totalSessionXp()));
 		restore.setRepeats(false);
 		restore.start();
 	}
@@ -1082,67 +1137,6 @@ class CombatXpTrackerPanel extends PluginPanel
 	{
 		WrappedStats stats = WrappedStats.of(allTimeMonsters(), plugin.getSlayerTasks(), config.lootPrice());
 		WrappedDialog.show(this, stats, plugin.getAccountName());
-	}
-
-	private javax.swing.JPopupMenu exportMenu()
-	{
-		javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
-		menu.add(exportItems("Monsters (all time)", "monsters", () -> CsvExport.monsters(MonsterTracker.view(allTimeMonsters(),
-			config.monsterSort(), java.util.Collections.emptySet()))));
-		menu.add(exportItems("Slayer task log", "slayer-tasks", () -> CsvExport.tasks(plugin.getSlayerTasks(), config.lootPrice(),
-			java.time.ZoneId.systemDefault())));
-		menu.add(exportItems("Goals", "goals", () -> CsvExport.goals(plugin.getSkillProgress(), config.xpRateMode())));
-		return menu;
-	}
-
-	private javax.swing.JMenu exportItems(String title, String fileName, java.util.function.Supplier<String> csv)
-	{
-		javax.swing.JMenu sub = new javax.swing.JMenu(title);
-		javax.swing.JMenuItem save = new javax.swing.JMenuItem("Save as CSV file...");
-		save.addActionListener(e -> saveCsv(fileName, csv.get()));
-		javax.swing.JMenuItem copy = new javax.swing.JMenuItem("Copy as CSV");
-		copy.setToolTipText("Paste straight into Excel or Google Sheets");
-		copy.addActionListener(e ->
-		{
-			try
-			{
-				Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(csv.get()), null);
-			}
-			catch (IllegalStateException ex)
-			{
-				JOptionPane.showMessageDialog(this, "The clipboard is busy. Try again.", "Export", JOptionPane.WARNING_MESSAGE);
-			}
-		});
-		sub.add(save);
-		sub.add(copy);
-		return sub;
-	}
-
-	private void saveCsv(String fileName, String csv)
-	{
-		// RuneLite's Filepath API, as plugin hub plugins should use for file i/o.
-		List<Filepath> chosen = new Filepath.Chooser()
-			.setIsSave()
-			.setAcceptsFiles()
-			.setDialogTitle("Save as spreadsheet")
-			.addExtensionFilter("CSV spreadsheet", "csv")
-			.setDefaultExtension("csv")
-			.setFileName("combat-xp-tracker-" + fileName + ".csv")
-			.showDialog(this);
-		if (chosen == null || chosen.isEmpty())
-		{
-			return;
-		}
-		try
-		{
-			// The byte order mark tells Excel the file is UTF-8.
-			chosen.get(0).write("\uFEFF" + csv);
-		}
-		catch (IOException ex)
-		{
-			JOptionPane.showMessageDialog(this, "Couldn't save the file:\n" + ex.getMessage(), "Export",
-				JOptionPane.ERROR_MESSAGE);
-		}
 	}
 
 	// ---- Dialogs ----------------------------------------------------------------
@@ -1166,33 +1160,6 @@ class CombatXpTrackerPanel extends PluginPanel
 		}
 	}
 
-	private JLabel rangeTab(MonsterRange range)
-	{
-		JLabel tab = new JLabel(range.toString(), SwingConstants.CENTER);
-		tab.setFont(FontManager.getRunescapeSmallFont());
-		tab.setOpaque(true);
-		tab.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		tab.setBorder(BorderFactory.createEmptyBorder(5, 6, 5, 6));
-		tab.setToolTipText(range == MonsterRange.SESSION
-			? "Since the client started or your last Reset"
-			: "Everything remembered for this account");
-		tab.addMouseListener(new MouseAdapter()
-		{
-			@Override
-			public void mouseClicked(MouseEvent e)
-			{
-				plugin.setMonsterRange(range);
-			}
-		});
-		styleRangeTab(tab, false);
-		return tab;
-	}
-
-	private void styleRangeTab(JLabel tab, boolean selected)
-	{
-		tab.setBackground(selected ? Theme.highlight(Theme.accent(config.goalBarColor()), 0.55f) : Theme.CARD);
-		tab.setForeground(selected ? Theme.TEXT : Theme.MUTED);
-	}
 
 	/**
 	 * Whether a card belongs to the current slayer task: by its own name, or for boss

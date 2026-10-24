@@ -30,7 +30,6 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
-import javax.swing.SwingConstants;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 
@@ -165,18 +164,34 @@ final class Theme
 	 * A flat, hover-highlighted button. Swing's JButton picks up the client's look and
 	 * feel inconsistently, so this is a clickable label instead.
 	 */
+	/**
+	 * WHAT: A flat button for use inside a card, drawn a shade darker so it shows on the card.
+	 * WHY: A card-coloured button on a card would be invisible.
+	 * PRE: Same as flatButton.
+	 * POST: Returns a new button.
+	 * RETURN: the button
+	 * THROWS: Nothing.
+	 */
+	static JLabel cardButton(String text, String tooltip, Runnable onClick)
+	{
+		JLabel button = flatButton(text, tooltip, onClick);
+		button.putClientProperty(BASE_COLOUR, SLOT);
+		button.setBackground(SLOT);
+		return button;
+	}
+
+	private static final String BASE_COLOUR = "cxt.baseColour";
+
 	static JLabel flatButton(String text, String tooltip, Runnable onClick)
 	{
-		JLabel button = new JLabel(text, SwingConstants.CENTER);
+		// Rounded, like the rest of the 2.2 panel.
+		JLabel button = new UiKit.RoundLabel(text, UiKit.BOX_RADIUS);
 		button.setFont(FontManager.getRunescapeSmallFont());
 		button.setForeground(TEXT);
-		button.setOpaque(true);
 		button.setBackground(CARD);
 		button.setToolTipText(tooltip);
 		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		button.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createLineBorder(BORDER),
-			BorderFactory.createEmptyBorder(5, 8, 5, 8)));
+		button.setBorder(BorderFactory.createEmptyBorder(5, 8, 5, 8));
 		button.addMouseListener(new MouseAdapter()
 		{
 			@Override
@@ -188,7 +203,8 @@ final class Theme
 			@Override
 			public void mouseExited(MouseEvent e)
 			{
-				button.setBackground(CARD);
+				Object base = button.getClientProperty(BASE_COLOUR);
+				button.setBackground(base instanceof Color ? (Color) base : CARD);
 			}
 
 			@Override

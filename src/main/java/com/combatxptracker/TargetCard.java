@@ -30,7 +30,6 @@ import java.awt.Dimension;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.GridLayout;
 import java.awt.RenderingHints;
 import javax.swing.BorderFactory;
 import javax.swing.JComponent;
@@ -56,27 +55,20 @@ final class TargetCard extends JPanel
 	TargetCard()
 	{
 		super(new BorderLayout(0, 5));
-		setBackground(Theme.CARD);
-		setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 3, 0, 0, Theme.ACCENT),
-			BorderFactory.createEmptyBorder(6, 7, 7, 8)));
+		// Painted as a rounded card with a green outline (see paintComponent).
+		setOpaque(false);
+		setBorder(BorderFactory.createEmptyBorder(6, 8, 8, 8));
 
 		JPanel title = new JPanel(new BorderLayout(6, 0));
 		title.setOpaque(false);
 		title.add(nameLabel, BorderLayout.CENTER);
-		title.add(Theme.label("Fighting now", Theme.SUBTLE), BorderLayout.EAST);
+		title.add(Theme.label("● fighting", Theme.SUCCESS), BorderLayout.EAST);
 
-		JPanel tiles = new JPanel(new GridLayout(1, 3, 3, 0));
-		tiles.setOpaque(false);
-		JPanel hitsTile = MonsterCard.tile(hitsLeftValue, "Hits left");
-		hitsTile.setToolTipText("Hits to finish it at your average hit on it this session, 0s included");
-		JPanel killTile = MonsterCard.tile(perKillValue, "Per kill");
-		killTile.setToolTipText("Your average time per kill on it this session, including time between kills");
-		JPanel dpsTile = MonsterCard.tile(dpsValue, "DPS");
-		dpsTile.setToolTipText("Your damage per second while fighting it this session");
-		tiles.add(hitsTile);
-		tiles.add(killTile);
-		tiles.add(dpsTile);
+		hitsLeftValue.setToolTipText("Hits to finish it at your average hit on it this session, 0s included");
+		perKillValue.setToolTipText("Your average time per kill on it this session, including time between kills");
+		dpsValue.setToolTipText("Your damage per second while fighting it this session");
+		JPanel tiles = UiKit.stackedStrip(new JLabel[]{hitsLeftValue, perKillValue, dpsValue},
+			new JLabel[]{UiKit.caption("Hits left"), UiKit.caption("Per kill"), UiKit.caption("DPS")});
 
 		JPanel top = new JPanel(new BorderLayout(0, 4));
 		top.setOpaque(false);
@@ -127,6 +119,20 @@ final class TargetCard extends JPanel
 		rows.refresh();
 	}
 
+	@Override
+	protected void paintComponent(Graphics g)
+	{
+		Graphics2D g2 = (Graphics2D) g.create();
+		g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g2.setColor(Theme.CARD);
+		g2.fill(new java.awt.geom.RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), UiKit.CARD_RADIUS, UiKit.CARD_RADIUS));
+		g2.setStroke(new java.awt.BasicStroke(1.5f));
+		g2.setColor(Theme.SUCCESS);
+		g2.draw(new java.awt.geom.RoundRectangle2D.Float(0.75f, 0.75f, getWidth() - 1.5f, getHeight() - 1.5f,
+			UiKit.CARD_RADIUS, UiKit.CARD_RADIUS));
+		g2.dispose();
+	}
+
 	/**
 	 * A thin health bar with the hitpoints written on it.
 	 */
@@ -156,17 +162,16 @@ final class TargetCard extends JPanel
 		{
 			Graphics2D g2 = (Graphics2D) g.create();
 			g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+			g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 			int w = getWidth();
 			int h = getHeight();
 			g2.setColor(Theme.TRACK);
-			g2.fillRect(0, 0, w, h);
-			if (share >= 0)
+			g2.fill(new java.awt.geom.RoundRectangle2D.Float(0, 0, w, h, h, h));
+			if (share > 0)
 			{
 				g2.setColor(share <= 0.25 ? LOW : HEALTHY);
-				g2.fillRect(0, 0, (int) Math.round(w * share), h);
+				g2.fill(new java.awt.geom.RoundRectangle2D.Float(0, 0, Math.max(h, (float) (w * share)), h, h, h));
 			}
-			g2.setColor(Theme.BORDER);
-			g2.drawRect(0, 0, w - 1, h - 1);
 			FontMetrics fm = g2.getFontMetrics();
 			int x = (w - fm.stringWidth(text)) / 2;
 			int y = (h - fm.getHeight()) / 2 + fm.getAscent();

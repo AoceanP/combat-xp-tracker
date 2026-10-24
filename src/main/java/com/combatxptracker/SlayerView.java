@@ -26,6 +26,7 @@ package com.combatxptracker;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.GridLayout;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -46,8 +47,9 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.util.QuantityFormatter;
 
 /**
- * The Slayer tab: master, points and streak, what the next tasks are worth, superiors,
- * and the log of finished tasks. Swing thread only.
+ * The Slayer tab: your task, the task guide, points, what the next tasks are likely to be,
+ * who gives a task, superiors, your best and worst tasks, and the log of finished tasks.
+ * 2.2 draws them as rounded cards with bars, tags and strips. Swing thread only.
  */
 class SlayerView extends JPanel
 {
@@ -59,23 +61,28 @@ class SlayerView extends JPanel
 	// Tasks below this chance aren't worth suggesting as a block.
 	private static final double BLOCK_ADVICE_MIN_CHANCE = 0.03;
 	private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("MMM d", Locale.US);
+	private static final Color BAR_GREY = new Color(130, 130, 130);
 
 	private final CombatXpTrackerPlugin plugin;
 	private final CombatXpTrackerConfig config;
 
-	private final JPanel statusCard = card();
-	private final JPanel guideCard = card();
-	private final JPanel oddsCard = card();
-	private final JPanel sourcesCard = card();
-	private final JPanel rankCard = card();
-	private final JPanel pointsCard = card();
-	private final JPanel superiorCard = card();
+	private final UiKit.RoundPanel statusCard = card();
+	private final UiKit.RoundPanel guideCard = card();
+	private final UiKit.RoundPanel oddsCard = card();
+	private final UiKit.RoundPanel sourcesCard = card();
+	private final UiKit.RoundPanel rankCard = card();
+	private final UiKit.RoundPanel pointsCard = card();
+	private final UiKit.RoundPanel superiorCard = card();
+	private final UiKit.RoundPanel logCard = card();
 	private final JLabel logTitle = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel logTotals = Theme.label("", Theme.SUBTLE);
-	private final JPanel logList = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+	private final JPanel logList = new JPanel(new DynamicGridLayout(0, 1, 0, 4));
 	private final JLabel emptyLog = new JLabel();
 	private final JLabel clearLog;
 	private String viewKey;
+	// Which list "Your tasks" shows: 0 fastest XP, 1 most GP, 2 slowest.
+	private int rankTab;
+	private List<TaskStats> lastHistory = new ArrayList<>();
 
 	SlayerView(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config)
 	{
@@ -92,13 +99,16 @@ class SlayerView extends JPanel
 		emptyLog.setHorizontalAlignment(SwingConstants.CENTER);
 		emptyLog.setBorder(BorderFactory.createEmptyBorder(10, 0, 10, 0));
 
-		clearLog = Theme.flatButton("Clear task log", "Delete every task in the log for this account", this::confirmClear);
+		clearLog = Theme.cardButton("Clear task log", "Delete every task in the log for this account", this::confirmClear);
 
-		JPanel logHeader = new JPanel(new BorderLayout(0, 2));
+		JPanel logHeader = new JPanel(new BorderLayout(0, 1));
 		logHeader.setOpaque(false);
-		logHeader.setBorder(BorderFactory.createEmptyBorder(4, 2, 0, 2));
 		logHeader.add(logTitle, BorderLayout.NORTH);
 		logHeader.add(logTotals, BorderLayout.SOUTH);
+		logCard.add(logHeader);
+		logCard.add(holder(emptyLog));
+		logCard.add(logList);
+		logCard.add(holder(clearLog));
 
 		add(statusCard);
 		add(holder(guideCard));
@@ -107,10 +117,7 @@ class SlayerView extends JPanel
 		add(holder(sourcesCard));
 		add(superiorCard);
 		add(holder(rankCard));
-		add(logHeader);
-		add(holder(emptyLog));
-		add(logList);
-		add(holder(clearLog));
+		add(logCard);
 	}
 
 	void update()
@@ -126,7 +133,7 @@ class SlayerView extends JPanel
 		int potions = plugin.getTaskPrayerPotions(status.getTask(), status.getRemaining());
 		String key = status + "|" + plugin.getSlayerLogRevision() + "|" + taskSuperiors + "|" + taskKills + "|" + price
 			+ "|" + guide + "|" + odds + "|" + sources + "|" + taskArea + "|" + plugin.getAreaRevision() + "|" + potions
-			+ "|" + plugin.getMasterOddsKey() + "|" + plugin.getRateTick();
+			+ "|" + plugin.getMasterOddsKey() + "|" + plugin.getRateTick() + "|" + rankTab;
 		if (key.equals(viewKey))
 		{
 			return;
@@ -135,10 +142,11 @@ class SlayerView extends JPanel
 
 		List<SlayerTaskRecord> tasks = plugin.getSlayerTasks();
 		List<TaskStats> history = TaskStats.group(tasks, price);
-		updateStatus(status);
-		updateGuide(guide, tasks, price, taskArea, potions, status.getRemaining());
+		TaskForecast forecast = plugin.getTaskRunForecast();
+		updateStatus(status, forecast, taskSuperiors);
+		updateGuide(guide, tasks, price, taskArea, potions, status.getRemaining(), forecast);
 		updatePoints(status);
-		updateOdds(odds, history, status.getMaster());
+		updateOdds(odds, history, status.getMaster(), status.getTask());
 		updateSources(sources);
 		updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null);
 		updateRanking(history);
@@ -149,40 +157,88 @@ class SlayerView extends JPanel
 
 	// ---- Sections ----------------------------------------------------------------------
 
-	private void updateStatus(SlayerStatus status)
+	/**
+	 * WHAT: The task card: the task, master and streak, a bar of kills done, and GP/hr, points
+	 * and superiors. With no task: master, points and streak.
+	 * WHY: The most-checked facts sit at the top, readable at a glance.
+	 * PRE: Swing thread.
+	 * POST: The card is rebuilt.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updateStatus(SlayerStatus status, TaskForecast forecast, int taskSuperiors)
 	{
 		statusCard.removeAll();
-		statusCard.add(title("Slayer"));
 		SlayerPoints.Master master = status.getMaster();
-		statusCard.add(row("Master", master == null ? "-" : master.getDisplayName(), Theme.TEXT, null));
-		statusCard.add(row("Points", status.getPoints() < 0 ? "-" : Formatting.withCommas(status.getPoints()), Theme.GOLD, null));
-		statusCard.add(row("Streak", status.getStreak() < 0 ? "-" : Formatting.withCommas(status.getStreak())
-			+ (status.getStreak() == 1 ? " task" : " tasks"), Theme.TEXT,
-			"Tasks completed in a row. Krystilia and Mortimer keep their own streaks."));
-		if (status.getTask() != null)
+		String streakText = status.getStreak() < 0 ? "-" : Formatting.withCommas(status.getStreak())
+			+ (status.getStreak() == 1 ? " task" : " tasks");
+		String pointsText = status.getPoints() < 0 ? "-" : Formatting.withCommas(status.getPoints());
+		if (status.getTask() == null)
 		{
-			String left = Formatting.withCommas(status.getRemaining())
-				+ (status.getAssigned() > 0 ? " / " + Formatting.withCommas(status.getAssigned()) : "");
-			JPanel taskRow = row("Task", status.getTask(), Theme.SUCCESS, "Your current task. Right-click to see where else to get it.");
-			taskRow.setComponentPopupMenu(findMenu(status.getTask()));
-			statusCard.add(taskRow);
-			statusCard.add(row("Left", left, Theme.SUCCESS, "Kills left out of the number assigned"));
-			double gpPerHour = plugin.getTaskGpPerHour();
-			if (gpPerHour > 0)
-			{
-				boolean away = plugin.isTaskAway();
-				statusCard.add(row("GP/hr", QuantityFormatter.quantityToStackSize(Math.round(gpPerHour)) + (away ? " (away)" : ""),
-					away ? Theme.MUTED : Theme.GOLD,
-					"Loot per hour of this task, banking and walking included. Updates every 5 ticks, and falls while you're away."));
-			}
-			if (status.getLocation() != null)
-			{
-				statusCard.add(row("Location", status.getLocation(), Theme.TEXT, "Konar's tasks must be done here"));
-			}
-		}
-		else
-		{
+			statusCard.outline(null);
+			statusCard.add(title("Slayer"));
+			statusCard.add(row("Master", master == null ? "-" : master.getDisplayName(), Theme.TEXT, null));
+			statusCard.add(row("Points", pointsText, Theme.GOLD, null));
+			statusCard.add(row("Streak", streakText, Theme.TEXT,
+				"Tasks completed in a row. Krystilia and Mortimer keep their own streaks."));
 			statusCard.add(row("Task", "None", Theme.MUTED, null));
+			return;
+		}
+
+		statusCard.outline(Theme.SUCCESS);
+		JPanel head = new JPanel(new BorderLayout(6, 0));
+		head.setOpaque(false);
+		head.add(Theme.boldLabel(status.getTask(), Theme.TEXT), BorderLayout.CENTER);
+		head.add(Theme.label("● on task", Theme.SUCCESS), BorderLayout.EAST);
+		head.setToolTipText("Your current task. Right-click to see where else to get it.");
+		head.setComponentPopupMenu(findMenu(status.getTask()));
+		statusCard.add(head);
+		statusCard.add(row("Master", (master == null ? "-" : master.getDisplayName()) + "  ·  streak " + streakText,
+			Theme.MUTED, "Tasks completed in a row. Krystilia and Mortimer keep their own streaks."));
+
+		// Kills done out of the number assigned, with the time left from your own pace.
+		int remaining = status.getRemaining();
+		int assigned = status.getAssigned();
+		JPanel progress = new JPanel(new BorderLayout(0, 2));
+		progress.setOpaque(false);
+		JPanel progressText = new JPanel(new BorderLayout(6, 0));
+		progressText.setOpaque(false);
+		JLabel left = Theme.label(Formatting.withCommas(remaining) + (assigned > 0 ? " of " + Formatting.withCommas(assigned) : "")
+			+ " left", Theme.TEXT);
+		left.setToolTipText("Kills left out of the number assigned");
+		progressText.add(left, BorderLayout.WEST);
+		if (forecast != null && forecast.getMillis() > 0)
+		{
+			JLabel eta = Theme.label("~" + Formatting.duration(forecast.getMillis() / 3_600_000.0) + " to go", Theme.SUCCESS);
+			eta.setHorizontalAlignment(SwingConstants.RIGHT);
+			eta.setToolTipText("At your own pace on this task, from your task log");
+			progressText.add(eta, BorderLayout.CENTER);
+		}
+		progress.add(progressText, BorderLayout.NORTH);
+		if (assigned > 0)
+		{
+			progress.add(UiKit.bar((assigned - remaining) / (double) assigned, Theme.SUCCESS, 6), BorderLayout.CENTER);
+		}
+		statusCard.add(progress);
+
+		double gpPerHour = plugin.getTaskGpPerHour();
+		boolean away = plugin.isTaskAway();
+		JLabel gp = UiKit.value();
+		gp.setText(gpPerHour > 0 ? QuantityFormatter.quantityToStackSize(Math.round(gpPerHour)) : "-");
+		gp.setForeground(away ? Theme.MUTED : Theme.GOLD);
+		gp.setToolTipText("Loot per hour of this task, banking and walking included. Updates every 5 ticks, and falls while you're away.");
+		JLabel pts = UiKit.value();
+		pts.setText(pointsText);
+		pts.setForeground(Theme.GOLD);
+		JLabel sup = UiKit.value();
+		sup.setText(String.valueOf(taskSuperiors));
+		sup.setForeground(taskSuperiors > 0 ? Theme.GOLD : Theme.TEXT);
+		sup.setToolTipText("Superiors that appeared during this task");
+		statusCard.add(UiKit.stackedStrip(new JLabel[]{gp, pts, sup},
+			new JLabel[]{UiKit.caption(away ? "GP/hr (away)" : "GP/hr"), UiKit.caption("Points"), UiKit.caption("Superiors")}));
+		if (status.getLocation() != null)
+		{
+			statusCard.add(row("Location", status.getLocation(), Theme.TEXT, "Konar's tasks must be done here"));
 		}
 	}
 
@@ -190,10 +246,9 @@ class SlayerView extends JPanel
 	 * Where the task can be done and what to bring.
 	 */
 	private void updateGuide(SlayerGuide guide, List<SlayerTaskRecord> tasks, LootPrice price, String taskArea,
-		int potions, int killsLeft)
+		int potions, int killsLeft, TaskForecast forecast)
 	{
 		guideCard.removeAll();
-		TaskForecast forecast = plugin.getTaskRunForecast();
 		TaskForecast.Cannon cannon = plugin.getTaskCannon();
 		if (guide.getTask() == null || (guide.getAreas().isEmpty() && guide.getNeeds().isEmpty() && potions < 0
 			&& forecast == null && cannon == null))
@@ -206,7 +261,7 @@ class SlayerView extends JPanel
 
 		if (!guide.getAreas().isEmpty())
 		{
-			guideCard.add(Theme.label("Where to go", Theme.MUTED));
+			guideCard.add(UiKit.sectionHeader("Where to go", null));
 			Map<String, TaskStats> rates = TaskStats.byArea(tasks, guide.getTask(), price);
 			List<SlayerGuide.Area> areas = sortAreas(guide.getAreas(), rates);
 			TaskStats best = bestArea(rates);
@@ -224,27 +279,21 @@ class SlayerView extends JPanel
 			}
 		}
 
-		if (!guide.getNeeds().isEmpty())
+		if (!guide.getNeeds().isEmpty() || potions >= 0)
 		{
 			int inBank = guide.inBankCount();
 			int missing = guide.missingCount() - inBank;
-			String heading = "Bring";
-			if (missing > 0 || inBank > 0)
+			List<String> parts = new ArrayList<>();
+			if (missing > 0)
 			{
-				List<String> parts = new ArrayList<>();
-				if (missing > 0)
-				{
-					parts.add(missing + " missing");
-				}
-				if (inBank > 0)
-				{
-					parts.add(inBank + " in bank");
-				}
-				heading += " (" + String.join(", ", parts) + ")";
+				parts.add(missing + " missing");
 			}
-			JLabel bring = Theme.label(heading, missing + inBank > 0 ? Theme.GOLD : Theme.MUTED);
-			bring.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-			guideCard.add(bring);
+			if (inBank > 0)
+			{
+				parts.add(inBank + " in bank");
+			}
+			JLabel summary = Theme.label(String.join(", ", parts), missing > 0 ? MonsterCard.BAD : Theme.GOLD);
+			guideCard.add(UiKit.sectionHeader("Bring", parts.isEmpty() ? null : summary));
 			for (SlayerGuide.NeedStatus need : guide.getNeeds())
 			{
 				guideCard.add(needRow(need, guide.isBankKnown()));
@@ -253,25 +302,18 @@ class SlayerView extends JPanel
 			{
 				guideCard.add(wrapped("Open your bank once and the guide will also say what's in it.", Theme.SUBTLE));
 			}
-		}
-		if (potions >= 0)
-		{
-			if (guide.getNeeds().isEmpty())
+			if (potions >= 0)
 			{
-				JLabel bring = Theme.label("Bring", Theme.MUTED);
-				bring.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-				guideCard.add(bring);
+				guideCard.add(row("Prayer potions", potions == 0 ? "None" : "About " + potions, Theme.TEXT,
+					"<html>For the " + Formatting.withCommas(killsLeft) + " kills left, at your own measured prayer drain "
+						+ "on this monster.<br>Super restores restore a little more per dose.</html>"));
 			}
-			guideCard.add(row("Prayer potions", potions == 0 ? "None" : "About " + potions, Theme.TEXT,
-				"<html>For the " + Formatting.withCommas(killsLeft) + " kills left, at your own measured prayer drain "
-					+ "on this monster.<br>Super restores restore a little more per dose.</html>"));
 		}
 		if (forecast != null || cannon != null)
 		{
-			JLabel heading = Theme.label(forecast == null ? "From your task log"
-				: "Rest of task (your last " + (forecast.getRuns() == 1 ? "run" : forecast.getRuns() + " runs") + ")", Theme.MUTED);
-			heading.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-			guideCard.add(heading);
+			JLabel from = Theme.label(forecast == null ? "your task log"
+				: "your last " + (forecast.getRuns() == 1 ? "run" : forecast.getRuns() + " runs"), Theme.SUBTLE);
+			guideCard.add(UiKit.sectionHeader("Rest of task", from));
 		}
 		if (forecast != null)
 		{
@@ -297,41 +339,23 @@ class SlayerView extends JPanel
 
 	private static JPanel needRow(SlayerGuide.NeedStatus need, boolean bankKnown)
 	{
-		String state;
-		Color colour;
-		String tip;
 		if (need.isMet())
 		{
-			state = "Have it";
-			colour = Theme.SUCCESS;
-			tip = "Worn or in your inventory (or unlocked as a Slayer reward)";
+			return UiKit.tagRow(need.getLabel(), "Have it", Theme.SUCCESS,
+				"Worn or in your inventory (or unlocked as a Slayer reward)");
 		}
-		else if (need.isInfoOnly())
+		if (need.isInfoOnly())
 		{
-			state = "Tip";
-			colour = Theme.MUTED;
-			tip = "Recommended. There are too many alternatives to check, so this is just a reminder.";
+			return UiKit.tagRow(need.getLabel(), "Tip", Theme.MUTED,
+				"Recommended. There are too many alternatives to check, so this is just a reminder.");
 		}
-		else if (need.isInBank())
+		if (need.isInBank())
 		{
-			state = "In bank";
-			colour = Theme.ACCENT;
-			tip = "Not worn or in your inventory, but it was in your bank the last time you opened it";
+			return UiKit.tagRow(need.getLabel(), "In bank", Theme.GOLD,
+				"Not worn or in your inventory, but it was in your bank the last time you opened it");
 		}
-		else
-		{
-			state = "Missing";
-			colour = Theme.GOLD;
-			tip = bankKnown ? "Not worn, in your inventory or in your bank" : "Not worn or in your inventory";
-		}
-		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.setBackground(Theme.HEADER);
-		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
-		row.add(Theme.label("<html><div style='width:95px'>" + need.getLabel() + "</div></html>", Theme.TEXT),
-			BorderLayout.CENTER);
-		row.add(Theme.boldLabel(state, colour), BorderLayout.EAST);
-		row.setToolTipText(tip);
-		return row;
+		return UiKit.tagRow(need.getLabel(), "Missing", MonsterCard.BAD,
+			bankKnown ? "Not worn, in your inventory or in your bank" : "Not worn or in your inventory");
 	}
 
 	/**
@@ -363,17 +387,20 @@ class SlayerView extends JPanel
 	private JPanel areaRow(SlayerGuide.Area area, TaskStats rate, TaskStats best, boolean here, boolean canPick)
 	{
 		boolean isBest = best != null && rate == best;
-		JPanel row = new JPanel(new DynamicGridLayout(0, 1, 0, 1));
-		row.setBackground(area.isAssigned() || here ? Theme.highlight(Theme.SUCCESS, 0.72f) : Theme.HEADER);
-		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 4, 7));
+		boolean green = area.isAssigned() || here;
+		UiKit.RoundPanel row = UiKit.box(new DynamicGridLayout(0, 1, 0, 1));
+		if (green)
+		{
+			row.setBackground(Theme.highlight(Theme.SUCCESS, 0.72f));
+		}
 
 		JPanel top = new JPanel(new BorderLayout(6, 0));
 		top.setOpaque(false);
-		top.add(Theme.boldLabel(area.getName(), area.isAssigned() || here ? Theme.SUCCESS : Theme.TEXT), BorderLayout.CENTER);
-		String badge = area.isAssigned() ? "Konar" : here ? "Here" : isBest ? "Your best" : null;
+		top.add(Theme.label(area.getName(), green ? Theme.SUCCESS : Theme.TEXT), BorderLayout.CENTER);
+		String badge = area.isAssigned() ? "Konar" : here ? "you're here" : isBest ? "your best" : null;
 		if (badge != null)
 		{
-			top.add(Theme.boldLabel(badge, isBest && !here && !area.isAssigned() ? Theme.GOLD : Theme.SUCCESS), BorderLayout.EAST);
+			top.add(Theme.label(badge, isBest && !here && !area.isAssigned() ? Theme.GOLD : Theme.SUCCESS), BorderLayout.EAST);
 		}
 		row.add(top);
 
@@ -397,7 +424,7 @@ class SlayerView extends JPanel
 		}
 		if (area.getHint() != null)
 		{
-			row.add(Theme.label("<html><div style='width:130px'>" + area.getHint() + "</div></html>", Theme.SUBTLE));
+			row.add(UiKit.wrappedTo(area.getHint(), Theme.SUBTLE, 150));
 		}
 
 		StringBuilder tip = new StringBuilder("<html><b>").append(area.getName()).append("</b>");
@@ -422,9 +449,10 @@ class SlayerView extends JPanel
 	}
 
 	/**
-	 * The likeliest next tasks from your master, with right-click to mark one as blocked.
+	 * The likeliest next tasks from your master, as lined-up bars, with right-click to mark one
+	 * as blocked.
 	 */
-	private void updateOdds(TaskOdds odds, List<TaskStats> history, SlayerPoints.Master current)
+	private void updateOdds(TaskOdds odds, List<TaskStats> history, SlayerPoints.Master current, String currentTask)
 	{
 		oddsCard.removeAll();
 		if (odds.getMaster() == null || odds.getOptions().isEmpty())
@@ -433,43 +461,73 @@ class SlayerView extends JPanel
 			return;
 		}
 		oddsCard.setVisible(true);
-		oddsCard.add(title("Next task (" + odds.getMaster() + ")"));
+		JPanel head = new JPanel(new BorderLayout(6, 0));
+		head.setOpaque(false);
+		head.add(title("Next task"), BorderLayout.WEST);
+		JLabel master = Theme.label(odds.getMaster().toString(), Theme.MUTED);
+		master.setHorizontalAlignment(SwingConstants.RIGHT);
+		head.add(master, BorderLayout.CENTER);
+		oddsCard.add(head);
+
+		TaskStats advice = odds.blockAdvice(history, BLOCK_ADVICE_MIN_CHANCE);
+		double top = 0;
+		for (TaskOdds.Option o : odds.getOptions())
+		{
+			if (!o.isBlocked())
+			{
+				top = Math.max(top, o.getChance());
+			}
+		}
 
 		int shown = 0;
-		JPanel blockedList = new JPanel(new DynamicGridLayout(0, 1, 0, 3));
+		int more = 0;
+		JPanel blockedList = new JPanel(new GridLayout(0, 2, 3, 3));
 		blockedList.setOpaque(false);
 		for (TaskOdds.Option o : odds.getOptions())
 		{
 			if (o.isBlocked())
 			{
-				JPanel row = row(o.getTask(), "Blocked", Theme.SUBTLE, "Right-click to unblock");
-				row.setComponentPopupMenu(blockMenu(o.getTask(), false));
-				blockedList.add(row);
+				UiKit.RoundPanel chip = UiKit.box(new BorderLayout());
+				chip.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
+				chip.add(Theme.label(o.getTask(), Theme.MUTED), BorderLayout.CENTER);
+				chip.setToolTipText("Blocked. Right-click to unblock.");
+				chip.setComponentPopupMenu(blockMenu(o.getTask(), false));
+				blockedList.add(chip);
 				continue;
 			}
-			if (o.getChance() <= 0 || shown >= SHOWN_ODDS)
+			if (o.getChance() <= 0)
 			{
 				continue;
 			}
+			if (shown >= SHOWN_ODDS)
+			{
+				more++;
+				continue;
+			}
 			shown++;
+			boolean onTask = o.getTask().equalsIgnoreCase(currentTask);
+			boolean blockIdea = advice != null && o.getTask().equalsIgnoreCase(advice.getTask());
+			Color colour = onTask ? Theme.SUCCESS : blockIdea ? MonsterCard.BAD : BAR_GREY;
 			String size = o.getMaxAmount() > 0 ? o.getMinAmount() + "-" + o.getMaxAmount() : "";
-			JPanel row = row(o.getTask(), String.format(Locale.US, "%.1f%%", o.getChance() * 100), Theme.TEXT,
-				"<html>" + o.getTask() + ": " + String.format(Locale.US, "%.1f%%", o.getChance() * 100) + " chance"
-					+ (size.isEmpty() ? "" : "<br>Usually " + size + " kills")
-					+ "<br>Right-click to mark it as blocked</html>");
+			JPanel row = UiKit.barRow(o.getTask(), top <= 0 ? 0 : o.getChance() / top,
+				String.format(Locale.US, "%.1f%%", o.getChance() * 100), colour, onTask || blockIdea);
+			row.setToolTipText("<html>" + o.getTask() + ": " + String.format(Locale.US, "%.1f%%", o.getChance() * 100) + " chance"
+				+ (size.isEmpty() ? "" : "<br>Usually " + size + " kills")
+				+ "<br>Right-click to mark it as blocked</html>");
 			row.setComponentPopupMenu(blockMenu(o.getTask(), true));
 			oddsCard.add(row);
 		}
-		oddsCard.add(holder(Theme.flatButton("Where to get a task...", "See which master is likeliest to give you a task",
-			this::pickTaskToFind)));
+		if (more > 0)
+		{
+			oddsCard.add(Theme.label("+ " + more + " less likely", Theme.SUBTLE));
+		}
 
-		TaskStats advice = odds.blockAdvice(history, BLOCK_ADVICE_MIN_CHANCE);
 		if (advice != null)
 		{
 			TaskOdds.Option o = odds.find(advice.getTask());
-			oddsCard.add(wrapped("Block or skip idea: " + advice.getTask() + " (" + String.format(Locale.US, "%.1f%%", o.getChance() * 100)
-				+ " chance) is your slowest task at " + Formatting.compactXp(Math.round(advice.getXpPerHour())) + " Slayer xp/hr.",
-				Theme.GOLD));
+			oddsCard.add(note("<font color='" + hex(Theme.GOLD) + "'>Block or skip idea:</font> " + advice.getTask()
+				+ " (" + String.format(Locale.US, "%.1f%%", o.getChance() * 100) + " chance) is your slowest task at "
+				+ Formatting.compactXp(Math.round(advice.getXpPerHour())) + " Slayer xp/hr.", Theme.GOLD, null));
 		}
 		MasterAdvice.Entry better = MasterAdvice.betterThan(plugin.getMasterAdvice(history, MasterAdvice.Goal.XP), current,
 			MasterAdvice.MIN_TIP_GAIN);
@@ -477,19 +535,19 @@ class SlayerView extends JPanel
 		{
 			MasterAdvice.Entry yours = MasterAdvice.find(plugin.getMasterAdvice(history, MasterAdvice.Goal.XP), current);
 			long gain = Math.round((better.getXpPerHour() / yours.getXpPerHour() - 1) * 100);
-			JLabel tip = wrapped("Tip: " + better.getMaster().getDisplayName() + " would be about " + gain
-				+ "% more Slayer XP/hr for you, from your task log.", Theme.SUCCESS);
-			tip.setToolTipText("<html>Your expected Slayer XP/hr, from each master's task chances and your own rate on each task:<br>"
-				+ better.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(better.getXpPerHour())) + " xp/hr<br>"
-				+ yours.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(yours.getXpPerHour())) + " xp/hr<br>"
-				+ "Tasks you haven't logged count at your average rate.</html>");
-			oddsCard.add(tip);
+			oddsCard.add(note("<font color='" + hex(Theme.SUCCESS) + "'>Tip:</font> " + better.getMaster().getDisplayName()
+					+ " would be about " + gain + "% more Slayer XP/hr for you, from your task log.", Theme.SUCCESS,
+				"<html>Your expected Slayer XP/hr, from each master's task chances and your own rate on each task:<br>"
+					+ better.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(better.getXpPerHour())) + " xp/hr<br>"
+					+ yours.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(yours.getXpPerHour())) + " xp/hr<br>"
+					+ "Tasks you haven't logged count at your average rate.</html>"));
 		}
+		oddsCard.add(holder(Theme.cardButton("Where to get a task...", "See which master is likeliest to give you a task",
+			this::pickTaskToFind)));
 		if (blockedList.getComponentCount() > 0)
 		{
-			JLabel heading = Theme.label("Blocked by you", Theme.MUTED);
-			heading.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-			oddsCard.add(heading);
+			JLabel count = Theme.label(String.valueOf(blockedList.getComponentCount()), Theme.SUBTLE);
+			oddsCard.add(UiKit.sectionHeader("Blocked by you", count));
 			oddsCard.add(blockedList);
 		}
 		oddsCard.add(wrapped("From your master's task weights, leaving out tasks you can't get yet. Quest requirements "
@@ -543,7 +601,7 @@ class SlayerView extends JPanel
 	}
 
 	/**
-	 * Every master's chance of giving the task the player looked up.
+	 * Every master's chance of giving the task the player looked up, as bars.
 	 */
 	private void updateSources(TaskSources sources)
 	{
@@ -577,6 +635,7 @@ class SlayerView extends JPanel
 			return;
 		}
 		TaskSources.Source best = sources.best();
+		double topChance = best == null ? 0 : best.getChance();
 		for (TaskSources.Source src : sources.getSources())
 		{
 			String name = src.getMaster().getDisplayName();
@@ -588,19 +647,22 @@ class SlayerView extends JPanel
 				continue;
 			}
 			String pct = String.format(Locale.US, "%.1f%%", src.getChance() * 100);
-			sourcesCard.add(row(name + (src == best ? " (best)" : ""), pct, src == best ? Theme.SUCCESS : Theme.TEXT,
-				"<html>" + name + ": " + pct + " chance per task" + (size.isEmpty() ? "" : "<br>Usually " + size)
-					+ "<br>About 1 in " + Math.max(1, Math.round(1 / src.getChance())) + " tasks</html>"));
+			JPanel row = UiKit.barRow(name + (src == best ? " (best)" : ""), topChance <= 0 ? 0 : src.getChance() / topChance,
+				pct, src == best ? Theme.SUCCESS : BAR_GREY, src == best);
+			row.setToolTipText("<html>" + name + ": " + pct + " chance per task" + (size.isEmpty() ? "" : "<br>Usually " + size)
+				+ "<br>About 1 in " + Math.max(1, Math.round(1 / src.getChance())) + " tasks</html>");
+			sourcesCard.add(row);
 		}
 		sourcesCard.add(wrapped("From each master's task weights with your levels, unlocks and blocked tasks. "
 			+ "Quest requirements aren't in the game data, so it's an estimate.", Theme.SUBTLE));
 	}
 
 	/**
-	 * Your tasks ranked by your own Slayer XP/hr and GP/hr.
+	 * Your tasks ranked by your own Slayer XP/hr and GP/hr, one list at a time behind small tabs.
 	 */
 	private void updateRanking(List<TaskStats> history)
 	{
+		lastHistory = history;
 		rankCard.removeAll();
 		List<TaskStats> byXp = TaskStats.ranked(history, false);
 		if (byXp.size() < 2)
@@ -610,36 +672,73 @@ class SlayerView extends JPanel
 		}
 		rankCard.setVisible(true);
 		rankCard.add(title("Your tasks"));
-		rankCard.add(Theme.label("Fastest Slayer XP", Theme.MUTED));
-		for (int i = 0; i < Math.min(3, byXp.size()); i++)
+
+		boolean slowest = byXp.size() >= 4;
+		if (!slowest && rankTab == 2)
 		{
-			rankCard.add(rankRow(byXp.get(i), Formatting.compactXp(Math.round(byXp.get(i).getXpPerHour())) + " xp/hr", Theme.SUCCESS));
+			rankTab = 0;
 		}
-		List<TaskStats> byGp = TaskStats.ranked(history, true);
-		JLabel gp = Theme.label("Most GP", Theme.MUTED);
-		gp.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-		rankCard.add(gp);
-		for (int i = 0; i < Math.min(3, byGp.size()); i++)
+		String[] names = slowest ? new String[]{"Fastest XP", "Most GP", "Slowest"} : new String[]{"Fastest XP", "Most GP"};
+		JPanel tabs = new JPanel(new GridLayout(1, names.length, 3, 0));
+		tabs.setOpaque(false);
+		for (int i = 0; i < names.length; i++)
 		{
-			rankCard.add(rankRow(byGp.get(i), Formatting.compactXp(Math.round(byGp.get(i).getGpPerHour())) + " gp/hr", Theme.GOLD));
-		}
-		if (byXp.size() >= 4)
-		{
-			JLabel slow = Theme.label("Slowest (block or skip?)", Theme.MUTED);
-			slow.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-			rankCard.add(slow);
-			for (int i = byXp.size() - 1; i >= Math.max(3, byXp.size() - 3); i--)
+			int index = i;
+			JLabel tab = UiKit.tab(names[i], null, () ->
 			{
-				rankCard.add(rankRow(byXp.get(i), Formatting.compactXp(Math.round(byXp.get(i).getXpPerHour())) + " xp/hr", Theme.MUTED));
+				rankTab = index;
+				viewKey = null;
+				update();
+			});
+			tab.setBorder(BorderFactory.createEmptyBorder(3, 2, 3, 2));
+			UiKit.select(tab, i == rankTab);
+			if (i != rankTab)
+			{
+				tab.setBackground(Theme.SLOT);
+			}
+			tabs.add(tab);
+		}
+		rankCard.add(tabs);
+
+		if (rankTab == 1)
+		{
+			List<TaskStats> byGp = TaskStats.ranked(history, true);
+			double top = byGp.isEmpty() ? 0 : byGp.get(0).getGpPerHour();
+			for (int i = 0; i < Math.min(5, byGp.size()); i++)
+			{
+				TaskStats s = byGp.get(i);
+				rankCard.add(rankRow(s, i + 1, top <= 0 ? 0 : s.getGpPerHour() / top,
+					Formatting.compactXp(Math.round(s.getGpPerHour())), Theme.GOLD, i == 0));
 			}
 		}
-		rankCard.add(wrapped("From your task log. Tasks need at least " + TaskStats.MIN_ACTIVE_MILLIS / 60_000
-			+ " minutes of fighting to be ranked.", Theme.SUBTLE));
+		else if (rankTab == 2)
+		{
+			double top = byXp.get(0).getXpPerHour();
+			for (int i = byXp.size() - 1, n = 1; i >= Math.max(3, byXp.size() - 5); i--, n++)
+			{
+				TaskStats s = byXp.get(i);
+				rankCard.add(rankRow(s, n, top <= 0 ? 0 : s.getXpPerHour() / top,
+					Formatting.compactXp(Math.round(s.getXpPerHour())), MonsterCard.BAD, n == 1));
+			}
+		}
+		else
+		{
+			double top = byXp.get(0).getXpPerHour();
+			for (int i = 0; i < Math.min(5, byXp.size()); i++)
+			{
+				TaskStats s = byXp.get(i);
+				rankCard.add(rankRow(s, i + 1, top <= 0 ? 0 : s.getXpPerHour() / top,
+					Formatting.compactXp(Math.round(s.getXpPerHour())), Theme.SUCCESS, i == 0));
+			}
+		}
+		rankCard.add(wrapped((rankTab == 1 ? "GP/hr" : "Slayer XP/hr") + " from your task log. Tasks need at least "
+			+ TaskStats.MIN_ACTIVE_MILLIS / 60_000 + " minutes of fighting to be ranked.", Theme.SUBTLE));
 	}
 
-	private JPanel rankRow(TaskStats s, String value, Color colour)
+	private JPanel rankRow(TaskStats s, int place, double fill, String value, Color colour, boolean first)
 	{
-		JPanel row = row(s.getTask(), value, colour, "<html>" + s.getTask() + ": done " + s.getTimes() + (s.getTimes() == 1 ? " time" : " times")
+		JPanel row = UiKit.barRow(place + ". " + s.getTask(), fill, value, first ? colour : BAR_GREY, first);
+		row.setToolTipText("<html>" + s.getTask() + ": done " + s.getTimes() + (s.getTimes() == 1 ? " time" : " times")
 			+ "<br>Average " + s.getAverageKills() + " kills<br>"
 			+ Formatting.compactXp(Math.round(s.getXpPerHour())) + " Slayer xp/hr, "
 			+ Formatting.compactXp(Math.round(s.getGpPerHour())) + " gp/hr</html>");
@@ -650,7 +749,13 @@ class SlayerView extends JPanel
 	private void updatePoints(SlayerStatus status)
 	{
 		pointsCard.removeAll();
-		pointsCard.add(title("Points"));
+		JPanel head = new JPanel(new BorderLayout(6, 0));
+		head.setOpaque(false);
+		head.add(title("Points"), BorderLayout.WEST);
+		JLabel total = Theme.boldLabel(status.getPoints() < 0 ? "" : Formatting.withCommas(status.getPoints()), Theme.GOLD);
+		total.setHorizontalAlignment(SwingConstants.RIGHT);
+		head.add(total, BorderLayout.CENTER);
+		pointsCard.add(head);
 		SlayerPoints.Master master = status.getMaster();
 		int streak = status.getStreak();
 		if (master == null || streak < 0)
@@ -662,7 +767,7 @@ class SlayerView extends JPanel
 		// The task you're on (or your next one) is streak + 1.
 		int next = streak + 1;
 		int nextPoints = SlayerPoints.pointsFor(master, next, status.hasEliteDiary(master));
-		String nextText = nextPoints < 0 ? "Varies" : nextPoints == 0 ? "None" : Formatting.withCommas(nextPoints) + " pts";
+		String nextText = nextPoints < 0 ? "Varies" : nextPoints == 0 ? "None" : "+" + Formatting.withCommas(nextPoints) + " pts";
 		String nextTip = next < 5 ? "No points for the first four tasks of a streak"
 			: nextPoints < 0 ? "Mortimer's points depend on the task" : "Points for finishing it with " + master.getDisplayName();
 		pointsCard.add(row("Task #" + Formatting.withCommas(next) + " (" + master.getDisplayName() + ")", nextText,
@@ -676,26 +781,31 @@ class SlayerView extends JPanel
 				"Every 10th task gives 5x the points"));
 		}
 		pointsCard.add(row("Task #" + Formatting.withCommas(big) + " (x" + SlayerPoints.multiplier(big) + ")",
-			away(big - next), Theme.TEXT, "Every 50th, 100th, 250th and 1,000th task gives 15x to 50x the points. "
+			away(big - next), Theme.GOLD, "Every 50th, 100th, 250th and 1,000th task gives 15x to 50x the points. "
 				+ "Below: what each master gives for it."));
+		// How far through the 50 tasks to that big task.
+		pointsCard.add(UiKit.bar(1 - Math.min(50, big - next) / 50.0, Theme.GOLD, 4));
 
 		// What that big task is worth with each master, so it can be saved for the best one.
-		JLabel with = Theme.label("Task #" + Formatting.withCommas(big) + " with", Theme.MUTED);
-		with.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-		pointsCard.add(with);
-		JPanel masters = new JPanel(new DynamicGridLayout(0, 2, 3, 3));
+		pointsCard.add(Theme.label("Task #" + Formatting.withCommas(big) + " with each master", Theme.MUTED));
+		JPanel masters = new JPanel(new GridLayout(0, 2, 3, 3));
 		masters.setOpaque(false);
 		for (SlayerPoints.Master m : SlayerPoints.BONUS_MASTERS)
 		{
 			int pts = SlayerPoints.pointsFor(m, big, status.hasEliteDiary(m));
 			boolean current = m == master;
-			JPanel cell = row(m.getDisplayName(), Formatting.withCommas(pts), current ? Theme.GOLD : Theme.TEXT,
-				m.getDisplayName() + " would give " + Formatting.withCommas(pts) + " points for task #"
-					+ Formatting.withCommas(big) + (current ? " (your current master)" : ""));
+			UiKit.RoundPanel cell = UiKit.box(new BorderLayout(4, 0));
+			cell.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
 			if (current)
 			{
-				cell.setBackground(Theme.highlight(Theme.GOLD, 0.8f));
+				cell.setBackground(Theme.highlight(Theme.GOLD, 0.78f));
 			}
+			cell.add(Theme.label(m.getDisplayName(), current ? Theme.GOLD : Theme.MUTED), BorderLayout.WEST);
+			JLabel v = Theme.label(Formatting.withCommas(pts), current ? Theme.GOLD : Theme.TEXT);
+			v.setHorizontalAlignment(SwingConstants.RIGHT);
+			cell.add(v, BorderLayout.CENTER);
+			cell.setToolTipText(m.getDisplayName() + " would give " + Formatting.withCommas(pts) + " points for task #"
+				+ Formatting.withCommas(big) + (current ? " (your current master)" : ""));
 			masters.add(cell);
 		}
 		pointsCard.add(masters);
@@ -711,16 +821,6 @@ class SlayerView extends JPanel
 		superiorCard.removeAll();
 		superiorCard.add(title("Superiors"));
 		StringBuilder rates = new StringBuilder();
-		if (onTask)
-		{
-			superiorCard.add(row("This task", String.valueOf(taskSuperiors), taskSuperiors > 0 ? Theme.GOLD : Theme.TEXT,
-				"Superiors that appeared during this task"));
-			double rate = SlayerLog.killsPerSuperior(taskKills, taskSuperiors);
-			if (rate > 0)
-			{
-				rates.append("This task: 1 per ").append(Math.round(rate)).append(" kills. ");
-			}
-		}
 		int kills = 0;
 		int superiors = 0;
 		for (SlayerTaskRecord r : tasks)
@@ -728,7 +828,34 @@ class SlayerView extends JPanel
 			kills += r.kills;
 			superiors += r.superiors;
 		}
-		superiorCard.add(row("All logged tasks", Formatting.withCommas(superiors), Theme.TEXT, "Across every task in your log"));
+		List<JLabel> values = new ArrayList<>();
+		List<JLabel> captions = new ArrayList<>();
+		if (onTask)
+		{
+			JLabel now = UiKit.value();
+			now.setText(String.valueOf(taskSuperiors));
+			now.setForeground(taskSuperiors > 0 ? Theme.GOLD : Theme.TEXT);
+			now.setToolTipText("Superiors that appeared during this task");
+			values.add(now);
+			captions.add(UiKit.caption("This task"));
+			double rate = SlayerLog.killsPerSuperior(taskKills, taskSuperiors);
+			if (rate > 0)
+			{
+				rates.append("This task: 1 per ").append(Math.round(rate)).append(" kills. ");
+			}
+		}
+		JLabel all = UiKit.value();
+		all.setText(Formatting.withCommas(superiors));
+		all.setToolTipText("Across every task in your log");
+		values.add(all);
+		captions.add(UiKit.caption("All tasks"));
+		JLabel chance = UiKit.value();
+		chance.setText("1/" + SuperiorMonsters.BASE_RATE);
+		chance.setForeground(Theme.MUTED);
+		chance.setToolTipText("Per task kill with Bigger and Badder");
+		values.add(chance);
+		captions.add(UiKit.caption("Chance"));
+		superiorCard.add(UiKit.stackedStrip(values.toArray(new JLabel[0]), captions.toArray(new JLabel[0])));
 		double rate = SlayerLog.killsPerSuperior(kills, superiors);
 		if (rate > 0)
 		{
@@ -751,8 +878,8 @@ class SlayerView extends JPanel
 			loot += r.loot(price);
 			kills += r.kills;
 		}
-		logTotals.setText(tasks.isEmpty() ? "" : Formatting.withCommas(kills) + " kills, " + Formatting.compactXp(xp)
-			+ " Slayer xp, " + Formatting.compactXp(loot) + " gp");
+		logTotals.setText(tasks.isEmpty() ? "" : "<html><div style='width:148px'>" + Formatting.withCommas(kills) + " kills, "
+			+ Formatting.compactXp(xp) + " Slayer xp, " + Formatting.compactXp(loot) + " gp</div></html>");
 
 		int shown = 0;
 		for (SlayerTaskRecord r : tasks)
@@ -767,31 +894,33 @@ class SlayerView extends JPanel
 		clearLog.setVisible(!tasks.isEmpty());
 	}
 
+	/**
+	 * One finished task: name and loot, then kills, time and XP with the date, then extras.
+	 */
 	private JPanel taskCard(SlayerTaskRecord r, LootPrice price)
 	{
-		JPanel card = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
-		card.setBackground(Theme.CARD);
-		card.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 3, 0, 0, Theme.SUCCESS),
-			BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+		UiKit.RoundPanel card = UiKit.box(new DynamicGridLayout(0, 1, 0, 1));
+		long loot = r.loot(price);
 
 		JPanel top = new JPanel(new BorderLayout(6, 0));
 		top.setOpaque(false);
-		top.add(Theme.boldLabel(r.task, Theme.TEXT), BorderLayout.CENTER);
-		top.add(Theme.label(DATE.format(Instant.ofEpochMilli(r.endMillis).atZone(ZoneId.systemDefault())), Theme.SUBTLE),
-			BorderLayout.EAST);
-		card.add(top);
-
-		String time = r.activeMillis > 0 ? ", " + Formatting.duration(r.activeMillis / 3_600_000.0) : "";
-		card.add(Theme.label(Formatting.withCommas(r.kills) + (r.kills == 1 ? " kill" : " kills") + time
-			+ (r.slayerXp > 0 ? ", +" + Formatting.compactXp(r.slayerXp) + " xp" : ""), Theme.MUTED));
-
-		StringBuilder extra = new StringBuilder();
-		long loot = r.loot(price);
+		top.add(Theme.label(r.task, Theme.TEXT), BorderLayout.CENTER);
 		if (loot > 0)
 		{
-			extra.append(Formatting.compactXp(loot)).append(" gp");
+			top.add(Theme.label("+" + Formatting.compactXp(loot) + " gp", Theme.GOLD), BorderLayout.EAST);
 		}
+		card.add(top);
+
+		String time = r.activeMillis > 0 ? "  ·  " + Formatting.duration(r.activeMillis / 3_600_000.0) : "";
+		JPanel middle = new JPanel(new BorderLayout(6, 0));
+		middle.setOpaque(false);
+		middle.add(Theme.label(Formatting.withCommas(r.kills) + (r.kills == 1 ? " kill" : " kills") + time
+			+ (r.slayerXp > 0 ? "  ·  +" + Formatting.compactXp(r.slayerXp) + " xp" : ""), Theme.MUTED), BorderLayout.CENTER);
+		middle.add(Theme.label(DATE.format(Instant.ofEpochMilli(r.endMillis).atZone(ZoneId.systemDefault())), Theme.SUBTLE),
+			BorderLayout.EAST);
+		card.add(middle);
+
+		StringBuilder extra = new StringBuilder();
 		if (r.superiors > 0)
 		{
 			append(extra, r.superiors + (r.superiors == 1 ? " superior" : " superiors"));
@@ -810,7 +939,7 @@ class SlayerView extends JPanel
 		}
 		if (extra.length() > 0)
 		{
-			card.add(Theme.label(extra.toString(), loot > 0 ? Theme.GOLD : Theme.SUBTLE));
+			card.add(Theme.label(extra.toString(), Theme.SUBTLE));
 		}
 
 		card.setToolTipText(tooltip(r, price));
@@ -900,12 +1029,9 @@ class SlayerView extends JPanel
 		sb.append(part);
 	}
 
-	private static JPanel card()
+	private static UiKit.RoundPanel card()
 	{
-		JPanel card = new JPanel(new DynamicGridLayout(0, 1, 0, 3));
-		card.setBackground(Theme.CARD);
-		card.setBorder(BorderFactory.createEmptyBorder(7, 8, 8, 8));
-		return card;
+		return UiKit.card(new DynamicGridLayout(0, 1, 0, 3));
 	}
 
 	private static JLabel title(String text)
@@ -917,20 +1043,34 @@ class SlayerView extends JPanel
 
 	private static JPanel row(String label, String value, Color valueColour, String tooltip)
 	{
-		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.setBackground(Theme.HEADER);
-		row.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
-		row.add(Theme.label(label, Theme.MUTED), BorderLayout.CENTER);
-		row.add(Theme.boldLabel(value, valueColour), BorderLayout.EAST);
-		row.setToolTipText(tooltip);
-		return row;
+		return UiKit.row(label, value, valueColour, tooltip);
 	}
 
 	private static JLabel wrapped(String text, Color colour)
 	{
-		JLabel label = Theme.label("<html><div style='width:135px'>" + text + "</div></html>", colour);
-		label.setBorder(BorderFactory.createEmptyBorder(2, 2, 0, 2));
-		return label;
+		return UiKit.wrapped(text, colour);
+	}
+
+	/**
+	 * WHAT: A short note in a soft box of its colour, e.g. the block idea in gold or a tip in green.
+	 * WHY: Advice stands apart from the list above it.
+	 * PRE: text may contain simple HTML; tooltip may be null.
+	 * POST: Returns a new box.
+	 * RETURN: the box
+	 * THROWS: Nothing.
+	 */
+	private static JPanel note(String text, Color colour, String tooltip)
+	{
+		UiKit.RoundPanel box = new UiKit.RoundPanel(new BorderLayout(), Theme.highlight(colour, 0.8f), UiKit.BOX_RADIUS);
+		box.setBorder(BorderFactory.createEmptyBorder(4, 6, 5, 6));
+		box.add(UiKit.wrappedTo(text, Theme.TEXT, 140), BorderLayout.CENTER);
+		box.setToolTipText(tooltip);
+		return box;
+	}
+
+	private static String hex(Color c)
+	{
+		return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
 	}
 
 	private static JPanel holder(java.awt.Component child)

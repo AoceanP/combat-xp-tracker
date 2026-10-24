@@ -55,7 +55,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop
 - Pin monsters to the top of the list, and drag pinned monsters into your own order
 - Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
-- Search, sort, hide monsters, ignore items (right-click an item), and collapsed cards stay collapsed
+- Search, sort, hide monsters, ignore items or remove one from a monster's loot (right-click an item), and collapsed cards stay collapsed. A boss's drops show its 10 most valuable items until you click Show all
 - Prayer drain: how long a prayer potion dose lasts while fighting each monster, measured from your own prayer points (restores and kills without prayer on aren't counted)
 
 ## Bosses
@@ -102,7 +102,6 @@ Twelve colour themes for the sidebar in the settings: Dark (the original, and th
 - **Copy** puts a text summary of your session (XP, hits, attack uptime and DPS, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
 - **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
 - **Copy as image**: right-click any monster card to copy a picture of it, ready to paste into Discord
-- **Export** saves your monsters, slayer task log or goals as a CSV spreadsheet for Excel or Google Sheets, or copies it to paste straight in
 - Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
 
 ## Overlays

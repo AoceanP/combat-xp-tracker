@@ -38,6 +38,7 @@ import javax.swing.BoxLayout;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
@@ -49,32 +50,44 @@ import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.QuantityFormatter;
 
 /**
- * One monster in the Monsters tab, laid out like the core Loot Tracker:
+ * One monster in the Monsters tab, as a rounded card (2.2):
  *
  * <pre>
- * Abyssal demon  x12                   184K gp
- * Hits 245    Avg 18.3    Max 45 Melee
- * Melee 45   Magic 38
- * [item][item][item][item][item]
+ * Vorkath  [task]                         6.10M
+ * 212 kills  +12 today                ● fighting
+ * Rates       Kills/hr, GP/hr, Prayer, Task
+ * Luck        Since unique, Rare drop, collection log, Driest
+ * Drops       every item
+ * Hits        hits | avg | max, per style, acc | dps | uptime
+ * Boss        pb | last | avg, Combat Achievements
+ * Profit      Supplies, Net profit, Net GP/hr, Deaths
  * </pre>
  *
- * Click the header to collapse or expand it. Right-click for options.
+ * Click the header to fold or open it. Folded, it's one line: name, kills and when you last
+ * fought it, loot and GP/hr. Right-click for options.
  */
 class MonsterCard extends JPanel
 {
 	private static final int ITEMS_PER_ROW = 5;
 	private static final CombatStyle[] STYLES = {CombatStyle.MELEE, CombatStyle.RANGED, CombatStyle.MAGIC};
-	private static final Dimension ITEM_SIZE = new Dimension(40, 36);
-	// Space between stat tiles.
-	private static final int TILE_GAP = 2;
+	private static final Dimension ITEM_SIZE = new Dimension(40, 34);
+	private static final java.awt.Color TASK_TAG = new java.awt.Color(190, 160, 255);
 
 	private final ItemManager itemManager;
 	private final String monsterName;
 
+	// The rounded card everything sits on; outlined green while fighting, gold when pinned.
+	private final UiKit.RoundPanel shell = new UiKit.RoundPanel(new BorderLayout(), Theme.CARD, UiKit.CARD_RADIUS);
 	private final JPanel header = new JPanel(new BorderLayout(6, 0));
 	private final JLabel nameLabel = Theme.boldLabel("", Theme.TEXT);
+	private final JLabel taskTag = UiKit.pill("task", TASK_TAG);
 	private final JLabel killsLabel = Theme.label("", Theme.SUBTLE);
-	private final JLabel valueLabel = Theme.label("", Theme.GOLD);
+	private final JLabel todayLabel = Theme.label("", Theme.SUCCESS);
+	private final JLabel valueLabel = Theme.boldLabel("", Theme.GOLD);
+	private final JLabel statusLabel = Theme.label("", Theme.MUTED);
+	private boolean fighting;
+	private boolean pinned;
+	private String sinceText = "";
 
 	private static final java.awt.Color DEATHS = new java.awt.Color(235, 110, 100);
 	// Bad news: dry streaks, deaths, running low.
@@ -83,19 +96,21 @@ class MonsterCard extends JPanel
 	private final JLabel hitsLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel avgLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel maxLabel = Theme.boldLabel("", Theme.TEXT);
-	private final JLabel maxCaption = Theme.label("Max hit", Theme.MUTED);
+	private final JLabel maxCaption = UiKit.caption("max");
 	// Biggest hit per style, always Melee, Ranged, Magic so the columns line up across cards.
-	private final JPanel styleRow = new JPanel(new GridLayout(1, STYLES.length, TILE_GAP, 0));
+	// The three strips below sit in holders, which add the gap between strips and are what
+	// gets shown or hidden.
+	private final JPanel styleRow;
 	private final Map<CombatStyle, JLabel> styleValues = new java.util.EnumMap<>(CombatStyle.class);
 	private final JLabel accuracyValue = Theme.boldLabel("-", Theme.TEXT);
 	private final JLabel dpsValue = Theme.boldLabel("-", Theme.TEXT);
 	private final JLabel uptimeValue = Theme.boldLabel("-", Theme.TEXT);
-	private final JPanel fightRow = new JPanel(new GridLayout(1, 3, TILE_GAP, 0));
+	private final JPanel fightRow;
 	// Kill times: personal best, last kill and the recent average.
 	private final JLabel pbValue = Theme.boldLabel("-", Theme.GOLD);
 	private final JLabel lastValue = Theme.boldLabel("-", Theme.TEXT);
 	private final JLabel avgValue = Theme.boldLabel("-", Theme.TEXT);
-	private final JPanel timesRow = new JPanel(new GridLayout(1, 3, TILE_GAP, 0));
+	private final JPanel timesRow;
 	// Every collection log item from the boss: bright if obtained, faded if not.
 	private final JPanel collectionGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private String collectionKey;
@@ -119,14 +134,20 @@ class MonsterCard extends JPanel
 	private final InfoRow damageTakenRow = new InfoRow("Damage taken");
 	private final InfoRow flawlessRow = new InfoRow("Flawless kills");
 	private final InfoRow idleRow = new InfoRow("Idle time");
-	private final InfoRow.Section fightSection = new InfoRow.Section("Fight");
-	private final InfoRow.Section overview = new InfoRow.Section(null);
-	private final InfoRow.Section collectionSection = new InfoRow.Section("Collection log");
+	private final InfoRow.Section fightSection = new InfoRow.Section("Hits");
+	private final InfoRow.Section overview = new InfoRow.Section("Rates");
+	private final InfoRow.Section collectionSection = new InfoRow.Section("Luck");
+	private final InfoRow.Section dropsSection = new InfoRow.Section("Drops");
 	private final InfoRow.Section bossSection = new InfoRow.Section("Boss");
 	private final InfoRow.Section costsSection = new InfoRow.Section("Profit");
 	private final CombatXpTrackerPlugin plugin;
 	private final JPanel lootGrid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
 	private final JLabel noLootLabel = Theme.label("No drops recorded yet", Theme.SUBTLE);
+	// Drops show two rows (the most valuable) until "Show all" is clicked.
+	private static final int FOLDED_LOOT = ITEMS_PER_ROW * 2;
+	private final JLabel showAllLabel = Theme.label("", Theme.MUTED);
+	private boolean showAllLoot;
+	private List<MonsterTracker.LootLine> lastLoot;
 
 	private boolean collapsed;
 	// null until the first update, so an empty loot list still shows its message.
@@ -142,103 +163,116 @@ class MonsterCard extends JPanel
 		setOpaque(false);
 		setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
 
-		// Header
-		JPanel title = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-		title.setOpaque(false);
+		// Header: name (and a task tag) over kills; loot over fighting or GP/hr. Folded, this is
+		// the whole card.
+		JPanel nameLine = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+		nameLine.setOpaque(false);
 		nameLabel.setText(monsterName);
-		title.add(nameLabel);
-		killsLabel.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 0));
-		title.add(killsLabel);
+		nameLine.add(nameLabel);
+		JPanel tagGap = new JPanel();
+		tagGap.setOpaque(false);
+		tagGap.setPreferredSize(new Dimension(5, 1));
+		nameLine.add(tagGap);
+		nameLine.add(taskTag);
+		taskTag.setVisible(false);
+		taskTag.setToolTipText("Your current slayer task");
+		JPanel killsLine = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+		killsLine.setOpaque(false);
+		killsLine.add(killsLabel);
+		todayLabel.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 0));
+		killsLine.add(todayLabel);
+		JPanel left = new JPanel(new GridLayout(2, 1, 0, 1));
+		left.setOpaque(false);
+		left.add(nameLine);
+		left.add(killsLine);
+		JPanel right = new JPanel(new GridLayout(2, 1, 0, 1));
+		right.setOpaque(false);
+		valueLabel.setHorizontalAlignment(JLabel.RIGHT);
+		statusLabel.setHorizontalAlignment(JLabel.RIGHT);
+		right.add(valueLabel);
+		right.add(statusLabel);
 
-		header.setBackground(Theme.HEADER);
+		header.setOpaque(false);
 		header.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
 		header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-		header.add(title, BorderLayout.CENTER);
-		header.add(valueLabel, BorderLayout.EAST);
+		header.add(left, BorderLayout.CENTER);
+		header.add(right, BorderLayout.EAST);
 
-		// Body
-		JPanel statsRow = new JPanel(new GridLayout(1, 3, TILE_GAP, 0));
-		statsRow.setOpaque(false);
-		statsRow.add(tile(hitsLabel, "Hits"));
-		statsRow.add(tile(avgLabel, "Avg hit"));
-		statsRow.add(tile(maxLabel, maxCaption));
+		// Hits: three slim strips instead of rows of tiles.
+		JPanel statsRow = UiKit.strip(new JLabel[]{hitsLabel, avgLabel, maxLabel},
+			new JLabel[]{UiKit.caption("hits"), UiKit.caption("avg"), maxCaption});
+		hitsLabel.setToolTipText("Hits on " + monsterName + ", 0s included");
+		avgLabel.setToolTipText("Your average hit on " + monsterName + ", 0s included");
 
-		styleRow.setOpaque(false);
-		for (CombatStyle style : STYLES)
+		JLabel[] styleCaptions = new JLabel[STYLES.length];
+		JLabel[] styleLabels = new JLabel[STYLES.length];
+		for (int i = 0; i < STYLES.length; i++)
 		{
+			CombatStyle style = STYLES[i];
 			JLabel value = Theme.boldLabel("-", Theme.SUBTLE);
+			value.setToolTipText("Biggest " + style.getDisplayName().toLowerCase() + " hit on " + monsterName);
 			styleValues.put(style, value);
-			JPanel tile = tile(value, style.getDisplayName());
-			tile.setToolTipText("Biggest " + style.getDisplayName().toLowerCase() + " hit on " + monsterName);
-			styleRow.add(tile);
+			styleLabels[i] = value;
+			styleCaptions[i] = UiKit.caption(styleCaption(style));
 		}
+		styleRow = spaced(UiKit.strip(styleLabels, styleCaptions));
 
-		fightRow.setOpaque(false);
-		JPanel accuracyTile = tile(accuracyValue, "Accuracy");
-		accuracyTile.setToolTipText("<html>The share of your hits on " + monsterName + " that did damage.<br>"
+		accuracyValue.setToolTipText("<html>The share of your hits on " + monsterName + " that did damage.<br>"
 			+ "A 0 counts as a miss, though a hit can also roll 0.</html>");
-		JPanel dpsTile = tile(dpsValue, "DPS");
-		dpsTile.setToolTipText("Your damage per second while fighting " + monsterName);
-		JPanel uptimeTile = tile(uptimeValue, "Uptime");
-		uptimeTile.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
+		dpsValue.setToolTipText("Your damage per second while fighting " + monsterName);
+		uptimeValue.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
 			+ "before the next attack<br>(eating, moving, a late click) count against it. Breaks over 10 seconds aren't counted.</html>");
-		fightRow.add(accuracyTile);
-		fightRow.add(dpsTile);
-		fightRow.add(uptimeTile);
+		fightRow = spaced(UiKit.strip(new JLabel[]{accuracyValue, dpsValue, uptimeValue},
+			new JLabel[]{UiKit.caption("acc"), UiKit.caption("dps"), UiKit.caption("uptime")}));
 		fightRow.setVisible(false);
 
-		timesRow.setOpaque(false);
-		JPanel pbTile = tile(pbValue, "PB");
-		pbTile.setToolTipText("Your fastest kill, from the game's own fight duration message");
-		JPanel lastTile = tile(lastValue, "Last");
-		lastTile.setToolTipText("Your most recent kill");
-		JPanel avgTile = tile(avgValue, "Avg");
-		avgTile.setToolTipText("Your average over your recent kills (up to " + BossTimes.RECENT_KILLS + ")");
-		timesRow.add(pbTile);
-		timesRow.add(lastTile);
-		timesRow.add(avgTile);
+		pbValue.setToolTipText("Your fastest kill, from the game's own fight duration message");
+		lastValue.setToolTipText("Your most recent kill");
+		avgValue.setToolTipText("Your average over your recent kills (up to " + BossTimes.RECENT_KILLS + ")");
+		timesRow = spaced(UiKit.strip(new JLabel[]{pbValue, lastValue, avgValue},
+			new JLabel[]{UiKit.caption("pb"), UiKit.caption("last"), UiKit.caption("avg")}));
 		timesRow.setVisible(false);
-		JPanel tileRows = new JPanel(new BorderLayout(0, TILE_GAP));
-		tileRows.setOpaque(false);
-		tileRows.add(styleRow, BorderLayout.NORTH);
-		tileRows.add(fightRow, BorderLayout.SOUTH);
 
-		JPanel stats = new JPanel(new BorderLayout(0, TILE_GAP));
-		stats.setOpaque(false);
-		stats.add(statsRow, BorderLayout.NORTH);
-		stats.add(tileRows, BorderLayout.CENTER);
 		// BoxLayout skips hidden rows; a grid would leave blank space for them.
 		JPanel extra = new JPanel();
 		extra.setLayout(new BoxLayout(extra, BoxLayout.Y_AXIS));
 		extra.setOpaque(false);
-		extra.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
 		collectionGrid.setOpaque(false);
-		collectionGrid.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+		collectionGrid.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 0));
 		collectionGrid.setVisible(false);
-		timesRow.setBorder(BorderFactory.createEmptyBorder(0, 0, 2, 0));
-		overview.with(killsRateRow).with(gpRateRow).with(fightRateRow).with(taskRow).with(rareRow).with(sinceUniqueRow).with(prayerRow);
-		collectionSection.with(collectionGrid).with(driestRow);
+		lootGrid.setOpaque(false);
+		lootGrid.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+		overview.with(killsRateRow).with(gpRateRow).with(fightRateRow).with(prayerRow).with(taskRow);
+		collectionSection.with(sinceUniqueRow).with(rareRow).with(driestRow).with(collectionGrid);
+		showAllLabel.setHorizontalAlignment(JLabel.RIGHT);
+		showAllLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		showAllLabel.setVisible(false);
+		showAllLabel.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				toggleAllLoot();
+			}
+		});
+		dropsSection.with(lootGrid).with(showAllLabel);
+		fightSection.with(spaced(statsRow)).with(styleRow).with(fightRow).with(damageTakenRow).with(flawlessRow).with(idleRow);
 		bossSection.with(timesRow).with(achievementsRow);
 		costsSection.with(suppliesRow).with(netRow).with(netRateRow).with(deathsRow);
-		fightSection.with(damageTakenRow).with(flawlessRow).with(idleRow);
-		for (InfoRow.Section section : new InfoRow.Section[]{overview, fightSection, collectionSection, bossSection, costsSection})
+		for (InfoRow.Section section : new InfoRow.Section[]{overview, collectionSection, dropsSection, fightSection, bossSection,
+			costsSection})
 		{
 			section.setVisible(false);
 			extra.add(section);
 		}
-		stats.add(extra, BorderLayout.SOUTH);
 
-		lootGrid.setOpaque(false);
+		body.setOpaque(false);
+		body.setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8));
+		body.add(extra, BorderLayout.NORTH);
 
-		body.setBackground(Theme.CARD);
-		body.setBorder(BorderFactory.createEmptyBorder(7, 8, 8, 8));
-		body.add(stats, BorderLayout.NORTH);
-		body.add(lootGrid, BorderLayout.CENTER);
-
-		JPanel stack = new JPanel(new BorderLayout());
-		stack.add(header, BorderLayout.NORTH);
-		stack.add(body, BorderLayout.CENTER);
-		add(stack, BorderLayout.NORTH);
+		shell.add(header, BorderLayout.NORTH);
+		shell.add(body, BorderLayout.CENTER);
+		add(shell, BorderLayout.NORTH);
 
 		JPopupMenu menu = new JPopupMenu();
 		JMenuItem toggle = new JMenuItem("Collapse / expand");
@@ -293,13 +327,15 @@ class MonsterCard extends JPanel
 			@Override
 			public void mouseEntered(MouseEvent e)
 			{
-				header.setBackground(Theme.CARD_HOVER);
+				shell.setBackground(Theme.CARD_HOVER);
+				shell.repaint();
 			}
 
 			@Override
 			public void mouseExited(MouseEvent e)
 			{
-				header.setBackground(Theme.HEADER);
+				shell.setBackground(Theme.CARD);
+				shell.repaint();
 			}
 		});
 
@@ -329,6 +365,92 @@ class MonsterCard extends JPanel
 	}
 
 	/**
+	 * WHAT: Marks the card as the monster you're fighting now, and shows this session's kills.
+	 * WHY: The card you're fighting gets a green outline and "fighting", so it's easy to find;
+	 * "+12 today" shows progress even on the all time view.
+	 * PRE: Swing thread. sessionKills is this session's kills, or 0.
+	 * POST: The header and outline are updated.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	void setStatus(boolean fightingNow, int sessionKills, boolean showToday)
+	{
+		fighting = fightingNow;
+		todayKills = showToday ? sessionKills : 0;
+		refreshHeader();
+	}
+
+	private int todayKills;
+
+	/**
+	 * WHAT: Redraws the header's second line, its right side and the outline from the latest values.
+	 * WHY: Both update() and setStatus() change parts of it.
+	 * PRE: Swing thread.
+	 * POST: The header shows the current state.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void refreshHeader()
+	{
+		todayLabel.setText(todayKills > 0 ? "+" + Formatting.withCommas(todayKills) + " today" : "");
+		todayLabel.setVisible(!todayLabel.getText().isEmpty());
+		// The "2h ago" goes when there's a "+12 today" or the fight is now.
+		killsLabel.setText(killsText + (todayLabel.isVisible() || fighting || sinceText.isEmpty() ? "" : "  ·  " + sinceText));
+		if (fighting)
+		{
+			statusLabel.setText("● fighting");
+			statusLabel.setForeground(Theme.SUCCESS);
+		}
+		else
+		{
+			statusLabel.setText(rateText);
+			statusLabel.setForeground(Theme.GOLD);
+		}
+		shell.outline(fighting ? Theme.SUCCESS : pinned ? Theme.GOLD : null);
+	}
+
+	private String killsText = "";
+	private String rateText = "";
+
+	/**
+	 * WHAT: Wraps a strip so strips stacked in a section have a small gap between them.
+	 * WHY: A rounded strip paints its whole area, so the gap can't be its own border.
+	 * PRE: strip is a component to show.
+	 * POST: Returns a holder; show or hide the holder.
+	 * RETURN: the holder
+	 * THROWS: Nothing.
+	 */
+	private static JPanel spaced(JComponent strip)
+	{
+		JPanel holder = new JPanel(new BorderLayout());
+		holder.setOpaque(false);
+		holder.setBorder(BorderFactory.createEmptyBorder(1, 0, 3, 0));
+		holder.add(strip, BorderLayout.CENTER);
+		return holder;
+	}
+
+	/**
+	 * WHAT: The short caption for a style's biggest hit: "melee", "range" or "mage".
+	 * WHY: Fits beside the number in a strip cell.
+	 * PRE: style is not null.
+	 * POST: Nothing changes.
+	 * RETURN: the caption
+	 * THROWS: Nothing.
+	 */
+	static String styleCaption(CombatStyle style)
+	{
+		switch (style)
+		{
+			case RANGED:
+				return "range";
+			case MAGIC:
+				return "mage";
+			default:
+				return "melee";
+		}
+	}
+
+	/**
 	 * Supplies used fighting this monster, or null for none.
 	 */
 	void updateSupplies(SupplyLedger.Totals supplies)
@@ -343,6 +465,8 @@ class MonsterCard extends JPanel
 		double netPerHour = show ? ActivityTimer.perHour(net, activeMillis) : -1;
 		netRateRow.set(show && activeMillis > 0 && Math.abs(netPerHour) > 0 ? (netPerHour < 0 ? "-" : "")
 			+ Formatting.compactXp(Math.round(Math.abs(netPerHour))) + " gp/hr" : null, netPerHour >= 0 ? Theme.GOLD : BAD, netTip);
+		costsSection.setDetail(show ? (net < 0 ? "-" : "+") + Formatting.compactXp(Math.abs(net)) + " net" : "",
+			net >= 0 ? Theme.GOLD : BAD, show ? netTip : null);
 		costsSection.refresh();
 	}
 
@@ -354,6 +478,7 @@ class MonsterCard extends JPanel
 	{
 		List<Double> recent = times == null ? java.util.Collections.emptyList() : times.recentOrEmpty();
 		timesRow.setVisible(times != null && times.best > 0);
+		bossSection.setDetail(times != null && times.best > 0 ? "PB " + KillTimerOverlay.clock(times.best) : "", Theme.GOLD, null);
 		if (times != null && times.best > 0)
 		{
 			pbValue.setText(KillTimerOverlay.clock(times.best));
@@ -450,7 +575,7 @@ class MonsterCard extends JPanel
 
 	private JLabel collectionSlot(CollectionLog.Item item, DryCalculator.Dry dry, boolean driest)
 	{
-		JLabel slot = emptySlot();
+		Slot slot = emptySlot();
 		if (itemManager != null && item.id > 0)
 		{
 			AsyncBufferedImage image = itemManager.getImage(item.id);
@@ -467,7 +592,7 @@ class MonsterCard extends JPanel
 		}
 		if (driest)
 		{
-			slot.setBorder(BorderFactory.createLineBorder(DEATHS, 1));
+			slot.setOutline(DEATHS);
 		}
 		String status = item.obtained ? "<font color='#60dc8c'>Obtained</font>"
 			: dry != null ? DryCalculator.line(dry).substring(item.name.length() + 2) : "Not obtained yet";
@@ -520,30 +645,10 @@ class MonsterCard extends JPanel
 	void updateFight(int accuracy, double dps, int uptime)
 	{
 		fightRow.setVisible(accuracy >= 0 || dps >= 0 || uptime >= 0);
+		fightSection.setDetail(uptime >= 0 ? uptime + "% uptime" : "", Theme.MUTED, null);
 		accuracyValue.setText(accuracy >= 0 ? accuracy + "%" : "-");
 		dpsValue.setText(dps >= 0 ? String.format(java.util.Locale.US, "%.1f", dps) : "-");
 		uptimeValue.setText(uptime >= 0 ? uptime + "%" : "-");
-	}
-
-	/**
-	 * A small stat tile: the value above a caption, centred, like the tiles at the top of the
-	 * panel.
-	 */
-	static JPanel tile(JLabel value, String caption)
-	{
-		return tile(value, Theme.label(caption, Theme.MUTED));
-	}
-
-	private static JPanel tile(JLabel value, JLabel label)
-	{
-		JPanel tile = new JPanel(new BorderLayout(0, 0));
-		tile.setBackground(Theme.HEADER);
-		tile.setBorder(BorderFactory.createEmptyBorder(1, 2, 1, 2));
-		value.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
-		label.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
-		tile.add(value, BorderLayout.NORTH);
-		tile.add(label, BorderLayout.SOUTH);
-		return tile;
 	}
 
 	/**
@@ -609,11 +714,10 @@ class MonsterCard extends JPanel
 	 */
 	void update(MonsterTracker.Snapshot s, int taskRemaining, long rareValue, boolean pinned)
 	{
-		// A gold stripe marks pinned cards.
-		header.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, pinned ? 3 : 0, 0, 0, Theme.GOLD),
-			BorderFactory.createEmptyBorder(6, pinned ? 5 : 8, 6, 8)));
+		// A gold outline marks pinned cards (green wins while you're fighting it).
+		this.pinned = pinned;
 		header.setToolTipText(pinned ? "Pinned to the top. Right-click to unpin." : null);
+		taskTag.setVisible(taskRemaining > 0);
 
 		if (s.getKills() > 0 && rareValue < Long.MAX_VALUE)
 		{
@@ -641,8 +745,7 @@ class MonsterCard extends JPanel
 		CollectionLog.Status log = plugin.getCollectionStatus(monsterName);
 		if (log != null)
 		{
-			String kc = log.getKillCount() >= 0 ? ", " + Formatting.withCommas(log.getKillCount()) + " kc" : "";
-			collectionSection.setDetail(log.getObtained() + "/" + log.getTotal() + kc,
+			collectionSection.setDetail(log.getObtained() + "/" + log.getTotal() + " log",
 				log.isComplete() ? Theme.SUCCESS : Theme.GOLD, collectionTooltip(log));
 		}
 
@@ -667,9 +770,14 @@ class MonsterCard extends JPanel
 
 		lootValue = s.getLootValue();
 		activeMillis = s.getActiveMillis();
-		killsLabel.setText(s.getKills() > 0 ? "x " + s.getKills() : "");
-		valueLabel.setText(s.getLootValue() > 0 ? QuantityFormatter.quantityToStackSize(s.getLootValue()) + " gp" : "");
-		valueLabel.setToolTipText(s.getLootValue() > 0 ? Formatting.withCommas(s.getLootValue()) + " gp" : null);
+		killsText = s.getKills() > 0 ? Formatting.withCommas(s.getKills()) + (s.getKills() == 1 ? " kill" : " kills")
+			: Formatting.withCommas(s.getHits()) + (s.getHits() == 1 ? " hit" : " hits");
+		sinceText = UiKit.ago(s.getLastActivityMillis(), System.currentTimeMillis());
+		valueLabel.setText(s.getLootValue() > 0 ? QuantityFormatter.quantityToStackSize(s.getLootValue()) : "");
+		valueLabel.setToolTipText(s.getLootValue() > 0 ? Formatting.withCommas(s.getLootValue()) + " gp of loot" : null);
+		double headerRate = s.getTripGpPerHour();
+		rateText = headerRate > 0 ? QuantityFormatter.quantityToStackSize(Math.round(headerRate)) + "/hr" : "";
+		statusLabel.setToolTipText(headerRate > 0 ? "Loot per hour of your last trip here" : null);
 
 		hitsLabel.setText(Formatting.withCommas(s.getHits()));
 		avgLabel.setText(String.format(java.util.Locale.US, "%.1f", s.getAverageHit()));
@@ -679,13 +787,13 @@ class MonsterCard extends JPanel
 			CombatStyle style = s.getBiggestHitStyle();
 			maxLabel.setForeground(style != null ? style.getColor() : Theme.TEXT);
 			maxLabel.setToolTipText(style != null ? "Biggest hit, dealt with " + style.getDisplayName() : "Biggest hit");
-			maxCaption.setText(style != null ? "Max (" + shortName(style) + ")" : "Max hit");
+			maxCaption.setText(style != null ? "max " + shortName(style) : "max");
 		}
 		else
 		{
 			maxLabel.setText("-");
 			maxLabel.setForeground(Theme.SUBTLE);
-			maxCaption.setText("Max hit");
+			maxCaption.setText("max");
 		}
 
 		for (CombatStyle style : STYLES)
@@ -717,6 +825,10 @@ class MonsterCard extends JPanel
 		collectionSection.refresh();
 
 		updateLoot(s.getLoot());
+		dropsSection.setDetail(s.getLoot().isEmpty() ? "" : s.getLoot().size() + (s.getLoot().size() == 1 ? " kind" : " kinds"),
+			Theme.MUTED, "Right-click an item to ignore it, or to remove it from this monster's loot");
+		dropsSection.refresh();
+		refreshHeader();
 	}
 
 	/**
@@ -731,11 +843,13 @@ class MonsterCard extends JPanel
 			key.append(line.getItemId()).append(':').append(line.getQuantity()).append(':').append(line.getUnitPrice())
 				.append(':').append(line.isRare()).append(',');
 		}
+		key.append(showAllLoot);
 		if (key.toString().equals(lootKey))
 		{
 			return;
 		}
 		lootKey = key.toString();
+		lastLoot = loot;
 
 		lootGrid.removeAll();
 		if (loot.isEmpty())
@@ -746,24 +860,48 @@ class MonsterCard extends JPanel
 		else
 		{
 			lootGrid.setLayout(new GridLayout(0, ITEMS_PER_ROW, 2, 2));
-			for (MonsterTracker.LootLine line : loot)
+			// The most valuable two rows, unless "Show all" is open.
+			int shown = showAllLoot ? loot.size() : Math.min(loot.size(), FOLDED_LOOT);
+			for (MonsterTracker.LootLine line : loot.subList(0, shown))
 			{
 				lootGrid.add(itemSlot(line));
 			}
 			// Pad the last row so icons stay the same size.
-			int remainder = loot.size() % ITEMS_PER_ROW;
+			int remainder = shown % ITEMS_PER_ROW;
 			for (int i = 0; remainder != 0 && i < ITEMS_PER_ROW - remainder; i++)
 			{
 				lootGrid.add(emptySlot());
 			}
 		}
+		int more = loot.size() - FOLDED_LOOT;
+		showAllLabel.setVisible(more > 0);
+		showAllLabel.setText(showAllLoot ? "Show less  ▴" : "Show all " + loot.size() + "  ▾");
 		lootGrid.revalidate();
 		lootGrid.repaint();
 	}
 
+	/**
+	 * WHAT: Opens or folds the full drops grid.
+	 * WHY: A boss with 50+ kinds of drop would fill the whole sidebar; two rows show the best ones.
+	 * PRE: Swing thread.
+	 * POST: The grid is rebuilt with all drops or the top ones.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void toggleAllLoot()
+	{
+		showAllLoot = !showAllLoot;
+		if (lastLoot != null)
+		{
+			updateLoot(lastLoot);
+		}
+		revalidate();
+		repaint();
+	}
+
 	private JLabel itemSlot(MonsterTracker.LootLine line)
 	{
-		JLabel slot = emptySlot();
+		Slot slot = emptySlot();
 		int quantity = (int) Math.min(Integer.MAX_VALUE, line.getQuantity());
 		if (itemManager != null)
 		{
@@ -777,29 +915,81 @@ class MonsterCard extends JPanel
 		if (line.isRare())
 		{
 			// Rare drops get a gold border and are sorted first.
-			slot.setBorder(BorderFactory.createLineBorder(Theme.GOLD, 1));
+			slot.setOutline(Theme.GOLD);
 		}
 		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value
-			+ "<br><font color='#888888'>Right-click to ignore</font></html>");
+			+ "<br><font color='#888888'>Right-click to ignore or remove</font></html>");
 
 		JPopupMenu menu = new JPopupMenu();
 		JMenuItem ignore = new JMenuItem("Ignore " + line.getName());
 		ignore.setToolTipText("Leave it out of loot and loot value everywhere. Undo in the plugin settings.");
 		ignore.addActionListener(e -> plugin.ignoreItem(line.getName()));
 		menu.add(ignore);
+		JMenuItem remove = new JMenuItem("Remove from loot");
+		remove.setToolTipText("For items that were never a drop, like your own gear back from a gravestone");
+		remove.addActionListener(e ->
+		{
+			int answer = JOptionPane.showConfirmDialog(this,
+				"Remove " + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + " from the " + monsterName
+					+ " loot?\nThis can't be undone.", "Remove from loot", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+			if (answer == JOptionPane.OK_OPTION)
+			{
+				plugin.removeLoot(monsterName, line.getItemId());
+			}
+		});
+		menu.add(remove);
 		slot.setComponentPopupMenu(menu);
 		return slot;
 	}
 
-	private static JLabel emptySlot()
+	private static Slot emptySlot()
 	{
-		JLabel slot = new JLabel();
-		slot.setOpaque(true);
-		slot.setBackground(Theme.SLOT);
+		Slot slot = new Slot();
 		slot.setPreferredSize(ITEM_SIZE);
 		slot.setHorizontalAlignment(JLabel.CENTER);
 		slot.setVerticalAlignment(JLabel.CENTER);
 		return slot;
+	}
+
+	/**
+	 * WHAT: An item slot: a rounded dark square with the item, and an optional coloured outline.
+	 * WHY: Matches the rounded cards; gold marks rare drops and red the driest collection log item.
+	 * PRE: Swing thread.
+	 * POST: Paints its background and outline, then the item icon.
+	 * RETURN: Not applicable.
+	 * THROWS: Nothing.
+	 */
+	static final class Slot extends JLabel
+	{
+		private java.awt.Color outline;
+
+		Slot()
+		{
+			setOpaque(false);
+		}
+
+		void setOutline(java.awt.Color colour)
+		{
+			outline = colour;
+			repaint();
+		}
+
+		@Override
+		protected void paintComponent(java.awt.Graphics g)
+		{
+			java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+			g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+			g2.setColor(Theme.current().isLight() ? Theme.SLOT : new java.awt.Color(28, 28, 28));
+			g2.fill(new java.awt.geom.RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 6, 6));
+			if (outline != null)
+			{
+				g2.setStroke(new java.awt.BasicStroke(1.5f));
+				g2.setColor(outline);
+				g2.draw(new java.awt.geom.RoundRectangle2D.Float(0.75f, 0.75f, getWidth() - 1.5f, getHeight() - 1.5f, 6, 6));
+			}
+			g2.dispose();
+			super.paintComponent(g);
+		}
 	}
 
 	/**

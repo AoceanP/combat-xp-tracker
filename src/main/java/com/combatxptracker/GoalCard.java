@@ -39,7 +39,6 @@ import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
-import javax.swing.border.Border;
 import net.runelite.api.Experience;
 import net.runelite.api.Skill;
 import net.runelite.client.game.SkillIconManager;
@@ -63,7 +62,8 @@ class GoalCard extends JPanel
 	private final CombatXpTrackerConfig config;
 	private final CombatXpTrackerPanel owner;
 
-	private final JPanel content = new JPanel(new BorderLayout(0, 4));
+	// 2.2: a rounded card; the bar carries the goal's colour.
+	private final UiKit.RoundPanel content = new UiKit.RoundPanel(new BorderLayout(0, 4), Theme.CARD, UiKit.CARD_RADIUS);
 	private final JLabel nameLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel levelLabel = Theme.label("", Theme.MUTED);
 	private final JLabel rateLabel = Theme.label("", Theme.MUTED);
@@ -119,6 +119,10 @@ class GoalCard extends JPanel
 		content.add(bottom, BorderLayout.SOUTH);
 
 		tintedPanels = new JPanel[]{content, top, text, titleRow, rateRow, footer, bottom};
+		for (JPanel p : tintedPanels)
+		{
+			p.setOpaque(false);
+		}
 		setCardBackground(Theme.CARD);
 
 		add(content, BorderLayout.NORTH);
@@ -178,19 +182,15 @@ class GoalCard extends JPanel
 
 	private void setCardBackground(Color color)
 	{
-		for (JPanel p : tintedPanels)
-		{
-			p.setBackground(color);
-		}
+		// Only the rounded card paints; the panels inside it are see-through.
+		content.setBackground(color);
+		content.repaint();
 		updateBorder();
 	}
 
 	private void updateBorder()
 	{
-		Color stripe = accent != null ? accent : Theme.accent(config.goalBarColor());
-		Border inner = BorderFactory.createEmptyBorder(7, 8, 7, 8);
-		content.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 3, 0, 0, stripe), inner));
+		content.setBorder(BorderFactory.createEmptyBorder(7, 8, 8, 8));
 	}
 
 	private JPopupMenu buildMenu()

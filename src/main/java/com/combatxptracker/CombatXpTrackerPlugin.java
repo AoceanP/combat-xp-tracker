@@ -88,6 +88,7 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.Notifier;
@@ -211,6 +212,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	private static final String LOOT_OPTION = "Loot";
 	/** How long (3.6s) to wait after a "Loot" click for the reward to arrive. */
 	private static final int LOOT_WINDOW_TICKS = 6;
+	/** A "Loot" click only counts as boss loot within this long (2 minutes) of killing that boss. */
+	static final int LOOT_AFTER_KILL_TICKS = 200;
 	// A boss kill and its kill count message arrive close together. Multi-NPC bosses (the
 	// Royal Titans) send the message when the last one dies, so allow a while after the first.
 	private static final int KILL_COUNT_WINDOW_TICKS = 100;
@@ -481,6 +484,8 @@ public class CombatXpTrackerPlugin extends Plugin
 	// Multi-NPC bosses: last tick a member's death counted as a kill, so e.g. both Royal
 	// Titans dying in one fight count once.
 	private final Map<BossGroups, Integer> lastGroupKillTick = new EnumMap<>(BossGroups.class);
+	// Last tick each tracked monster was killed, so a "Loot" click only counts right after a kill.
+	private final Map<String, Integer> lastKillTick = new HashMap<>();
 
 	// Current slayer task for the Monsters tab, read each tick. Null/0 without a task.
 	private volatile String slayerTaskName;
@@ -629,6 +634,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		monsterTracker.reset();
 		sessionMonsters.reset();
 		lastGroupKillTick.clear();
+		lastKillTick.clear();
 		taskSession.clear();
 		xpPerKill.clear();
 		xpTarget = null;
@@ -1094,6 +1100,10 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void onPlayerDeath()
 	{
+		// Anything that comes back into the inventory after a death (the gravestone, Death's
+		// Office) is your own stuff, not the reward of a "Loot" click.
+		pendingLootNpc = null;
+		pendingLootBefore = null;
 		String monster = deathCause();
 		if (monster == null)
 		{
@@ -1617,6 +1627,7 @@ public class CombatXpTrackerPlugin extends Plugin
 			sessionDamageTaken.record(tracked, damageSinceKill);
 		}
 		damageSinceKill = 0;
+		lastKillTick.put(tracked, client.getTickCount());
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
 		if (config.rememberMonsters())
@@ -1657,11 +1668,17 @@ public class CombatXpTrackerPlugin extends Plugin
 			return;
 		}
 		String name = cleanName(npc.getName());
-		if (name == null)
+		// Looting your own gravestone gives back what you died with: never boss loot.
+		if (name == null || isGravestone(npc.getId(), name))
 		{
 			return;
 		}
-		pendingLootNpc = BossGroups.trackedName(name);
+		String tracked = BossGroups.trackedName(name);
+		if (!lootFollowsKill(lastKillTick.get(tracked), client.getTickCount()))
+		{
+			return;
+		}
+		pendingLootNpc = tracked;
 		pendingLootTick = client.getTickCount();
 		pendingLootBefore = inventoryCounts(client.getItemContainer(InventoryID.INV));
 	}
@@ -2651,6 +2668,35 @@ public class CombatXpTrackerPlugin extends Plugin
 		return attackStyle != null ? attackStyle.getStyle() : null;
 	}
 
+	/**
+	 * WHAT: Whether an NPC is a player's gravestone, in any of its styles.
+	 * WHY: A gravestone has a "Loot" option like the Royal Titans, but gives back the
+	 * player's own items, which must never be counted as monster loot.
+	 * PRE: npcName is the cleaned NPC name, or null.
+	 * POST: Nothing changes.
+	 * RETURN: true for a gravestone NPC id or a grave by name
+	 * THROWS: Nothing.
+	 */
+	static boolean isGravestone(int npcId, String npcName)
+	{
+		return (npcId >= NpcID.GRAVESTONE_DEFAULT && npcId <= NpcID.GRAVESTONE_ANGEL_255)
+			|| "Grave".equalsIgnoreCase(npcName) || "Gravestone".equalsIgnoreCase(npcName);
+	}
+
+	/**
+	 * WHAT: Whether a "Loot" click comes soon enough after killing that monster to be its reward.
+	 * WHY: Only bosses you just killed hand out loot this way. Anything else with a "Loot"
+	 * option must not turn the next inventory change into loot.
+	 * PRE: killTick is the tick the monster was last killed, or null if never this login.
+	 * POST: Nothing changes.
+	 * RETURN: true if the kill was at most LOOT_AFTER_KILL_TICKS ago
+	 * THROWS: Nothing.
+	 */
+	static boolean lootFollowsKill(Integer killTick, int nowTick)
+	{
+		return killTick != null && nowTick >= killTick && nowTick - killTick <= LOOT_AFTER_KILL_TICKS;
+	}
+
 	private static String cleanName(String name)
 	{
 		if (name == null)
@@ -2801,6 +2847,21 @@ public class CombatXpTrackerPlugin extends Plugin
 		allTimeDamageTaken.remove(name);
 		sessionDamageTaken.remove(name);
 		offerRestore(name);
+		refreshPanelNow();
+	}
+
+	/**
+	 * WHAT: Removes one item from one monster's loot, all time and this session.
+	 * WHY: Cleans out items that were never a drop, like gear taken back from a gravestone.
+	 * PRE: Called from the panel after the player confirmed.
+	 * POST: The item is gone from that monster's loot; the change is saved on the next save tick.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	public void removeLoot(String monster, int itemId)
+	{
+		monsterTracker.removeLoot(monster, itemId);
+		sessionMonsters.removeLoot(monster, itemId);
 		refreshPanelNow();
 	}
 

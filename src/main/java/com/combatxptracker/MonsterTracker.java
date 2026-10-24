@@ -933,6 +933,28 @@ public class MonsterTracker
 		return revision;
 	}
 
+	/**
+	 * WHAT: Takes one item out of a monster's loot, with its rare drop records.
+	 * WHY: Items that were never a drop (e.g. your own gear back from a gravestone in 2.1.2
+	 * and earlier) can be cleaned out without removing the whole monster.
+	 * PRE: monsterName and itemId name a loot line, or nothing happens.
+	 * POST: The line is gone from the loot, its value and the rare drop history.
+	 * RETURN: true if something was removed
+	 * THROWS: Nothing.
+	 */
+	public synchronized boolean removeLoot(String monsterName, int itemId)
+	{
+		Entry e = monsterName == null ? null : entries.get(monsterName);
+		if (e == null || e.loot.remove(itemId) == null)
+		{
+			return false;
+		}
+		e.untimedLoot.remove(itemId);
+		e.rareDrops.removeIf(r -> r.itemId == itemId);
+		revision++;
+		return true;
+	}
+
 	public synchronized void remove(String monsterName)
 	{
 		if (entries.remove(monsterName) != null)

@@ -86,11 +86,18 @@ final class InfoRow extends JPanel
 		label.setText(name);
 	}
 
+	/**
+	 * WHAT: Spacing under the row. 2.2 drops the line between rows: sections already
+	 * have a rule above them, and rows read cleaner without one each.
+	 * WHY: Kept as a method so Section can still tighten the last row.
+	 * PRE: None.
+	 * POST: The row's border is set.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
 	private void divider(boolean show)
 	{
-		setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 0, show ? 1 : 0, 0, Theme.BORDER),
-			BorderFactory.createEmptyBorder(2, 0, show ? 2 : 3, 0)));
+		setBorder(BorderFactory.createEmptyBorder(1, 0, show ? 1 : 0, 0));
 	}
 
 	@Override
@@ -105,7 +112,7 @@ final class InfoRow extends JPanel
 	 */
 	static final class Section extends JPanel
 	{
-		private final JLabel title = Theme.label("", Theme.SUBTLE);
+		private final JLabel title = Theme.boldLabel("", Theme.TEXT);
 		private final JLabel detail = Theme.label("", Theme.MUTED);
 		private final List<JComponent> parts = new ArrayList<>();
 
@@ -119,11 +126,14 @@ final class InfoRow extends JPanel
 			setAlignmentX(LEFT_ALIGNMENT);
 			if (heading != null)
 			{
+				// 2.2: a thin rule, then the title in bold with its summary on the right.
 				JPanel top = new JPanel(new BorderLayout(6, 0));
 				top.setOpaque(false);
 				top.setAlignmentX(LEFT_ALIGNMENT);
-				top.setBorder(BorderFactory.createEmptyBorder(6, 0, 2, 0));
-				title.setText(heading.toUpperCase(java.util.Locale.ROOT));
+				top.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(1, 0, 0, 0, UiKit.line()),
+					BorderFactory.createEmptyBorder(5, 0, 2, 0)));
+				title.setText(heading);
 				detail.setHorizontalAlignment(JLabel.RIGHT);
 				top.add(title, BorderLayout.WEST);
 				top.add(detail, BorderLayout.CENTER);

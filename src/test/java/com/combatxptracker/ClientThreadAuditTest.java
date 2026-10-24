@@ -52,7 +52,7 @@ public class ClientThreadAuditTest
 	private static final Path SOURCES = Paths.get("src/main/java/com/combatxptracker");
 	private static final List<String> SWING_FILES = Arrays.asList("CombatXpTrackerPanel.java", "SlayerView.java",
 		"MonsterCard.java", "TargetCard.java", "DropRevealCard.java", "WrappedDialog.java", "RestoreChooser.java",
-		"GoalCard.java");
+		"GoalCard.java", "UiKit.java");
 	private static final List<String> CLIENT_ONLY = Arrays.asList("itemManager.getItemPrice", "itemManager.getItemComposition",
 		"itemManager.getItemStats", "client.get", "client.set", "npcManager.", "maxHitCalculator.");
 	private static final Pattern CLIENT_THREAD_BLOCK = Pattern.compile(
