@@ -711,7 +711,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		if (text != null && !text.isEmpty())
 		{
 			// Wraps onto a second line rather than being cut off.
-			JLabel setupLabel = Theme.label("<html><div style='width:175px'>" + text + "</div></html>", Theme.SUBTLE);
+			JLabel setupLabel = Theme.label("<html><div style='width:135px'>" + text + "</div></html>", Theme.SUBTLE);
 			setupLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
 			setupLabel.setToolTipText(text);
 			maxHitDetails.add(setupLabel);

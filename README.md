@@ -1,9 +1,37 @@
 # Combat & XP Tracker
 
-A RuneLite plugin for skill goals, max hits for every combat style, and per-monster hits, kills and drops, all in one sidebar panel.
+**Your whole combat session in one panel: kills, loot, profit, luck and Slayer, live.**
+
+<p align="center">
+  <img src="docs/images/hero.gif" alt="A Vorkath trip in the panel: the target's health drains, kills tick up and a head drops" width="450">
+</p>
+
+Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
+
+## At a glance
+- **Every monster on its own card:** kills, loot, GP/hr, profit, accuracy, DPS and your biggest hit
+- **Bosses:** personal bests, a live kill timer, dry streaks, collection log progress, and your drop luck against the wiki's rates
+- **Slayer:** where to go and what to bring, next task odds, points milestones, superiors and a log of every task
+- **Goals:** skill goals and kill count goals with time left at your real rates
+- **Max hit** for every style, with gear, prayers, potions and on-task bonuses
+- **Share it:** a share card for any monster, made for Discord and Reddit, or a text summary of your session
+
+<table>
+  <tr>
+    <th>Goals</th>
+    <th>Monsters</th>
+    <th>Slayer</th>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/images/goals.png" alt="Goals tab" width="260"></td>
+    <td valign="top"><img src="docs/images/monsters.png" alt="Monsters tab" width="260"></td>
+    <td valign="top"><img src="docs/images/slayer.png" alt="Slayer tab" width="260"></td>
+  </tr>
+</table>
 
 > **Lost your stats after updating to 2.0?** See the [2.0 data loss FAQ](RECOVERY.md).
 
+# All features
 ## Goals
 - Set a goal from the panel (**+ Add goal**) or by right-clicking a skill in the stats tab and choosing **Set goal**
 - Goals can be a level from 2 to 126 (virtual levels past 99 work) or an XP amount up to 200M: `99`, `126`, `13.03m`, `200m`, `500k`
@@ -105,6 +133,7 @@ Twelve colour themes for the sidebar in the settings: Dark (the original, and th
 - **Copy** puts a text summary of your session (XP, hits, attack uptime and DPS, kills, loot, top monsters with their PBs and drop luck, and skill and kill count goals) on your clipboard, ready to paste into Discord
 - **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
 - **Copy as image**: right-click any monster card to copy a picture of it, ready to paste into Discord
+- **Copy share card**: right-click any monster card for a picture made for posting: its name and kill count large, PB, kills/hr, loot, GP/hr, drop luck and best drops
 - Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
 
 ## Overlays

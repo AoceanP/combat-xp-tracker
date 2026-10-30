@@ -324,6 +324,17 @@ class MonsterCard extends JPanel
 		copyImage.setToolTipText("Copies this card as a picture, to paste into Discord");
 		copyImage.addActionListener(e -> WrappedDialog.copyImage(snapshot()));
 		menu.add(copyImage);
+		JMenuItem shareCard = new JMenuItem("Copy share card");
+		shareCard.setToolTipText("Copies a picture made for posting: kills, PB, loot, drop luck and best drops");
+		shareCard.addActionListener(e ->
+		{
+			ShareCard.Data data = shareData();
+			if (data != null)
+			{
+				WrappedDialog.copyImage(ShareCard.render(data));
+			}
+		});
+		menu.add(shareCard);
 		JMenuItem remove = new JMenuItem("Remove " + monsterName);
 		remove.addActionListener(e -> plugin.removeMonster(monsterName));
 		menu.add(remove);
@@ -398,6 +409,56 @@ class MonsterCard extends JPanel
 	}
 
 	private int todayKills;
+	// The latest values, kept for the share card.
+	private MonsterTracker.Snapshot shareSnapshot;
+	private long shareRareValue = Long.MAX_VALUE;
+	private BossTimes.Times shareTimes;
+	private DryCalculator.Luck shareLuck;
+
+	/**
+	 * WHAT: The numbers and icons for this monster's share card, from what the card shows now.
+	 * WHY: The share card must match the card it was copied from, range and all.
+	 * PRE: Swing thread.
+	 * POST: Nothing changes.
+	 * RETURN: the data, or null before the card has been filled in
+	 * THROWS: Nothing.
+	 */
+	ShareCard.Data shareData()
+	{
+		MonsterTracker.Snapshot s = shareSnapshot;
+		if (s == null)
+		{
+			return null;
+		}
+		ShareCard.Data d = new ShareCard.Data();
+		d.name = s.getName();
+		d.kills = s.getKills();
+		d.killsToday = todayKills;
+		d.pbSeconds = shareTimes != null && shareTimes.best > 0 ? shareTimes.best : -1;
+		d.killsPerHour = s.getKillsPerHour();
+		d.loot = s.getLootValue();
+		d.gpPerHour = s.getTripGpPerHour();
+		d.luckPercent = shareLuck == null ? Double.NaN : shareLuck.percent();
+		if (s.getKills() > 0 && shareRareValue < Long.MAX_VALUE)
+		{
+			d.killsSinceRare = s.isRareSinceRestore() || s.hasEverDroppedRare() ? s.getKillsSinceRare() : s.getKills();
+		}
+		List<MonsterTracker.LootLine> loot = new java.util.ArrayList<>(s.getLoot());
+		// Rare drops first, since they're what people post; then the rest by total value.
+		loot.sort((a, b) -> a.isRare() != b.isRare() ? (a.isRare() ? -1 : 1) : Long.compare(b.getTotalValue(), a.getTotalValue()));
+		for (int i = 0; i < loot.size() && i < ShareCard.MAX_DROPS; i++)
+		{
+			MonsterTracker.LootLine line = loot.get(i);
+			if (line.getTotalValue() <= 0)
+			{
+				break;
+			}
+			d.drops.add(new ShareCard.Drop(itemManager == null ? null : itemManager.getImage(line.getItemId()),
+				line.getQuantity(), line.isRare()));
+		}
+		d.date = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.UK));
+		return d;
+	}
 
 	/**
 	 * WHAT: Redraws the header's second line, its right side and the outline from the latest values.
@@ -493,6 +554,7 @@ class MonsterCard extends JPanel
 	 */
 	void updateBoss(BossTimes.Times times, List<DryCalculator.Dry> dry, List<CombatAchievements.Task> achievements)
 	{
+		shareTimes = times;
 		List<Double> recent = times == null ? java.util.Collections.emptyList() : times.recentOrEmpty();
 		timesRow.setVisible(times != null && times.best > 0);
 		bossSection.setDetail(times != null && times.best > 0 ? "PB " + KillTimerOverlay.clock(times.best) : "", Theme.GOLD, null);
@@ -731,6 +793,8 @@ class MonsterCard extends JPanel
 	 */
 	void update(MonsterTracker.Snapshot s, int taskRemaining, long rareValue, boolean pinned)
 	{
+		shareSnapshot = s;
+		shareRareValue = rareValue;
 		// A gold outline marks pinned cards (green wins while you're fighting it).
 		this.pinned = pinned;
 		header.setToolTipText(pinned ? "Pinned to the top. Right-click to unpin." : null);
@@ -1038,6 +1102,7 @@ class MonsterCard extends JPanel
 	 */
 	void updateDropLuck(DryCalculator.Luck luck)
 	{
+		shareLuck = luck;
 		if (luck == null)
 		{
 			dropLuckRow.set(null);
