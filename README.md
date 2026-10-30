@@ -14,6 +14,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - A notification and a chat message when you reach a goal
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
 - Drag goals up or down to put them in your own order
+- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate
 
 ## Kills to level
 - Under the max hit: how many more kills of the monster you're fighting each combat skill needs for its next level, and your next combat level
@@ -54,6 +55,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Collection log: open a boss's page in the in-game Collection Log and its monster card shows how many of its items you have, which ones you're still missing and your kill count. It stays up to date as new items are added. Bosses and raids only, since slayer monsters share one page
 - Rare drops (worth more than a value you choose) get a gold border, and each monster shows your dry streak: kills since its last rare drop
 - Pin monsters to the top of the list, and drag pinned monsters into your own order
+- Pinned monsters keep their place in This session too, even before you fight them there
 - Loot valued at Grand Exchange or High Alchemy prices (for ironmen)
 - Search, sort, hide monsters, ignore items or remove one from a monster's loot (right-click an item), and collapsed cards stay collapsed. A boss's drops show its 10 most valuable items until you click Show all
 - Prayer drain: how long a prayer potion dose lasts while fighting each monster, measured from your own prayer points (restores and kills without prayer on aren't counted)
@@ -62,6 +64,7 @@ A RuneLite plugin for skill goals, max hits for every combat style, and per-mons
 - Kill times: **PB**, **Last** and **Avg** tiles on each boss card, from the game's own fight duration message, with a milestone message when you set a new personal best
 - Live kill timer: an on-screen timer during boss fights next to your PB, gold while you're on pace for a new best and red once it's out of reach. It shows the game's exact time when the kill lands
 - Dry calculator: the boss's collection log as item icons (owned bright, missing faded), with the driest missing item outlined in red and how dry you are, e.g. *Vorkath's head 2.4x the rate (91% would have it by now)*. Drop rates are bundled from the OSRS Wiki, nothing is looked up online
+- Luck vs average: how many uniques you've had from a boss against how many your kills should have given at the wiki's drop rates, e.g. *+18%*. Hover it for each item
 - Combat Achievements: how many of each boss's tasks you've done, read from the game's own Combat Achievements data. Hover for every task, with whether your PB is fast enough for its speed tasks
 - Damage taken per kill and flawless kills (no damage taken) on each boss
 - Big drop reveal: a new collection log item or a big drop (1M or your rare drop value) spins in at the top of the Monsters tab like opening a case, and a screenshot is saved in RuneLite's screenshots folder under Uniques. It can also show on the game screen for a few seconds (off by default)
@@ -99,7 +102,7 @@ A **Slayer** tab with everything about your slayer progress:
 Twelve colour themes for the sidebar in the settings: Dark (the original, and the default), Classic, Midnight, Abyssal, Zamorak, Saradomin, Guthix, Armadyl (light), Bandos, Dragonfire, Frostbite and Venom. Each theme has its own accent colour, unless you've picked your own goal bar colour.
 
 ## Session summary and sharing
-- **Copy** puts a text summary of your session (XP, hits, attack uptime and DPS, kills, loot, top monsters and goals) on your clipboard, ready to paste into Discord
+- **Copy** puts a text summary of your session (XP, hits, attack uptime and DPS, kills, loot, top monsters with their PBs and drop luck, and skill and kill count goals) on your clipboard, ready to paste into Discord
 - **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
 - **Copy as image**: right-click any monster card to copy a picture of it, ready to paste into Discord
 - Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one

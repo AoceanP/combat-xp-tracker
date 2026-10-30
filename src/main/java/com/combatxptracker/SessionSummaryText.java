@@ -67,6 +67,22 @@ final class SessionSummaryText
 	static String build(Map<Skill, SkillProgress> skills, HitStats hits, List<MonsterTracker.Snapshot> monsters, XpRateMode rateMode,
 		HitLuck.Result luck, int uptime, double dps)
 	{
+		return build(skills, hits, monsters, rateMode, luck, uptime, dps, s -> null, java.util.Collections.emptyList());
+	}
+
+	/**
+	 * WHAT: The summary, with extra detail after each monster (its PB and drop luck) and kill
+	 * count goals listed with the skill goals.
+	 * WHY: 2.3 adds these so the copied text shows the same highlights as the panel.
+	 * PRE: extra returns text for a monster, or null for none; killGoals are ready-made lines.
+	 * POST: Nothing changes.
+	 * RETURN: the summary text
+	 * THROWS: Nothing.
+	 */
+	static String build(Map<Skill, SkillProgress> skills, HitStats hits, List<MonsterTracker.Snapshot> monsters, XpRateMode rateMode,
+		HitLuck.Result luck, int uptime, double dps, java.util.function.Function<MonsterTracker.Snapshot, String> extra,
+		List<String> killGoals)
+	{
 		StringBuilder sb = new StringBuilder("Combat & XP Tracker - session summary\n");
 
 		// XP, biggest gains first
@@ -134,7 +150,13 @@ final class SessionSummaryText
 				.append(" | Loot: ").append(Formatting.compactXp(loot)).append(" gp\n");
 			for (int i = 0; i < monsters.size() && i < MAX_MONSTERS; i++)
 			{
-				sb.append("  ").append(describe(monsters.get(i))).append('\n');
+				sb.append("  ").append(describe(monsters.get(i)));
+				String more = extra.apply(monsters.get(i));
+				if (more != null && !more.isEmpty())
+				{
+					sb.append(", ").append(more);
+				}
+				sb.append('\n');
 			}
 			if (monsters.size() > MAX_MONSTERS)
 			{
@@ -163,6 +185,7 @@ final class SessionSummaryText
 					Math.floor(p.getProgressToGoal() * 1000) / 10.0, goal));
 			}
 		}
+		goals.addAll(killGoals);
 		if (!goals.isEmpty())
 		{
 			sb.append("\nGoals:\n");

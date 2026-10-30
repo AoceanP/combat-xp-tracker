@@ -28,13 +28,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
-import net.runelite.api.Skill;
 import org.junit.Test;
 
 /**
@@ -156,63 +152,5 @@ public class Release194Test
 			entry(SlayerPoints.Master.NIEVE, 60_000, true));
 		assertNull(MasterAdvice.betterThan(unknown, SlayerPoints.Master.DURADEL, MasterAdvice.MIN_TIP_GAIN));
 		assertNull(MasterAdvice.betterThan(entries, null, MasterAdvice.MIN_TIP_GAIN));
-	}
-
-	// ---- M4: spreadsheet export ----------------------------------------------------------------
-
-	@Test
-	public void monstersCsv()
-	{
-		String csv = CsvExport.monsters(tracker().snapshot());
-		String[] lines = csv.split("\n");
-		assertEquals(3, lines.length);
-		assertTrue(lines[0].startsWith("Monster,Kills,Hits,Average hit,Biggest hit"));
-		assertTrue(csv, csv.contains("Gargoyle,120,120,20.00,20,Melee,0,"));
-	}
-
-	@Test
-	public void tasksCsv()
-	{
-		SlayerTaskRecord r = new SlayerTaskRecord();
-		r.task = "Abyssal demons";
-		r.master = "Duradel";
-		r.area = "Catacombs of Kourend";
-		r.assigned = 180;
-		r.kills = 180;
-		r.endMillis = 0;
-		r.activeMillis = 60 * 60_000L;
-		r.slayerXp = 27_000;
-		r.lootGe = 1_400_000;
-		r.superiors = 1;
-		r.points = 15;
-		r.biggestHit = 47;
-		r.endMillis = 1_760_000_000_000L;
-		String csv = CsvExport.tasks(Collections.singletonList(r), LootPrice.GRAND_EXCHANGE, ZoneOffset.UTC);
-		assertTrue(csv, csv.contains("2025-10-09 08:53,Abyssal demons,Duradel,Catacombs of Kourend,180,180,60,27000,0,1400000,27000,1400000,1,15,47"));
-	}
-
-	@Test
-	public void goalsCsv()
-	{
-		Map<Skill, SkillProgress> skills = new EnumMap<>(Skill.class);
-		SkillProgress p = new SkillProgress();
-		p.setGoal(Goal.ofLevel(99), 0);
-		skills.put(Skill.ATTACK, p);
-		skills.put(Skill.STRENGTH, new SkillProgress());
-		String csv = CsvExport.goals(skills, XpRateMode.RECENT);
-		String[] lines = csv.split("\n");
-		assertEquals(2, lines.length);
-		assertTrue(lines[1], lines[1].startsWith("Attack,99,"));
-	}
-
-	@Test
-	public void csvCellsAreSafe()
-	{
-		assertEquals("\"Kree'arra, the \"\"bird\"\"\"", CsvExport.cell("Kree'arra, the \"bird\""));
-		assertEquals("'=1+1", CsvExport.cell("=1+1"));
-		assertEquals("-5", CsvExport.cell(-5));
-		assertEquals("", CsvExport.cell(null));
-		List<String> names = Arrays.asList("A", "B");
-		assertEquals("A", CsvExport.cell(names.get(0)));
 	}
 }

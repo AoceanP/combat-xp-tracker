@@ -151,6 +151,106 @@ final class DryCalculator
 		return out;
 	}
 
+	/** Luck is only shown once at least this many uniques were expected; less is mostly noise. */
+	static final double MIN_EXPECTED = 0.5;
+
+	/**
+	 * WHAT: How many uniques you've had from a boss against how many were expected from your
+	 * kills, with a line per item.
+	 * WHY: "You're 18% luckier than average" says more than a list of dry streaks.
+	 * PRE: None.
+	 * POST: Not applicable.
+	 * RETURN: Not applicable.
+	 * THROWS: Nothing.
+	 */
+	static final class Luck
+	{
+		private final double got;
+		private final double expected;
+		private final List<String> lines;
+
+		Luck(double got, double expected, List<String> lines)
+		{
+			this.got = got;
+			this.expected = expected;
+			this.lines = lines;
+		}
+
+		double getGot()
+		{
+			return got;
+		}
+
+		double getExpected()
+		{
+			return expected;
+		}
+
+		List<String> getLines()
+		{
+			return lines;
+		}
+
+		/**
+		 * @return how far above (positive) or below (negative) the expected number you are, in percent
+		 */
+		double percent()
+		{
+			return (got / expected - 1) * 100;
+		}
+	}
+
+	/**
+	 * WHAT: Your luck at a boss: the uniques in your loot against kills divided by each item's
+	 * drop rate, summed over every item with a known rate.
+	 * WHY: The Luck section's "Luck vs average" row.
+	 * PRE: loot maps item names (lower case) to how many you've had; kills is the kill count the
+	 * loot was counted over.
+	 * POST: Nothing changes.
+	 * RETURN: the luck, or null if the boss has no rates or too few uniques were expected yet
+	 * THROWS: Nothing.
+	 */
+	Luck luck(String boss, Map<String, Long> loot, int kills)
+	{
+		Map<String, Double> items = boss == null ? null : rates.get(key(boss));
+		if (items == null || loot == null || kills <= 0)
+		{
+			return null;
+		}
+		double got = 0;
+		double expected = 0;
+		List<double[]> perItem = new ArrayList<>();
+		List<String> itemNames = new ArrayList<>();
+		for (Map.Entry<String, Double> item : items.entrySet())
+		{
+			double exp = kills / item.getValue();
+			long have = loot.getOrDefault(item.getKey(), 0L);
+			got += have;
+			expected += exp;
+			perItem.add(new double[]{exp, have});
+			itemNames.add(item.getKey());
+		}
+		if (expected < MIN_EXPECTED)
+		{
+			return null;
+		}
+		// One line per item, the most expected first.
+		List<Integer> order = new ArrayList<>();
+		for (int i = 0; i < perItem.size(); i++)
+		{
+			order.add(i);
+		}
+		order.sort((a, b) -> Double.compare(perItem.get(b)[0], perItem.get(a)[0]));
+		List<String> lines = new ArrayList<>();
+		for (int i : order)
+		{
+			String name = itemNames.get(i);
+			lines.add(String.format(Locale.US, "%s: %d (%.1f expected)", Character.toUpperCase(name.charAt(0)) + name.substring(1),
+				(long) perItem.get(i)[1], perItem.get(i)[0]));
+		}
+		return new Luck(got, expected, lines);
+	}
+
 	/**
 	 * e.g. "Driest: Vorkath's head, 2.4x the rate".
 	 */

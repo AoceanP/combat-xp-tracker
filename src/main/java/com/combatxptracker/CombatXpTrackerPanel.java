@@ -115,6 +115,9 @@ class CombatXpTrackerPanel extends PluginPanel
 	private final JLabel goalCountValue = tileValue();
 	private final JLabel sessionXpValue = tileValue();
 	private final JLabel levelsValue = tileValue();
+	// Kill count goals, under the skill goals; rebuilt only when they or the kills change.
+	private final JPanel killGoalsList = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+	private String killGoalsKey = "";
 	private final Map<Skill, GoalCard> goalCards = new EnumMap<>(Skill.class);
 	private List<Skill> shownGoals = new ArrayList<>();
 
@@ -308,12 +311,16 @@ class CombatXpTrackerPanel extends PluginPanel
 		today.setToolTipText("This session: since the client started or your last Reset");
 		view.add(today);
 
-		view.add(Theme.flatButton("+ Add goal", "Pick a skill and a level or XP target",
-			() -> promptGoalDialog(null)));
+		JLabel[] add = new JLabel[1];
+		add[0] = Theme.flatButton("+ Add goal", "A skill level or XP target, or a kill count for a monster",
+			() -> addGoalMenu().show(add[0], 0, add[0].getHeight()));
+		view.add(add[0]);
 
 		goalsList.setOpaque(false);
 		view.add(collapsible(goalsEmpty));
 		view.add(goalsList);
+		killGoalsList.setOpaque(false);
+		view.add(killGoalsList);
 		return view;
 	}
 
@@ -887,9 +894,10 @@ class CombatXpTrackerPanel extends PluginPanel
 			goalCards.get(skill).update();
 		}
 
-		goalsEmpty.setVisible(active.isEmpty());
+		int killGoals = updateKillGoals();
+		goalsEmpty.setVisible(active.isEmpty() && killGoals == 0);
 		int session = totalSessionXp();
-		goalCountValue.setText(String.valueOf(active.size()));
+		goalCountValue.setText(String.valueOf(active.size() + killGoals));
 		sessionXpValue.setText(session > 0 ? "+" + Formatting.compactXp(session) : "0");
 		sessionXpValue.setToolTipText(Formatting.withCommas(session) + " xp this session");
 		levelsValue.setText(String.valueOf(levelsGained()));
@@ -939,6 +947,192 @@ class CombatXpTrackerPanel extends PluginPanel
 		sessionLine.setText(session > 0 ? "+" + Formatting.withCommas(session) + " xp this session" : "No XP yet this session");
 	}
 
+	/**
+	 * WHAT: The "+ Add goal" menu: a skill goal or a kill count goal.
+	 * WHY: Goals can be levels and XP, or kills of a monster.
+	 * PRE: Swing thread.
+	 * POST: Returns a new menu.
+	 * RETURN: the menu
+	 * THROWS: Nothing.
+	 */
+	private javax.swing.JPopupMenu addGoalMenu()
+	{
+		javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+		javax.swing.JMenuItem skill = new javax.swing.JMenuItem("Skill goal...");
+		skill.setToolTipText("A level up to 126 or an XP amount up to 200M");
+		skill.addActionListener(e -> promptGoalDialog(null));
+		menu.add(skill);
+		javax.swing.JMenuItem kills = new javax.swing.JMenuItem("Kill count goal...");
+		kills.setToolTipText("Kills of a monster, like 500 Vorkath");
+		kills.addActionListener(e -> promptKillGoal(null));
+		menu.add(kills);
+		return menu;
+	}
+
+	/**
+	 * WHAT: Rebuilds the kill count goal cards when the goals or the kills change.
+	 * WHY: Shown under the skill goals, each with progress and time left at your kill rate.
+	 * PRE: Swing thread.
+	 * POST: The list shows one card per goal.
+	 * RETURN: how many kill goals there are
+	 * THROWS: Nothing.
+	 */
+	private int updateKillGoals()
+	{
+		Map<String, Integer> goals = plugin.getKillGoals();
+		MonsterTracker tracker = plugin.getMonsterTracker(MonsterRange.ALL_TIME);
+		String key = goals + "|" + tracker.getRevision() + "|" + plugin.getRateTick();
+		if (key.equals(killGoalsKey))
+		{
+			return goals.size();
+		}
+		killGoalsKey = key;
+		killGoalsList.removeAll();
+		for (Map.Entry<String, Integer> goal : goals.entrySet())
+		{
+			killGoalsList.add(killGoalCard(goal.getKey(), goal.getValue(), tracker.snapshotOf(goal.getKey())));
+		}
+		killGoalsList.revalidate();
+		killGoalsList.repaint();
+		return goals.size();
+	}
+
+	private JPanel killGoalCard(String monster, int target, MonsterTracker.Snapshot s)
+	{
+		int kills = s == null ? 0 : s.getKills();
+		boolean reached = kills >= target;
+		JPanel card = UiKit.card(new DynamicGridLayout(0, 1, 0, 4));
+
+		JPanel top = new JPanel(new BorderLayout(6, 0));
+		top.setOpaque(false);
+		top.add(Theme.boldLabel(monster, Theme.TEXT), BorderLayout.CENTER);
+		JLabel count = Theme.label(Formatting.withCommas(kills) + " / " + Formatting.withCommas(target), Theme.MUTED);
+		count.setHorizontalAlignment(SwingConstants.RIGHT);
+		top.add(count, BorderLayout.EAST);
+		card.add(top);
+
+		card.add(UiKit.bar(kills / (double) target, reached ? Theme.SUCCESS : Theme.GOLD, 8));
+
+		JPanel bottom = new JPanel(new BorderLayout(6, 0));
+		bottom.setOpaque(false);
+		double perHour = s == null ? -1 : s.getKillsPerHour();
+		double hours = KillGoals.hoursLeft(kills, target, perHour);
+		JLabel left = Theme.label(reached ? "Goal reached!" : Formatting.withCommas(target - kills) + " kills left",
+			reached ? Theme.SUCCESS : Theme.MUTED);
+		bottom.add(left, BorderLayout.CENTER);
+		if (hours > 0)
+		{
+			JLabel eta = Theme.label("~" + Formatting.duration(hours), Theme.SUCCESS);
+			eta.setToolTipText(String.format(java.util.Locale.US, "At your %.1f kills/hr on %s, from your time fighting it",
+				perHour, monster));
+			bottom.add(eta, BorderLayout.EAST);
+		}
+		card.add(bottom);
+
+		String tip = "<html>" + monster + ": " + Formatting.withCommas(kills) + " of " + Formatting.withCommas(target) + " kills"
+			+ "<br>Kills tracked by this plugin. Right-click to change or remove.</html>";
+		card.setToolTipText(tip);
+		javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+		javax.swing.JMenuItem change = new javax.swing.JMenuItem("Change goal");
+		change.addActionListener(e -> promptKillGoal(monster));
+		menu.add(change);
+		javax.swing.JMenuItem remove = new javax.swing.JMenuItem("Remove goal");
+		remove.addActionListener(e -> plugin.removeKillGoal(monster));
+		menu.add(remove);
+		card.setComponentPopupMenu(menu);
+		return card;
+	}
+
+	/**
+	 * WHAT: Asks for a kill count goal: which monster, and how many kills.
+	 * WHY: From "+ Add goal" or a monster card's right-click menu.
+	 * PRE: Swing thread. preset is the monster to start with, or null to pick one.
+	 * POST: The goal is saved if the player confirms a valid number.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	void promptKillGoal(String preset)
+	{
+		List<MonsterTracker.Snapshot> monsters = new ArrayList<>(allTimeMonsters());
+		monsters.sort((a, b) -> Integer.compare(b.getKills(), a.getKills()));
+		List<String> names = new ArrayList<>();
+		for (MonsterTracker.Snapshot s : monsters)
+		{
+			if (s.getKills() > 0)
+			{
+				names.add(s.getName());
+			}
+		}
+		if (preset != null && !names.contains(preset))
+		{
+			names.add(0, preset);
+		}
+		if (names.isEmpty())
+		{
+			JOptionPane.showMessageDialog(this, "Kill something first, then set a goal for it.", "Kill count goal",
+				JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		JComboBox<String> monsterBox = new JComboBox<>(names.toArray(new String[0]));
+		monsterBox.setEditable(true);
+		monsterBox.setSelectedItem(preset != null ? preset : names.get(0));
+		JTextField input = new JTextField(14);
+		Runnable suggest = () ->
+		{
+			String name = String.valueOf(monsterBox.getSelectedItem());
+			Integer existing = plugin.getKillGoals().get(name);
+			MonsterTracker.Snapshot s = plugin.getMonsterTracker(MonsterRange.ALL_TIME).snapshotOf(name);
+			input.setText(Formatting.withCommas(existing != null ? existing : KillGoals.suggestTarget(s == null ? 0 : s.getKills())));
+		};
+		suggest.run();
+		monsterBox.addActionListener(e -> suggest.run());
+
+		JPanel presets = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		for (int value : new int[]{100, 500, 1000, 5000})
+		{
+			presets.add(presetButton(Formatting.withCommas(value), () -> input.setText(Formatting.withCommas(value))));
+		}
+		JPanel form = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+		form.add(new JLabel("Monster"));
+		form.add(monsterBox);
+		form.add(new JLabel("Kills"));
+		form.add(input);
+		form.add(presets);
+		form.add(new JLabel("<html><small>Counted from the kills this plugin has tracked for this account.</small></html>"));
+
+		while (true)
+		{
+			int choice = JOptionPane.showConfirmDialog(this, form, "Kill count goal", JOptionPane.OK_CANCEL_OPTION,
+				JOptionPane.PLAIN_MESSAGE);
+			if (choice != JOptionPane.OK_OPTION)
+			{
+				return;
+			}
+			String name = String.valueOf(monsterBox.getSelectedItem()).trim();
+			int target;
+			try
+			{
+				target = Integer.parseInt(input.getText().replace(",", "").trim());
+			}
+			catch (NumberFormatException e)
+			{
+				target = -1;
+			}
+			if (name.isEmpty() || target < 1 || target > KillGoals.MAX_TARGET)
+			{
+				JOptionPane.showMessageDialog(this, "Pick a monster and a number of kills from 1 to "
+					+ Formatting.withCommas(KillGoals.MAX_TARGET) + ".", "Invalid goal", JOptionPane.WARNING_MESSAGE);
+				continue;
+			}
+			if (!plugin.setKillGoal(name, target))
+			{
+				JOptionPane.showMessageDialog(this, "Log in to the account first, so the goal is saved for it.",
+					"Kill count goal", JOptionPane.INFORMATION_MESSAGE);
+			}
+			return;
+		}
+	}
+
 	private GoalCard newGoalCard(Skill skill)
 	{
 		GoalCard card = new GoalCard(skill, plugin, config, skillIconManager, this);
@@ -959,7 +1153,7 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private MonsterCard newMonsterCard(String name)
 	{
-		MonsterCard card = new MonsterCard(name, itemManager, plugin);
+		MonsterCard card = new MonsterCard(name, itemManager, plugin, this::promptKillGoal);
 		DragReorder.attach(card, monstersList, () -> plugin.isPinned(name), () -> pinnedShown, this::movePinned,
 			card.getDragHandle());
 		return card;
@@ -1032,6 +1226,11 @@ class CombatXpTrackerPanel extends PluginPanel
 		long rareValue = config.rareDropValue();
 		java.util.Set<String> pinned = MonsterTracker.parseNames(config.pinnedMonsters());
 		List<MonsterTracker.Snapshot> all = tracker.snapshot(price, MonsterTracker.itemMatcher(ignoredSetting), rareValue);
+		if (range == MonsterRange.SESSION)
+		{
+			// Pinned monsters keep their place in This session too, even before you fight them.
+			all = MonsterTracker.withPinned(all, pinned, plugin.getMonsterTracker(MonsterRange.ALL_TIME));
+		}
 		List<MonsterTracker.Snapshot> visible = MonsterTracker.view(all, sort, MonsterTracker.parseNames(hiddenSetting), pinned);
 		List<MonsterTracker.Snapshot> shown = new ArrayList<>();
 		for (MonsterTracker.Snapshot s : visible)
@@ -1061,6 +1260,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.updateFightExtras(plugin.getDamageTaken(s.getName(), range), plugin.getIdleTicks(s.getName(), range));
 			card.updateBoss(plugin.getBossTimes(s.getName()), plugin.getDryItems(s.getName()),
 				plugin.getCombatAchievements(s.getName()));
+			card.updateDropLuck(plugin.getDropLuck(s));
 			MonsterTracker.Snapshot today = range == MonsterRange.SESSION ? null : session.snapshotOf(s.getName());
 			card.setStatus(s.getName().equals(fightingName), today == null ? 0 : today.getKills(), range != MonsterRange.SESSION);
 			keep.put(s.getName(), card);
@@ -1105,8 +1305,34 @@ class CombatXpTrackerPanel extends PluginPanel
 		List<MonsterTracker.Snapshot> monsters = MonsterTracker.view(
 			tracker.snapshot(config.lootPrice(), MonsterTracker.itemMatcher(config.ignoredItems())),
 			config.monsterSort(), MonsterTracker.parseNames(config.hiddenMonsters()));
+		// Each monster's PB and drop luck, and kill count goals, as in the panel.
+		java.util.function.Function<MonsterTracker.Snapshot, String> extra = s ->
+		{
+			List<String> parts = new ArrayList<>();
+			BossTimes.Times times = plugin.getBossTimes(s.getName());
+			if (times != null && times.best > 0)
+			{
+				parts.add("PB " + KillTimerOverlay.clock(times.best));
+			}
+			DryCalculator.Luck dropLuck = plugin.getDropLuck(plugin.getMonsterTracker(MonsterRange.ALL_TIME).snapshotOf(s.getName()));
+			if (dropLuck != null)
+			{
+				parts.add(String.format(java.util.Locale.US, "drop luck %s%.0f%% vs average", dropLuck.percent() >= 0 ? "+" : "",
+					dropLuck.percent()));
+			}
+			return String.join(", ", parts);
+		};
+		List<String> killGoals = new ArrayList<>();
+		MonsterTracker allTime = plugin.getMonsterTracker(MonsterRange.ALL_TIME);
+		for (Map.Entry<String, Integer> goal : plugin.getKillGoals().entrySet())
+		{
+			MonsterTracker.Snapshot s = allTime.snapshotOf(goal.getKey());
+			int kills = s == null ? 0 : s.getKills();
+			killGoals.add(goal.getKey() + ": " + Formatting.withCommas(kills) + " / " + Formatting.withCommas(goal.getValue())
+				+ " kills" + (kills >= goal.getValue() ? " reached" : ""));
+		}
 		String text = SessionSummaryText.build(plugin.getSkillProgress(), plugin.getHitStats(), monsters, config.xpRateMode(),
-			plugin.getLuck(), plugin.getSessionUptime(), plugin.getSessionDps());
+			plugin.getLuck(), plugin.getSessionUptime(), plugin.getSessionDps(), extra, killGoals);
 
 		try
 		{

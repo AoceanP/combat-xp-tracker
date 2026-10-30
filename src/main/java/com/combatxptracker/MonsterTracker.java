@@ -30,6 +30,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1148,6 +1149,39 @@ public class MonsterTracker
 	/**
 	 * Drops hidden monsters and sorts the rest for the Monsters tab.
 	 */
+	/**
+	 * WHAT: Adds an empty card for each pinned monster that isn't in the list yet, named as in
+	 * the all time tracker.
+	 * WHY: In This session, a pinned monster you haven't fought yet would vanish from the top and
+	 * reappear in All time. Now it keeps its place, showing 0 kills until you fight it.
+	 * PRE: pinnedLowercase holds lower case names; allTime is the all time tracker.
+	 * POST: Nothing changes in either tracker.
+	 * RETURN: a new list with the placeholders added
+	 * THROWS: Nothing.
+	 */
+	public static List<Snapshot> withPinned(List<Snapshot> list, Set<String> pinnedLowercase, MonsterTracker allTime)
+	{
+		List<Snapshot> out = new ArrayList<>(list);
+		Set<String> present = new HashSet<>();
+		for (Snapshot s : list)
+		{
+			present.add(s.getName().toLowerCase(Locale.ROOT));
+		}
+		for (String name : pinnedLowercase)
+		{
+			if (present.contains(name))
+			{
+				continue;
+			}
+			Snapshot known = allTime == null ? null : allTime.snapshotOf(name);
+			if (known != null)
+			{
+				out.add(new Snapshot(new Entry(known.getName())));
+			}
+		}
+		return out;
+	}
+
 	public static List<Snapshot> view(List<Snapshot> all, MonsterSort sort, Set<String> hiddenLowercase)
 	{
 		return view(all, sort, hiddenLowercase, Collections.emptySet());

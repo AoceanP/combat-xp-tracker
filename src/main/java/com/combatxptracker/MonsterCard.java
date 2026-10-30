@@ -123,6 +123,7 @@ class MonsterCard extends JPanel
 	private final InfoRow prayerRow = new InfoRow("Prayer");
 	private final InfoRow driestRow = new InfoRow("Driest");
 	private final InfoRow sinceUniqueRow = new InfoRow("Since last unique");
+	private final InfoRow dropLuckRow = new InfoRow("Luck vs average");
 	private final InfoRow achievementsRow = new InfoRow("Combat Achievements");
 	private final InfoRow suppliesRow = new InfoRow("Supplies");
 	private final InfoRow deathsRow = new InfoRow("Deaths");
@@ -154,6 +155,15 @@ class MonsterCard extends JPanel
 	private String lootKey;
 
 	MonsterCard(String monsterName, ItemManager itemManager, CombatXpTrackerPlugin plugin)
+	{
+		this(monsterName, itemManager, plugin, null);
+	}
+
+	/**
+	 * @param onKillGoal opens the kill count goal dialog for this monster, or null for no menu item
+	 */
+	MonsterCard(String monsterName, ItemManager itemManager, CombatXpTrackerPlugin plugin,
+		java.util.function.Consumer<String> onKillGoal)
 	{
 		this.monsterName = monsterName;
 		this.itemManager = itemManager;
@@ -243,7 +253,7 @@ class MonsterCard extends JPanel
 		lootGrid.setOpaque(false);
 		lootGrid.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		overview.with(killsRateRow).with(gpRateRow).with(fightRateRow).with(prayerRow).with(taskRow);
-		collectionSection.with(sinceUniqueRow).with(rareRow).with(driestRow).with(collectionGrid);
+		collectionSection.with(dropLuckRow).with(sinceUniqueRow).with(rareRow).with(driestRow).with(collectionGrid);
 		showAllLabel.setHorizontalAlignment(JLabel.RIGHT);
 		showAllLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		showAllLabel.setVisible(false);
@@ -299,6 +309,13 @@ class MonsterCard extends JPanel
 			{
 			}
 		});
+		if (onKillGoal != null)
+		{
+			JMenuItem goal = new JMenuItem("Set kill goal...");
+			goal.setToolTipText("A kill count to aim for, like 500, shown in the Goals tab");
+			goal.addActionListener(e -> onKillGoal.accept(monsterName));
+			menu.add(goal);
+		}
 		JMenuItem hide = new JMenuItem("Hide " + monsterName);
 		hide.setToolTipText("Keeps tracking it, but leaves it out of this tab. Unhide from the bottom of the tab or the plugin settings.");
 		hide.addActionListener(e -> plugin.hideMonster(monsterName));
@@ -1011,6 +1028,37 @@ class MonsterCard extends JPanel
 	/**
 	 * Kills since the last collection log unique. Starts again from 0 each time one drops.
 	 */
+	/**
+	 * WHAT: Shows your luck with this boss's uniques against the average, e.g. "+18%".
+	 * WHY: One number that says whether you've been lucky, with the detail per item on hover.
+	 * PRE: Swing thread. luck may be null (no known rates, or too few kills yet).
+	 * POST: The row is shown or hidden.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	void updateDropLuck(DryCalculator.Luck luck)
+	{
+		if (luck == null)
+		{
+			dropLuckRow.set(null);
+			collectionSection.refresh();
+			return;
+		}
+		double pct = luck.percent();
+		String value = String.format(java.util.Locale.US, "%s%.0f%%", pct >= 0 ? "+" : "", pct);
+		StringBuilder tip = new StringBuilder(String.format(java.util.Locale.US,
+			"<html>%s uniques from %s kills, where the average player would have %.1f.<br>",
+			Formatting.withCommas(Math.round(luck.getGot())), monsterName, luck.getExpected()));
+		tip.append(pct >= 0 ? "That's luckier than average." : "That's less lucky than average.").append("<br><br>");
+		for (String line : luck.getLines())
+		{
+			tip.append(line).append("<br>");
+		}
+		tip.append("<br>From the kills and drops tracked here, at the OSRS Wiki's drop rates.</html>");
+		dropLuckRow.set(value, pct >= 0 ? Theme.SUCCESS : BAD, tip.toString());
+		collectionSection.refresh();
+	}
+
 	private void updateSinceUnique(MonsterTracker.Snapshot s)
 	{
 		if (s.getKills() <= 0 || !plugin.hasUniques(monsterName))

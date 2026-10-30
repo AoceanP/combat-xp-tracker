@@ -4108,6 +4108,32 @@ public class CombatXpTrackerPlugin extends Plugin
 	/**
 	 * @return missing collection log items with a known drop rate, driest first
 	 */
+	/**
+	 * WHAT: Your luck with a boss's uniques: what you've had against what your kills should
+	 * have given at the wiki drop rates.
+	 * WHY: Shown as "Luck vs average" on boss cards and in the copied summary.
+	 * PRE: s is a monster snapshot (any range); safe from the Swing thread (no game reads).
+	 * POST: Nothing changes.
+	 * RETURN: the luck, or null if the monster has no known unique rates or too few kills
+	 * THROWS: Nothing.
+	 */
+	public DryCalculator.Luck getDropLuck(MonsterTracker.Snapshot s)
+	{
+		if (s == null)
+		{
+			return null;
+		}
+		Map<String, Long> loot = new HashMap<>();
+		for (MonsterTracker.LootLine line : s.getLoot())
+		{
+			if (line.getName() != null)
+			{
+				loot.merge(line.getName().toLowerCase(Locale.ROOT), line.getQuantity(), Long::sum);
+			}
+		}
+		return dryCalculator.luck(s.getName(), loot, s.getKills());
+	}
+
 	public List<DryCalculator.Dry> getDryItems(String monster)
 	{
 		CollectionLog.Status log = getCollectionStatus(monster);
@@ -4836,6 +4862,75 @@ public class CombatXpTrackerPlugin extends Plugin
 	 * Sets the order of pinned monsters, from dragging them. Pinned monsters not in the
 	 * list (e.g. filtered out by a search) keep their place after these.
 	 */
+	// ---- Kill count goals ---------------------------------------------------------------------
+
+	private static final String KILL_GOALS_KEY = "killGoals";
+
+	/**
+	 * WHAT: This account's kill count goals, monster -> target, in the order they were added.
+	 * WHY: The Goals tab shows them next to skill goals.
+	 * PRE: Safe from the Swing thread (reads saved settings only).
+	 * POST: Nothing changes.
+	 * RETURN: the goals (empty when logged out or none)
+	 * THROWS: Nothing.
+	 */
+	public Map<String, Integer> getKillGoals()
+	{
+		if (configManager.getRSProfileKey() == null)
+		{
+			return new java.util.LinkedHashMap<>();
+		}
+		return KillGoals.parse(configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY));
+	}
+
+	/**
+	 * WHAT: Sets (or changes) a kill count goal for this account.
+	 * WHY: From the Add goal dialog or a monster card's right-click menu.
+	 * PRE: target is 1..KillGoals.MAX_TARGET.
+	 * POST: The goal is saved for the logged-in account, if its data has loaded.
+	 * RETURN: true if saved, false if not logged in to the account whose data is loaded
+	 * THROWS: Nothing.
+	 */
+	public boolean setKillGoal(String monster, int target)
+	{
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile) || monster == null || monster.trim().isEmpty())
+		{
+			return false;
+		}
+		Map<String, Integer> goals = getKillGoals();
+		goals.put(monster.trim(), Math.max(1, Math.min(KillGoals.MAX_TARGET, target)));
+		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY, KillGoals.serialize(goals));
+		refreshPanelNow();
+		return true;
+	}
+
+	/**
+	 * WHAT: Removes a kill count goal.
+	 * WHY: From the goal card's right-click menu.
+	 * PRE: None.
+	 * POST: The goal is gone for this account.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	public void removeKillGoal(String monster)
+	{
+		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
+		{
+			return;
+		}
+		Map<String, Integer> goals = getKillGoals();
+		goals.remove(monster);
+		if (goals.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY);
+		}
+		else
+		{
+			configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY, KillGoals.serialize(goals));
+		}
+		refreshPanelNow();
+	}
+
 	public void setPinnedOrder(List<String> names)
 	{
 		Set<String> order = new java.util.LinkedHashSet<>();
