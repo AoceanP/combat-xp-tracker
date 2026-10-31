@@ -248,7 +248,7 @@ public class Release170Test
 		task.recordKill(2 * MINUTE);
 		task.recordLoot(1_500_000, 72_000, 2 * MINUTE);
 
-		assertEquals("Abyssal demons task complete: 3 kills in 2m, 3M gp (90M gp/hr), biggest hit 47.",
+		assertEquals("Abyssal demons task complete: 3 kills in 2m, 3M gp (90M GP/hr), biggest hit 47.",
 			task.summary(LootPrice.GRAND_EXCHANGE));
 		assertTrue(task.summary(LootPrice.HIGH_ALCHEMY).contains("144K gp"));
 	}

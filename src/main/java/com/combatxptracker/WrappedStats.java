@@ -211,13 +211,13 @@ final class WrappedStats
 			if (!byXp.isEmpty())
 			{
 				slayer.lines.add(new Line("Fastest task", byXp.get(0).getTask(),
-					Formatting.compactXp(Math.round(byXp.get(0).getXpPerHour())) + " xp/hr"));
+					Formatting.compactXp(Math.round(byXp.get(0).getXpPerHour())) + " XP/hr"));
 			}
 			List<TaskStats> byGp = TaskStats.ranked(stats, true);
 			if (!byGp.isEmpty() && byGp.get(0).getGpPerHour() > 0)
 			{
 				slayer.lines.add(new Line("Richest task", byGp.get(0).getTask(),
-					Formatting.compactXp(Math.round(byGp.get(0).getGpPerHour())) + " gp/hr"));
+					Formatting.compactXp(Math.round(byGp.get(0).getGpPerHour())) + " GP/hr"));
 			}
 			w.sections.add(slayer);
 		}

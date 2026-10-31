@@ -192,7 +192,7 @@ public class Release190GuideTest
 		assertEquals(new Color(52, 52, 52), Theme.BORDER);
 		assertEquals(Color.WHITE, Theme.TEXT);
 		assertEquals(new Color(168, 168, 168), Theme.MUTED);
-		assertEquals(new Color(118, 118, 118), Theme.SUBTLE);
+		assertEquals("lifted to 4.5:1 in 2.5", new Color(144, 144, 144), Theme.SUBTLE);
 		assertEquals(new Color(255, 198, 64), Theme.GOLD);
 		assertEquals(new Color(96, 220, 140), Theme.SUCCESS);
 		assertEquals(net.runelite.client.ui.ColorScheme.BRAND_ORANGE, Theme.TAB_UNDERLINE);

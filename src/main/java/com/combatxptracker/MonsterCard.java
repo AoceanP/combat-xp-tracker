@@ -54,7 +54,7 @@ import net.runelite.client.util.QuantityFormatter;
  *
  * <pre>
  * Vorkath  [task]                         6.10M
- * 212 kills  +12 today                ● fighting
+ * 212 kills  +12 this session               ● fighting
  * Rates       Kills/hr, GP/hr, Prayer, Task
  * Luck        Since unique, Rare drop, collection log, Driest
  * Drops       every item
@@ -96,7 +96,7 @@ class MonsterCard extends JPanel
 	private final JLabel hitsLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel avgLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel maxLabel = Theme.boldLabel("", Theme.TEXT);
-	private final JLabel maxCaption = UiKit.caption("max");
+	private final JLabel maxCaption = UiKit.caption("Biggest");
 	// Biggest hit per style, always Melee, Ranged, Magic so the columns line up across cards.
 	// The three strips below sit in holders, which add the gap between strips and are what
 	// gets shown or hidden.
@@ -122,9 +122,12 @@ class MonsterCard extends JPanel
 	private final InfoRow rareRow = new InfoRow("Rare drop");
 	private final InfoRow prayerRow = new InfoRow("Prayer");
 	private final InfoRow driestRow = new InfoRow("Driest");
+	private final InfoRow petRow = new InfoRow("Pet chance");
 	private final InfoRow sinceUniqueRow = new InfoRow("Since last unique");
 	private final InfoRow dropLuckRow = new InfoRow("Luck vs average");
 	private final InfoRow achievementsRow = new InfoRow("Combat Achievements");
+	private final InfoRow trendRow = new InfoRow("Trend");
+	private final KillTimesChart timesChart = new KillTimesChart();
 	private final InfoRow suppliesRow = new InfoRow("Supplies");
 	private final InfoRow deathsRow = new InfoRow("Deaths");
 	private final InfoRow netRow = new InfoRow("Net profit");
@@ -149,6 +152,8 @@ class MonsterCard extends JPanel
 	private final JLabel showAllLabel = Theme.label("", Theme.MUTED);
 	private boolean showAllLoot;
 	private List<MonsterTracker.LootLine> lastLoot;
+	// What the drops grid was built from, for each drop's first kill.
+	private MonsterTracker.Snapshot lootSnapshot;
 
 	private boolean collapsed;
 	// null until the first update, so an empty loot list still shows its message.
@@ -208,9 +213,9 @@ class MonsterCard extends JPanel
 		header.add(left, BorderLayout.CENTER);
 		header.add(right, BorderLayout.EAST);
 
-		// Hits: three slim strips instead of rows of tiles.
-		JPanel statsRow = UiKit.strip(new JLabel[]{hitsLabel, avgLabel, maxLabel},
-			new JLabel[]{UiKit.caption("hits"), UiKit.caption("avg"), maxCaption});
+		// Hits: value above caption, so a wide number never pushes its caption out of sight.
+		JPanel statsRow = UiKit.stackedStrip(new JLabel[]{hitsLabel, avgLabel, maxLabel},
+			new JLabel[]{UiKit.caption("Hits"), UiKit.caption("Avg hit"), maxCaption});
 		hitsLabel.setToolTipText("Hits on " + monsterName + ", 0s included");
 		avgLabel.setToolTipText("Your average hit on " + monsterName + ", 0s included");
 
@@ -225,22 +230,22 @@ class MonsterCard extends JPanel
 			styleLabels[i] = value;
 			styleCaptions[i] = UiKit.caption(styleCaption(style));
 		}
-		styleRow = spaced(UiKit.strip(styleLabels, styleCaptions));
+		styleRow = spaced(UiKit.stackedStrip(styleLabels, styleCaptions));
 
 		accuracyValue.setToolTipText("<html>The share of your hits on " + monsterName + " that did damage.<br>"
 			+ "A 0 counts as a miss, though a hit can also roll 0.</html>");
 		dpsValue.setToolTipText("Your damage per second while fighting " + monsterName);
 		uptimeValue.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
 			+ "before the next attack<br>(eating, moving, a late click) count against it. Breaks over 10 seconds aren't counted.</html>");
-		fightRow = spaced(UiKit.strip(new JLabel[]{accuracyValue, dpsValue, uptimeValue},
-			new JLabel[]{UiKit.caption("acc"), UiKit.caption("dps"), UiKit.caption("uptime")}));
+		fightRow = spaced(UiKit.stackedStrip(new JLabel[]{accuracyValue, dpsValue, uptimeValue},
+			new JLabel[]{UiKit.caption("Accuracy"), UiKit.caption("DPS"), UiKit.caption("Uptime")}));
 		fightRow.setVisible(false);
 
 		pbValue.setToolTipText("Your fastest kill, from the game's own fight duration message");
 		lastValue.setToolTipText("Your most recent kill");
 		avgValue.setToolTipText("Your average over your recent kills (up to " + BossTimes.RECENT_KILLS + ")");
-		timesRow = spaced(UiKit.strip(new JLabel[]{pbValue, lastValue, avgValue},
-			new JLabel[]{UiKit.caption("pb"), UiKit.caption("last"), UiKit.caption("avg")}));
+		timesRow = spaced(UiKit.stackedStrip(new JLabel[]{pbValue, lastValue, avgValue},
+			new JLabel[]{UiKit.caption("PB"), UiKit.caption("Last"), UiKit.caption("Avg")}));
 		timesRow.setVisible(false);
 
 		// BoxLayout skips hidden rows; a grid would leave blank space for them.
@@ -253,7 +258,7 @@ class MonsterCard extends JPanel
 		lootGrid.setOpaque(false);
 		lootGrid.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		overview.with(killsRateRow).with(gpRateRow).with(fightRateRow).with(prayerRow).with(taskRow);
-		collectionSection.with(dropLuckRow).with(sinceUniqueRow).with(rareRow).with(driestRow).with(collectionGrid);
+		collectionSection.with(dropLuckRow).with(sinceUniqueRow).with(rareRow).with(driestRow).with(petRow).with(collectionGrid);
 		showAllLabel.setHorizontalAlignment(JLabel.RIGHT);
 		showAllLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		showAllLabel.setVisible(false);
@@ -267,7 +272,8 @@ class MonsterCard extends JPanel
 		});
 		dropsSection.with(lootGrid).with(showAllLabel);
 		fightSection.with(spaced(statsRow)).with(styleRow).with(fightRow).with(damageTakenRow).with(flawlessRow).with(idleRow);
-		bossSection.with(timesRow).with(achievementsRow);
+		timesChart.setVisible(false);
+		bossSection.with(timesRow).with(timesChart).with(trendRow).with(achievementsRow);
 		costsSection.with(suppliesRow).with(netRow).with(netRateRow).with(deathsRow);
 		for (InfoRow.Section section : new InfoRow.Section[]{overview, collectionSection, dropsSection, fightSection, bossSection,
 			costsSection})
@@ -395,7 +401,7 @@ class MonsterCard extends JPanel
 	/**
 	 * WHAT: Marks the card as the monster you're fighting now, and shows this session's kills.
 	 * WHY: The card you're fighting gets a green outline and "fighting", so it's easy to find;
-	 * "+12 today" shows progress even on the all time view.
+	 * "+12 this session" shows progress even on the all time view.
 	 * PRE: Swing thread. sessionKills is this session's kills, or 0.
 	 * POST: The header and outline are updated.
 	 * RETURN: Nothing.
@@ -470,9 +476,9 @@ class MonsterCard extends JPanel
 	 */
 	private void refreshHeader()
 	{
-		todayLabel.setText(todayKills > 0 ? "+" + Formatting.withCommas(todayKills) + " today" : "");
+		todayLabel.setText(todayKills > 0 ? "+" + Formatting.withCommas(todayKills) + " this session" : "");
 		todayLabel.setVisible(!todayLabel.getText().isEmpty());
-		// The "2h ago" goes when there's a "+12 today" or the fight is now.
+		// The "2h ago" goes when there's a "+12 this session" or the fight is now.
 		killsLabel.setText(killsText + (todayLabel.isVisible() || fighting || sinceText.isEmpty() ? "" : "  ·  " + sinceText));
 		if (fighting)
 		{
@@ -520,11 +526,11 @@ class MonsterCard extends JPanel
 		switch (style)
 		{
 			case RANGED:
-				return "range";
+				return "Ranged";
 			case MAGIC:
-				return "mage";
+				return "Magic";
 			default:
-				return "melee";
+				return "Melee";
 		}
 	}
 
@@ -542,7 +548,7 @@ class MonsterCard extends JPanel
 		netRow.set(show ? (net < 0 ? "-" : "") + Formatting.compactXp(Math.abs(net)) + " gp" : null, net >= 0 ? Theme.GOLD : BAD, netTip);
 		double netPerHour = show ? ActivityTimer.perHour(net, activeMillis) : -1;
 		netRateRow.set(show && activeMillis > 0 && Math.abs(netPerHour) > 0 ? (netPerHour < 0 ? "-" : "")
-			+ Formatting.compactXp(Math.round(Math.abs(netPerHour))) + " gp/hr" : null, netPerHour >= 0 ? Theme.GOLD : BAD, netTip);
+			+ Formatting.compactXp(Math.round(Math.abs(netPerHour))) + " GP/hr" : null, netPerHour >= 0 ? Theme.GOLD : BAD, netTip);
 		costsSection.setDetail(show ? (net < 0 ? "-" : "+") + Formatting.compactXp(Math.abs(net)) + " net" : "",
 			net >= 0 ? Theme.GOLD : BAD, show ? netTip : null);
 		costsSection.refresh();
@@ -571,6 +577,7 @@ class MonsterCard extends JPanel
 			// Green when the last kill was the best.
 			lastValue.setForeground(times.last > 0 && Math.abs(times.last - times.best) < 0.001 ? Theme.SUCCESS : Theme.TEXT);
 		}
+		updateTrend(recent, times == null ? 0 : times.best);
 
 		updateCollectionGrid(plugin.getCollectionItems(monsterName), dry);
 		if (!dry.isEmpty())
@@ -590,6 +597,7 @@ class MonsterCard extends JPanel
 		{
 			driestRow.set(null);
 		}
+		updatePet(plugin.getCollectionItems(monsterName), dry);
 		collectionSection.refresh();
 
 		if (achievements.isEmpty())
@@ -613,6 +621,64 @@ class MonsterCard extends JPanel
 	 * The boss's collection log as item icons, obtained ones bright, missing ones faded, and
 	 * the driest missing item outlined in red.
 	 */
+	/**
+	 * WHAT: The kill times chart and the Trend row: "8.0s faster" in green, "3.1s slower" in red.
+	 * WHY: Says whether you're improving, which PB and Avg alone don't (2.5).
+	 * PRE: Swing thread. recent is oldest first.
+	 * POST: Both are shown once there are enough kills, hidden before.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updateTrend(List<Double> recent, double best)
+	{
+		timesChart.setVisible(best > 0 && recent.size() >= 3);
+		timesChart.setTimes(recent, best);
+		double trend = BossTimes.trend(recent);
+		if (best <= 0 || Double.isNaN(trend))
+		{
+			trendRow.set(null);
+			return;
+		}
+		int half = recent.size() / 2;
+		double newer = 0;
+		for (int i = recent.size() - half; i < recent.size(); i++)
+		{
+			newer += recent.get(i);
+		}
+		String text = BossTimes.trendText(trend);
+		java.awt.Color colour = text.endsWith("faster") ? Theme.readable(Theme.SUCCESS)
+			: text.endsWith("slower") ? Theme.readable(DEATHS) : Theme.TEXT;
+		trendRow.set(text, colour, "<html>Your last " + half + " kills average " + KillTimerOverlay.clock(newer / half)
+			+ ",<br>against " + KillTimerOverlay.clock(newer / half - trend) + " for the " + half + " before them.</html>");
+	}
+
+	/**
+	 * WHAT: The pet row: "Owned", or how likely you'd have the pet by now at your kill count.
+	 * WHY: The stat players share most (2.5). Only shown once the collection log page has been seen.
+	 * PRE: Swing thread. items may be null; dry is not null.
+	 * POST: The row is set or hidden.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updatePet(List<CollectionLog.Item> items, List<DryCalculator.Dry> dry)
+	{
+		if (Pets.owned(items))
+		{
+			petRow.set("Owned", Theme.readable(Theme.SUCCESS), "You have this boss's pet, from your collection log");
+			return;
+		}
+		DryCalculator.Dry pet = Pets.missing(dry);
+		if (pet == null)
+		{
+			petRow.set(null);
+			return;
+		}
+		long percent = Math.round(pet.getChanceByNow() * 100);
+		petRow.set(percent + "% by now", pet.getRatio() >= 1 ? Theme.readable(DEATHS) : Theme.TEXT,
+			"<html>" + pet.getItem() + ": 1 in " + Formatting.withCommas(Math.round(pet.getOneIn())) + " per kill.<br>"
+				+ percent + "% of players would have it by your kill count.<br>Drop rate from the OSRS Wiki.</html>");
+	}
+
 	private void updateCollectionGrid(List<CollectionLog.Item> items, List<DryCalculator.Dry> dry)
 	{
 		StringBuilder key = new StringBuilder();
@@ -866,15 +932,15 @@ class MonsterCard extends JPanel
 		{
 			maxLabel.setText(String.valueOf(s.getBiggestHit()));
 			CombatStyle style = s.getBiggestHitStyle();
-			maxLabel.setForeground(style != null ? style.getColor() : Theme.TEXT);
+			maxLabel.setForeground(style != null ? Theme.style(style) : Theme.TEXT);
 			maxLabel.setToolTipText(style != null ? "Biggest hit, dealt with " + style.getDisplayName() : "Biggest hit");
-			maxCaption.setText(style != null ? "max " + shortName(style) : "max");
+			maxCaption.setText("Biggest");
 		}
 		else
 		{
 			maxLabel.setText("-");
 			maxLabel.setForeground(Theme.SUBTLE);
-			maxCaption.setText("max");
+			maxCaption.setText("Biggest");
 		}
 
 		for (CombatStyle style : STYLES)
@@ -882,7 +948,7 @@ class MonsterCard extends JPanel
 			Integer biggest = s.getBiggestByStyle().get(style);
 			JLabel value = styleValues.get(style);
 			value.setText(biggest == null ? "-" : String.valueOf(biggest));
-			value.setForeground(biggest == null ? Theme.SUBTLE : style.getColor());
+			value.setForeground(biggest == null ? Theme.SUBTLE : Theme.style(style));
 		}
 		// One style used: the Max tile already says which.
 		styleRow.setVisible(s.getBiggestByStyle().size() > 1);
@@ -905,6 +971,7 @@ class MonsterCard extends JPanel
 		overview.refresh();
 		collectionSection.refresh();
 
+		lootSnapshot = s;
 		updateLoot(s.getLoot());
 		dropsSection.setDetail(s.getLoot().isEmpty() ? "" : s.getLoot().size() + (s.getLoot().size() == 1 ? " kind" : " kinds"),
 			Theme.MUTED, "Right-click an item to ignore it, or to remove it from this monster's loot");
@@ -998,7 +1065,12 @@ class MonsterCard extends JPanel
 			// Rare drops get a gold border and are sorted first.
 			slot.setOutline(Theme.GOLD);
 		}
-		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value
+		// Bundled uniques say how rare they are and how your first one compares (2.5).
+		double oneIn = plugin == null ? -1 : plugin.getDropRate(monsterName, line.getName());
+		String story = oneIn > 1
+			? "<br>" + DryCalculator.dropStory(oneIn, lootSnapshot == null ? -1 : lootSnapshot.getFirstDropKill(line.getItemId()))
+			: "";
+		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value + story
 			+ "<br><font color='#888888'>Right-click to ignore or remove</font></html>");
 
 		JPopupMenu menu = new JPopupMenu();
@@ -1070,22 +1142,6 @@ class MonsterCard extends JPanel
 			}
 			g2.dispose();
 			super.paintComponent(g);
-		}
-	}
-
-	/**
-	 * "mel", "rng" or "mag", to fit a tile caption.
-	 */
-	static String shortName(CombatStyle style)
-	{
-		switch (style)
-		{
-			case RANGED:
-				return "rng";
-			case MAGIC:
-				return "mag";
-			default:
-				return "mel";
 		}
 	}
 

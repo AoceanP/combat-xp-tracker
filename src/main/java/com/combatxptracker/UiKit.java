@@ -194,33 +194,6 @@ final class UiKit
 	}
 
 	/**
-	 * WHAT: Several stats in one slim box, split by thin lines: "1,842 hits | 43.4 avg | 69 max".
-	 * WHY: Separate tiles took twice the height for the same numbers.
-	 * PRE: values and captions have the same length. Callers keep the labels to update them.
-	 * POST: Returns a new strip holding the given labels.
-	 * RETURN: the strip
-	 * THROWS: Nothing.
-	 */
-	static RoundPanel strip(JLabel[] values, JLabel[] captions)
-	{
-		RoundPanel strip = new RoundPanel(new GridLayout(1, values.length, 0, 0), Theme.SLOT, BOX_RADIUS);
-		strip.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 0));
-		for (int i = 0; i < values.length; i++)
-		{
-			JPanel cell = new JPanel(new FlowLayout(FlowLayout.CENTER, 3, 0));
-			cell.setOpaque(false);
-			if (i > 0)
-			{
-				cell.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, line()));
-			}
-			cell.add(values[i]);
-			cell.add(captions[i]);
-			strip.add(cell);
-		}
-		return strip;
-	}
-
-	/**
 	 * WHAT: Like strip, but each cell has its value above its caption.
 	 * WHY: For the stats at the top of the panel and on the target card, where captions are longer.
 	 * PRE: values and captions have the same length.
@@ -415,7 +388,7 @@ final class UiKit
 	{
 		RoundLabel pill = new RoundLabel(text, BOX_RADIUS);
 		pill.setFont(Theme.label("", colour).getFont());
-		pill.setForeground(colour);
+		pill.setForeground(Theme.readable(colour));
 		pill.setBackground(Theme.highlight(colour, 0.72f));
 		pill.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 5));
 		return pill;

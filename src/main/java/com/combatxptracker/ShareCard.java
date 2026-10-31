@@ -206,7 +206,7 @@ final class ShareCard
 		if (d.killsToday > 0)
 		{
 			g.setColor(Theme.SUCCESS);
-			g.drawString("+" + Formatting.withCommas(d.killsToday) + " today", PAD, y + 40);
+			g.drawString("+" + Formatting.withCommas(d.killsToday) + " this session", PAD, y + 40);
 		}
 		y += 34 + 16;
 

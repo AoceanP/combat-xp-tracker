@@ -39,7 +39,7 @@ public interface CombatXpTrackerConfig extends Config
 	String GROUP = "combatxptracker";
 
 	@ConfigSection(
-		name = "Goals",
+		name = "XP & goals",
 		description = "Skill goals and XP/hr",
 		position = 0
 	)
@@ -61,14 +61,14 @@ public interface CombatXpTrackerConfig extends Config
 
 	@ConfigSection(
 		name = "Monsters",
-		description = "The Monsters tab: what's remembered, loot values, the target card and kill messages",
+		description = "The Monsters tab: what's remembered, loot values and the target card",
 		position = 2
 	)
 	String monstersSection = "monsters";
 
 	@ConfigSection(
 		name = "Slayer",
-		description = "The Slayer tab, task summaries and superiors",
+		description = "The Slayer tab and superiors",
 		position = 3
 	)
 	String slayerSection = "slayer";
@@ -76,14 +76,21 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigSection(
 		name = "Overlays",
 		description = "On-screen overlay and infoboxes",
-		position = 4
+		position = 5
 	)
 	String overlaySection = "overlays";
 
 	@ConfigSection(
+		name = "Chat & screenshots",
+		description = "Chat messages and screenshots. All off for new players, so the chatbox stays yours",
+		position = 4
+	)
+	String chatSection = "chat";
+
+	@ConfigSection(
 		name = "Supplies & loot",
 		description = "Loot despawn alert and casts left, for long trips",
-		position = 5
+		position = 6
 	)
 	String suppliesSection = "supplies";
 
@@ -235,11 +242,11 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Chat message when a goal is reached",
 		description = "Adds a message to your chatbox when you reach a goal. Only you can see it.",
 		position = 5,
-		section = goalsSection
+		section = chatSection
 	)
 	default boolean goalChatMessage()
 	{
-		return true;
+		return false;
 	}
 
 	// ---- Combat --------------------------------------------------------------
@@ -415,11 +422,11 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Slayer task summary",
 		description = "When a slayer task is finished, adds a chat message with its kills, time, loot, GP/hr and biggest hit.",
 		position = 1,
-		section = slayerSection
+		section = chatSection
 	)
 	default boolean taskSummary()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -428,11 +435,11 @@ public interface CombatXpTrackerConfig extends Config
 		description = "When you kill a boss (anything the game gives a kill count for), adds a chat message with the fight time, "
 			+ "your damage and its share of the boss's hitpoints, and your biggest hit.",
 		position = 9,
-		section = monstersSection
+		section = chatSection
 	)
 	default boolean killSummary()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -441,11 +448,11 @@ public interface CombatXpTrackerConfig extends Config
 		description = "When you die to a monster, a chat message with how many times you've died to it and what you were "
 			+ "carrying. Deaths are always counted on the monster's card.",
 		position = 10,
-		section = monstersSection
+		section = chatSection
 	)
 	default boolean deathMessage()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -480,11 +487,11 @@ public interface CombatXpTrackerConfig extends Config
 		description = "Saves a screenshot of each new collection log item and rare drop, in RuneLite's screenshots "
 			+ "folder under Uniques.",
 		position = 13,
-		section = monstersSection
+		section = chatSection
 	)
 	default boolean uniqueScreenshot()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -572,7 +579,7 @@ public interface CombatXpTrackerConfig extends Config
 		description = "At the start of a boss fight, a chat message if you have no potion boost, no offensive prayer, or "
 			+ "(on the Arceuus spellbook) no thrall for the style you're attacking with.",
 		position = 8,
-		section = combatSection
+		section = chatSection
 	)
 	default boolean boostReminder()
 	{
@@ -585,11 +592,11 @@ public interface CombatXpTrackerConfig extends Config
 		description = "A chat message for milestones: 100, 500, 1,000 (and more) kills of a monster, total kills, "
 			+ "your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best.",
 		position = 6,
-		section = combatSection
+		section = chatSection
 	)
 	default boolean milestoneMessages()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -597,7 +604,7 @@ public interface CombatXpTrackerConfig extends Config
 		name = "Screenshot milestones",
 		description = "Also saves a screenshot for each milestone, in RuneLite's screenshots folder under Milestones.",
 		position = 7,
-		section = combatSection
+		section = chatSection
 	)
 	default boolean milestoneScreenshot()
 	{
@@ -692,7 +699,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "showInfobox",
 		name = "Show goal infoboxes",
-		description = "Shows an infobox per goal with its progress.",
+		description = "Shows an infobox per goal with its progress, kill count goals included.",
 		position = 1,
 		section = overlaySection
 	)
@@ -716,7 +723,8 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "combinedDropWindowMillis",
 		name = "XP/damage pairing window (ms)",
-		description = "How close together (in milliseconds) an XP gain and a hit need to land to be paired.",
+		description = "Advanced: how close together (in milliseconds) an XP drop and a hit must land to show as one. "
+			+ "Leave it at 600 unless damage shows on the wrong XP drop.",
 		position = 3,
 		section = overlaySection
 	)
@@ -778,7 +786,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "overlayShowGoals",
 		name = "Overlay: goals",
-		description = "Show each goal's XP/hr and progress on the on-screen overlay.",
+		description = "Show each goal's XP/hr and progress on the on-screen overlay, kill count goals included.",
 		position = 7,
 		section = overlaySection
 	)
@@ -835,7 +843,7 @@ public interface CombatXpTrackerConfig extends Config
 	)
 	default boolean attackTimer()
 	{
-		return true;
+		return false;
 	}
 
 	@Alpha

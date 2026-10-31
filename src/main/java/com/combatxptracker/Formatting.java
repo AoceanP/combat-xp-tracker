@@ -36,6 +36,21 @@ public final class Formatting
 	}
 
 	/**
+	 * WHAT: A short count for tight rows: 950 -> "950", 2_826 -> "2.8K", 12_345 -> "12.3K", 1_250_000 -> "1.25M".
+	 * WHY: compactXp keeps commas up to 9,999, which is too long next to other text on a goal card.
+	 * PRE: None.
+	 * POST: Nothing changes.
+	 * RETURN: the count, at most about five characters
+	 * THROWS: Nothing.
+	 */
+	public static String compactCount(long count)
+	{
+		return Math.abs(count) < 1_000 ? String.valueOf(count)
+			: Math.abs(count) < 10_000 ? trimZeros(String.format(Locale.US, "%.1f", count / 1_000.0)) + "K"
+			: compactXp(count);
+	}
+
+	/**
 	 * 950 -> "950", 12_345 -> "12.3K", 13_034_431 -> "13.03M", 200_000_000 -> "200M".
 	 */
 	public static String compactXp(long xp)

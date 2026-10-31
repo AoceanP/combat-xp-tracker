@@ -127,6 +127,58 @@ final class DryCalculator
 	}
 
 	/**
+	 * WHAT: One item's drop rate from a boss.
+	 * WHY: The drop's tooltip says "1 in 5,000" and how lucky your kill was (2.5).
+	 * PRE: Either may be null.
+	 * POST: Nothing changes.
+	 * RETURN: N in "1 in N" per kill, or -1 if not bundled
+	 * THROWS: Nothing.
+	 */
+	double oneIn(String boss, String item)
+	{
+		Map<String, Double> items = boss == null || item == null ? null : rates.get(key(boss));
+		Double rate = items == null ? null : items.get(key(item));
+		return rate == null ? -1 : rate;
+	}
+
+	/**
+	 * WHAT: The story of a drop, for its tooltip: its rate, and how your first one compares.
+	 * WHY: "1 in 5,000 drop. First at kill 212. Lucky: 4% of players get one that early."
+	 * PRE: oneIn > 1; firstKill is the kill it first dropped on, or -1 if unknown.
+	 * POST: Nothing changes.
+	 * RETURN: HTML lines without the html tags
+	 * THROWS: Nothing.
+	 */
+	static String dropStory(double oneIn, int firstKill)
+	{
+		String rate = "1 in " + Formatting.withCommas(Math.round(oneIn)) + " drop";
+		if (firstKill <= 0)
+		{
+			return rate;
+		}
+		double byThen = 1 - Math.pow(1 - 1 / oneIn, firstKill);
+		String first = "<br>First at kill " + Formatting.withCommas(firstKill) + ". ";
+		if (byThen < 0.5)
+		{
+			return rate + first + "Lucky: " + percent(byThen) + " of players get one that early.";
+		}
+		return rate + first + "Dry: " + percent(byThen) + " of players get one sooner.";
+	}
+
+	private static String percent(double fraction)
+	{
+		if (fraction < 0.01)
+		{
+			return "under 1%";
+		}
+		if (fraction > 0.99)
+		{
+			return "over 99%";
+		}
+		return Math.round(fraction * 100) + "%";
+	}
+
+	/**
 	 * @param missing   collection log items not yet obtained
 	 * @param killCount the boss's kill count
 	 * @return the missing items with a known drop rate, driest first

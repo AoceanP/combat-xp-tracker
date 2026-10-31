@@ -246,6 +246,6 @@ public final class Goal
 	@Override
 	public String toString()
 	{
-		return type == Type.LEVEL ? "Level " + level : Formatting.compactXp(targetXp) + " xp";
+		return type == Type.LEVEL ? "Level " + level : Formatting.compactXp(targetXp) + " XP";
 	}
 }

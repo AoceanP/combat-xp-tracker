@@ -300,6 +300,7 @@ public class CombatXpTrackerPlugin extends Plugin
 
 	private final Map<Skill, SkillProgress> skillProgress = new EnumMap<>(Skill.class);
 	private final Map<Skill, GoalInfoBox> infoBoxes = new EnumMap<>(Skill.class);
+	private final Map<String, KillGoalInfoBox> killGoalBoxes = new HashMap<>();
 	private final HitStats hitStats = new HitStats();
 	private final CombinedDropTracker combinedDropTracker = new CombinedDropTracker();
 	// All-time stats (remembered per account) and this session's stats.
@@ -737,6 +738,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		// Another account's blocked tasks.
 		oddsKey = null;
 		taskSources = TaskSources.NONE;
+		// Another account's kill count goals.
+		syncInfoBoxes();
 		refreshPanelNow();
 	}
 
@@ -746,6 +749,11 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (!CombatXpTrackerConfig.GROUP.equals(event.getGroup()))
 		{
 			return;
+		}
+		if (event.getProfile() == null)
+		{
+			// A setting, not account data saved under the same group (monsters, goals, bank).
+			configRevision++;
 		}
 		if ("showInfobox".equals(event.getKey()))
 		{
@@ -781,7 +789,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			// Turning it off forgets what was saved; turning it on saves right away.
 			savedMonsterRevision = -1;
-			clientThread.invokeLater(this::saveMonsters);
+			clientThread.invokeLater(() -> saveMonsters());
 		}
 		refreshPanelNow();
 	}
@@ -868,7 +876,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (++ticksSinceSave >= SAVE_INTERVAL_TICKS)
 		{
 			ticksSinceSave = 0;
-			saveMonsters();
+			saveMonstersInBackground();
 			saveSlayerLog();
 			saveAreaMemory();
 			savePrayerDrain();
@@ -1630,6 +1638,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		lastKillTick.put(tracked, client.getTickCount());
 		monsterTracker.recordKill(tracked, now);
 		sessionMonsters.recordKill(tracked, now);
+		checkKillGoal(tracked);
 		if (config.rememberMonsters())
 		{
 			// Without remembered monsters the counts restart every session.
@@ -1800,6 +1809,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		monsterTracker.recordKill(name, now);
 		sessionMonsters.recordKill(name, now);
+		checkKillGoal(name);
 		monsterTracker.recordLoot(name, drops, now);
 		sessionMonsters.recordLoot(name, drops, now);
 		revealRareDrops(name, drops);
@@ -2337,10 +2347,42 @@ public class CombatXpTrackerPlugin extends Plugin
 		String skillName = Formatting.capitalize(skill.getName());
 		String what = goal.getType() == Goal.Type.LEVEL
 			? "level " + goal.getTargetLevel() + " " + skillName
-			: goal.getShortLabel() + " " + skillName + " xp";
+			: goal.getShortLabel() + " " + skillName + " XP";
 
 		notifier.notify(config.goalNotification(), "Goal reached: " + what + "!");
 
+		if (config.goalChatMessage())
+		{
+			String message = new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append("Goal reached: ")
+				.append(ChatColorType.NORMAL)
+				.append("you hit " + what + "!")
+				.build();
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(message)
+				.build());
+		}
+	}
+
+	/**
+	 * WHAT: Announces a kill count goal on the kill that reaches it.
+	 * WHY: Skill goals get a notification and chat message; "500 Vorkath kills" should too (2.5).
+	 * PRE: Client thread, right after the kill is counted.
+	 * POST: A notification and, if turned on, a chat message, once per goal.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void checkKillGoal(String monster)
+	{
+		int target = getKillGoalTarget(monster);
+		if (!KillGoals.justReached(monsterTracker.getKills(monster), target))
+		{
+			return;
+		}
+		String what = Formatting.withCommas(target) + " " + monster + " kills";
+		notifier.notify(config.goalNotification(), "Goal reached: " + what + "!");
 		if (config.goalChatMessage())
 		{
 			String message = new ChatMessageBuilder()
@@ -2635,7 +2677,30 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void saveMonsters()
 	{
-		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
+		saveMonsters(false);
+	}
+
+	/**
+	 * WHAT: The regular save during play, with the JSON written off the client thread.
+	 * WHY: A big Monsters tab (300 monsters, 1 MB) took about 8 ms to write: a hitch every 30s mid-fight.
+	 * PRE: Client thread.
+	 * POST: The copy is taken now; it's written shortly after on RuneLite's background thread.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void saveMonstersInBackground()
+	{
+		saveMonsters(true);
+	}
+
+	// Each save takes the next number; a background save that finishes after a newer one is dropped.
+	private final Object monsterSaveLock = new Object();
+	private int monsterSaveSeq;
+
+	private void saveMonsters(boolean background)
+	{
+		String profile = configManager.getRSProfileKey();
+		if (!canSave(profile, loadedProfile))
 		{
 			return;
 		}
@@ -2646,13 +2711,41 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		savedMonsterRevision = revision;
 
+		int seq;
+		synchronized (monsterSaveLock)
+		{
+			seq = ++monsterSaveSeq;
+		}
 		if (!config.rememberMonsters() || monsterTracker.isEmpty())
 		{
-			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY);
+			synchronized (monsterSaveLock)
+			{
+				configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, profile, MONSTERS_KEY);
+			}
 			return;
 		}
-		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY,
-			gson.toJson(monsterTracker.exportState()));
+		// A deep copy, cheap to take here; turning it into JSON is the slow part.
+		List<MonsterTracker.Saved> state = monsterTracker.exportState();
+		Runnable write = () ->
+		{
+			String json = gson.toJson(state);
+			synchronized (monsterSaveLock)
+			{
+				if (seq == monsterSaveSeq)
+				{
+					// The account the copy came from, even if another has logged in since.
+					configManager.setConfiguration(CombatXpTrackerConfig.GROUP, profile, MONSTERS_KEY, json);
+				}
+			}
+		};
+		if (background)
+		{
+			executor.execute(write);
+		}
+		else
+		{
+			write.run();
+		}
 	}
 
 	/**
@@ -2731,6 +2824,27 @@ public class CombatXpTrackerPlugin extends Plugin
 				infoBoxManager.removeInfoBox(infoBoxes.remove(skill));
 			}
 		}
+
+		// Kill count goals, with the Slayer icon since monsters have no icon of their own.
+		Map<String, Integer> killGoals = getKillGoals();
+		killGoalBoxes.values().removeIf(box ->
+		{
+			boolean gone = !box.stillIn(killGoals);
+			if (gone)
+			{
+				infoBoxManager.removeInfoBox(box);
+			}
+			return gone;
+		});
+		for (String monster : killGoals.keySet())
+		{
+			if (!killGoalBoxes.containsKey(monster))
+			{
+				KillGoalInfoBox box = new KillGoalInfoBox(skillIconManager.getSkillImage(Skill.SLAYER, true), this, monster);
+				killGoalBoxes.put(monster, box);
+				infoBoxManager.addInfoBox(box);
+			}
+		}
 	}
 
 	private void removeAllInfoBoxes()
@@ -2740,6 +2854,11 @@ public class CombatXpTrackerPlugin extends Plugin
 			infoBoxManager.removeInfoBox(box);
 		}
 		infoBoxes.clear();
+		for (KillGoalInfoBox box : killGoalBoxes.values())
+		{
+			infoBoxManager.removeInfoBox(box);
+		}
+		killGoalBoxes.clear();
 	}
 
 	private void refreshPanelNow()
@@ -4134,6 +4253,67 @@ public class CombatXpTrackerPlugin extends Plugin
 		return dryCalculator.luck(s.getName(), loot, s.getKills());
 	}
 
+	/**
+	 * WHAT: Imbued heart and eternal gem luck from every superior you've killed.
+	 * WHY: The Slayer tab's superiors card (2.5). Recounted only when the monsters change.
+	 * PRE: None.
+	 * POST: The result is cached until the next kill or drop.
+	 * RETURN: {heart, gem}
+	 * THROWS: Nothing.
+	 */
+	public SuperiorMonsters.UniqueLuck[] getSuperiorLuck()
+	{
+		int revision = monsterTracker.getRevision();
+		SuperiorMonsters.UniqueLuck[] cached = superiorLuck;
+		if (cached != null && revision == superiorLuckRevision)
+		{
+			return cached;
+		}
+		Map<String, Integer> kills = new HashMap<>();
+		long hearts = 0;
+		long gems = 0;
+		for (String superior : SuperiorMonsters.names())
+		{
+			MonsterTracker.Snapshot s = monsterTracker.snapshotOf(superior);
+			if (s == null)
+			{
+				continue;
+			}
+			kills.put(superior, s.getKills());
+			for (MonsterTracker.LootLine line : s.getLoot())
+			{
+				if (SuperiorMonsters.IMBUED_HEART.equalsIgnoreCase(line.getName()))
+				{
+					hearts += line.getQuantity();
+				}
+				else if (SuperiorMonsters.ETERNAL_GEM.equalsIgnoreCase(line.getName()))
+				{
+					gems += line.getQuantity();
+				}
+			}
+		}
+		cached = new SuperiorMonsters.UniqueLuck[]{SuperiorMonsters.luck(kills, hearts), SuperiorMonsters.luck(kills, gems)};
+		superiorLuck = cached;
+		superiorLuckRevision = revision;
+		return cached;
+	}
+
+	private volatile SuperiorMonsters.UniqueLuck[] superiorLuck;
+	private volatile int superiorLuckRevision;
+
+	/**
+	 * WHAT: An item's bundled drop rate from a monster.
+	 * WHY: Drop tooltips on the Monsters tab (2.5).
+	 * PRE: Either may be null.
+	 * POST: Nothing changes.
+	 * RETURN: N in "1 in N", or -1 if not bundled
+	 * THROWS: Nothing.
+	 */
+	public double getDropRate(String monster, String item)
+	{
+		return dryCalculator.oneIn(monster, item);
+	}
+
 	public List<DryCalculator.Dry> getDryItems(String monster)
 	{
 		CollectionLog.Status log = getCollectionStatus(monster);
@@ -4801,6 +4981,21 @@ public class CombatXpTrackerPlugin extends Plugin
 	/**
 	 * @return increases every 5 ticks while gold per hour is changing, for the panel to redraw
 	 */
+	/**
+	 * WHAT: Goes up whenever a plugin setting changes.
+	 * WHY: The Monsters tab skips unchanged cards; a setting can change what every card shows.
+	 * PRE: None.
+	 * POST: Nothing changes.
+	 * RETURN: the revision
+	 * THROWS: Nothing.
+	 */
+	public int getConfigRevision()
+	{
+		return configRevision;
+	}
+
+	private volatile int configRevision;
+
 	public int getRateTick()
 	{
 		return rateTick;
@@ -4876,11 +5071,55 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	public Map<String, Integer> getKillGoals()
 	{
+		return new java.util.LinkedHashMap<>(killGoals());
+	}
+
+	/**
+	 * WHAT: One monster's kill count goal.
+	 * WHY: Each kill goal infobox asks several times a frame; this skips copying every goal.
+	 * PRE: None.
+	 * POST: Nothing changes.
+	 * RETURN: the target, or 0 if there's no goal for it
+	 * THROWS: Nothing.
+	 */
+	int getKillGoalTarget(String monster)
+	{
+		Integer target = killGoals().get(monster);
+		return target == null ? 0 : target;
+	}
+
+	private Map<String, Integer> killGoals()
+	{
 		if (configManager.getRSProfileKey() == null)
 		{
-			return new java.util.LinkedHashMap<>();
+			return Collections.emptyMap();
 		}
-		return KillGoals.parse(configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY));
+		// The overlay and infoboxes ask every frame, so parse only when the saved text changes.
+		String text = configManager.getRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY);
+		Map<String, Integer> cached = killGoalsCache;
+		if (cached == null || !java.util.Objects.equals(text, killGoalsText))
+		{
+			cached = Collections.unmodifiableMap(KillGoals.parse(text));
+			killGoalsCache = cached;
+			killGoalsText = text;
+		}
+		return cached;
+	}
+
+	private volatile Map<String, Integer> killGoalsCache;
+	private volatile String killGoalsText;
+
+	/**
+	 * WHAT: All time kills of one monster, as the Monsters tab counts them.
+	 * WHY: Kill count goal infoboxes and overlay lines.
+	 * PRE: None.
+	 * POST: Nothing changes.
+	 * RETURN: the kills, 0 if never killed
+	 * THROWS: Nothing.
+	 */
+	int getAllTimeKills(String monster)
+	{
+		return monsterTracker.getKills(monster);
 	}
 
 	/**
@@ -4900,6 +5139,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		Map<String, Integer> goals = getKillGoals();
 		goals.put(monster.trim(), Math.max(1, Math.min(KillGoals.MAX_TARGET, target)));
 		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY, KillGoals.serialize(goals));
+		clientThread.invokeLater(this::syncInfoBoxes);
 		refreshPanelNow();
 		return true;
 	}
@@ -4928,6 +5168,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, KILL_GOALS_KEY, KillGoals.serialize(goals));
 		}
+		clientThread.invokeLater(this::syncInfoBoxes);
 		refreshPanelNow();
 	}
 

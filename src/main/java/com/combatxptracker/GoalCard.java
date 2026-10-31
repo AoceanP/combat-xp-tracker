@@ -173,8 +173,9 @@ class GoalCard extends JPanel
 
 	private static JPanel row(JLabel left, JLabel right)
 	{
+		// The left text takes what's left and ends in "..." if it must, so the two never overlap.
 		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.add(left, BorderLayout.WEST);
+		row.add(left, BorderLayout.CENTER);
 		right.setHorizontalAlignment(JLabel.RIGHT);
 		row.add(right, BorderLayout.EAST);
 		return row;
@@ -302,7 +303,7 @@ class GoalCard extends JPanel
 		}
 		else if (rate > 0)
 		{
-			rateLabel.setText(Formatting.compactXp(rate) + " xp/hr");
+			rateLabel.setText(Formatting.compactXp(rate) + " XP/hr");
 			rateLabel.setForeground(fill);
 			etaLabel.setText(Formatting.duration(progress.getEstimatedHoursToGoal(config.xpRateMode())) + " left");
 		}
@@ -331,11 +332,11 @@ class GoalCard extends JPanel
 		}
 		else if (killsLeft > 0)
 		{
-			remainingLabel.setText(Formatting.compactXp(progress.getXpRemainingToGoal()) + " xp, ~"
-				+ Formatting.compactXp(killsLeft) + " kills");
-			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left"
+			remainingLabel.setText(Formatting.compactXp(progress.getXpRemainingToGoal()) + " XP, ~"
+				+ Formatting.compactCount(killsLeft) + " kills");
+			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " XP left"
 				+ "<br>About " + Formatting.withCommas(killsLeft) + " more " + target + " kills"
-				+ "<br>(about " + Formatting.withCommas(Math.round(xpPerKill)) + " xp each)</html>");
+				+ "<br>(about " + Formatting.withCommas(Math.round(xpPerKill)) + " XP each)</html>");
 		}
 		else if (actionsLeft > 0)
 		{
@@ -343,14 +344,14 @@ class GoalCard extends JPanel
 			// Slayer XP comes once per kill; other combat skills once per hit.
 			String unit = skill == Skill.SLAYER ? "kills"
 				: CombinedDropTracker.isCombatSkill(skill) ? "hits" : "actions";
-			remainingLabel.setText(Formatting.compactXp(progress.getXpRemainingToGoal()) + " xp, ~"
-				+ Formatting.compactXp(actionsLeft) + " " + unit);
-			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left"
+			remainingLabel.setText(Formatting.compactXp(progress.getXpRemainingToGoal()) + " XP, ~"
+				+ Formatting.compactCount(actionsLeft) + " " + unit);
+			remainingLabel.setToolTipText("<html>" + Formatting.withCommas(progress.getXpRemainingToGoal()) + " XP left"
 				+ "<br>About " + Formatting.withCommas(actionsLeft) + " more XP drops at this session's average</html>");
 		}
 		else
 		{
-			remainingLabel.setText(Formatting.withCommas(progress.getXpRemainingToGoal()) + " xp left");
+			remainingLabel.setText(Formatting.withCommas(progress.getXpRemainingToGoal()) + " XP left");
 			remainingLabel.setToolTipText(null);
 		}
 		updateNextLevel(progress, reached);
@@ -359,7 +360,7 @@ class GoalCard extends JPanel
 		sessionLabel.setText(gained > 0 ? "+" + Formatting.compactXp(gained) + " session" : "");
 
 		String tooltip = "<html>" + Formatting.capitalize(skill.getName()) + ": " + goal
-			+ "<br>" + Formatting.withCommas(xp) + " xp now, " + Formatting.withCommas(goal.getTargetXp()) + " xp goal"
+			+ "<br>" + Formatting.withCommas(xp) + " XP now, " + Formatting.withCommas(goal.getTargetXp()) + " XP goal"
 			+ "<br>Double-click to change, right-click for options</html>";
 		for (JPanel p : tintedPanels)
 		{

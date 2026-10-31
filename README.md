@@ -32,6 +32,9 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 > **Lost your stats after updating to 2.0?** See the [2.0 data loss FAQ](RECOVERY.md).
 
 # All features
+
+Chat messages and screenshots are all off for new players, so your chatbox stays yours. Turn on the ones you like under **Chat & screenshots** in the settings.
+
 ## Goals
 - Set a goal from the panel (**+ Add goal**) or by right-clicking a skill in the stats tab and choosing **Set goal**
 - Goals can be a level from 2 to 126 (virtual levels past 99 work) or an XP amount up to 200M: `99`, `126`, `13.03m`, `200m`, `500k`
@@ -39,10 +42,10 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 - XP/hr, time left, time to your next level, XP left and XP gained this session for every goal
 - Kills left for combat goals, at your real XP per kill of the monster you're fighting (a rough hits/actions estimate otherwise)
 - XP/hr can be the last few seconds (reacts fast) or the whole session with breaks left out (steadier)
-- A notification and a chat message when you reach a goal
+- A notification when you reach a goal, and a chat message too if you turn it on
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
 - Drag goals up or down to put them in your own order
-- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate
+- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate. Like skill goals, they get a notification and chat message when reached, an infobox and an overlay line
 
 ## Kills to level
 - Under the max hit: how many more kills of the monster you're fighting each combat skill needs for its next level, and your next combat level
@@ -72,12 +75,12 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 - Raids and reward chests get their own card too: Chambers of Xeric, Theatre of Blood, Tombs of Amascut, Barrows, Fortis Colosseum and Moons of Peril, with completions, loot and the collection log, read from each reward chest when you open it
 - Kills per hour and GP per hour, counting only time spent fighting
 - Your slayer task on the matching card: kills left and roughly how long at your kill rate
-- A chat summary when you finish a slayer task: kills, time, loot, GP/hr and biggest hit
-- A chat summary when you kill a boss: fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
+- A chat summary when you finish a slayer task (off by default): kills, time, loot, GP/hr and biggest hit
+- A chat summary when you kill a boss (off by default): fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
 - Accuracy, DPS and attack uptime tiles on each monster: the share of your hits that did damage, your damage per second while fighting, and how much of each fight you spent attacking (ticks past your weapon's attack speed before your next attack, from eating, moving or a late click, count against it)
 - Target card: the monster you're fighting right now at the top of the tab, with its health bar, hits left to kill it at your average hit, your time per kill and your DPS
 - Boss personal bests: your fastest kill and your last kill on each boss card, from the game's own fight duration message, with a milestone message when you beat it
-- Deaths: how many times you've died to each monster and what you were carrying, on its card and in the slayer task log, with an optional chat message
+- Deaths: how many times you've died to each monster and what you were carrying, on its card and in the slayer task log, with an optional chat message (off by default)
 - Profit: loot minus supplies, and net GP/hr, on each monster
 - Supplies used: food eaten, potion doses, runes cast, ammo fired and cannonballs, with what they cost at Grand Exchange prices, for each monster (this session or all time) and each slayer task. Hover for the breakdown
 - Collection log: open a boss's page in the in-game Collection Log and its monster card shows how many of its items you have, which ones you're still missing and your kill count. It stays up to date as new items are added. Bosses and raids only, since slayer monsters share one page
@@ -90,12 +93,15 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 
 ## Bosses
 - Kill times: **PB**, **Last** and **Avg** tiles on each boss card, from the game's own fight duration message, with a milestone message when you set a new personal best
+- Kill trend: a small chart of your last 20 kill times under the PB tiles, and a **Trend** row comparing your newer kills with the older ones, e.g. *11.1s faster*
 - Live kill timer: an on-screen timer during boss fights next to your PB, gold while you're on pace for a new best and red once it's out of reach. It shows the game's exact time when the kill lands
 - Dry calculator: the boss's collection log as item icons (owned bright, missing faded), with the driest missing item outlined in red and how dry you are, e.g. *Vorkath's head 2.4x the rate (91% would have it by now)*. Drop rates are bundled from the OSRS Wiki, nothing is looked up online
+- Pet chance: once you've opened the boss's collection log page, how likely you'd have its pet by now at your kill count, e.g. *63% by now*, or **Owned**
 - Luck vs average: how many uniques you've had from a boss against how many your kills should have given at the wiki's drop rates, e.g. *+18%*. Hover it for each item
+- Hover a boss unique in the drops grid for its drop rate and how your first one compares, e.g. *1 in 5,000 drop. First at kill 212. Lucky: 4% of players get one that early.*
 - Combat Achievements: how many of each boss's tasks you've done, read from the game's own Combat Achievements data. Hover for every task, with whether your PB is fast enough for its speed tasks
 - Damage taken per kill and flawless kills (no damage taken) on each boss
-- Big drop reveal: a new collection log item or a big drop (1M or your rare drop value) spins in at the top of the Monsters tab like opening a case, and a screenshot is saved in RuneLite's screenshots folder under Uniques. It can also show on the game screen for a few seconds (off by default)
+- Big drop reveal: a new collection log item or a big drop (1M or your rare drop value) spins in at the top of the Monsters tab like opening a case. It can also save a screenshot in RuneLite's screenshots folder under Uniques (off by default). It can also show on the game screen for a few seconds (off by default)
 
 ## Fighting
 - Target card: the monster you're fighting at the top of the Monsters tab, with its health bar, hits left, your time per kill and DPS
@@ -110,7 +116,7 @@ A **Slayer** tab with everything about your slayer progress:
 - Task guide: every place your task can be done, with the game's own directions, and what to bring (nose peg, earmuffs, rock hammer, mirror shield and so on), warning you if it isn't in your gear or inventory. Locations are read live from the game, so they stay up to date
 - The guide checks your bank too: once you've opened it, an item you need shows **In bank** if you have one there, or **Missing** if you don't own one. It's saved on your computer only and can be turned off in the settings
 - Your best area: right-click the area you're doing your task in. The plugin remembers the spot and picks it automatically next time (Konar's areas are picked for you). Each area then shows your own Slayer XP/hr and kills/hr there, your best one is marked, and areas you've found to be multi-combat or in the Wilderness are tagged
-- Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
+- Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels, unlocks or quests don't allow yet (e.g. elves before Regicide). Right-click a task to mark it as blocked
 - Where to get a task: pick any task (or right-click one anywhere in the tab) to see every master's chance of giving it to you, so you know who to go to for the task you want
 - Master tip: if another slayer master would clearly give you more Slayer XP per hour (10% or more), a tip under the next task odds says so. It uses each master's task chances and your own rate on each task from your log
 - Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
@@ -120,6 +126,7 @@ A **Slayer** tab with everything about your slayer progress:
 - Task forecast: when you get a task you've done before, how long it'll take, the XP, loot and supplies, from your own last runs of it. The task guide also shows this for the rest of the task
 - Is cannon worth it: on a task you've done both with and without a cannon, the Slayer XP/hr it adds and what the cannonballs cost an hour
 - Superiors: how many appeared this task and across your logged tasks, and how often. An optional notification when one spawns
+- Imbued heart and eternal gem luck: how many you've had from the superiors the plugin has seen, or how likely you'd have one by now. Higher level superiors drop them more often, from the OSRS Wiki's formula
 - A task log of every finished task, saved per account: kills, time, Slayer XP, loot, superiors, points earned and biggest hit, with XP/hr and GP/hr on hover. Right-click a task to remove it
 
 ## Supplies & loot
@@ -134,15 +141,15 @@ Twelve colour themes for the sidebar in the settings: Dark (the original, and th
 - **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
 - **Copy as image**: right-click any monster card to copy a picture of it, ready to paste into Discord
 - **Copy share card**: right-click any monster card for a picture made for posting: its name and kill count large, PB, kills/hr, loot, GP/hr, drop luck and best drops
-- Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
+- Milestones (off by default): a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
 
 ## Overlays
 - Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)
 - One infobox per goal with its progress
-- Attack timer: while fighting, the ticks until your next attack show above your character, turning green when you can attack. It uses your weapon's attack speed (Rapid, spells and powered staves included), works for melee, ranged and magic, and isn't thrown off by your block animation when you take a hit. It can be turned off
+- Attack timer: while fighting, the ticks until your next attack show above your character, turning green when you can attack. It uses your weapon's attack speed (Rapid, spells and powered staves included), works for melee, ranged and magic, and isn't thrown off by your block animation when you take a hit. Off by default; turn it on under Overlays
 
 ## Feedback
-- **Report bug** and **Suggest** buttons at the top of the panel open this repository's issues page
+- **Report bug** and **Suggest** buttons at the bottom of the panel open this repository's issues page
 
 ## Credits
 - Drop rates and elemental weaknesses are from the [Old School RuneScape Wiki](https://oldschool.runescape.wiki/), under CC BY-NC-SA 3.0
