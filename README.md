@@ -45,7 +45,7 @@ Chat messages and screenshots are all off for new players, so your chatbox stays
 - A notification when you reach a goal, and a chat message too if you turn it on
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
 - Drag goals up or down to put them in your own order
-- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate
+- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate. Like skill goals, they get a notification and chat message when reached, an infobox and an overlay line
 
 ## Kills to level
 - Under the max hit: how many more kills of the monster you're fighting each combat skill needs for its next level, and your next combat level

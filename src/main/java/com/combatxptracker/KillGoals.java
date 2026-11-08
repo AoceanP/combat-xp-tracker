@@ -133,6 +133,53 @@ final class KillGoals
 	}
 
 	/**
+	 * WHAT: Whether the kill just counted is the one that reaches the goal.
+	 * WHY: Announce it once, on that kill; a goal set below your kills is already done and stays quiet.
+	 * PRE: kills is the count after the kill.
+	 * POST: Nothing changes.
+	 * RETURN: true when kills equals the target
+	 * THROWS: Nothing.
+	 */
+	static boolean justReached(int kills, int target)
+	{
+		return target > 0 && kills == target;
+	}
+
+	/**
+	 * WHAT: Progress as the infobox shows it: "42%", or "Done".
+	 * WHY: Matches the skill goal infobox. Rounds down so 99.9% never says 100%.
+	 * PRE: target > 0.
+	 * POST: Nothing changes.
+	 * RETURN: the text
+	 * THROWS: Nothing.
+	 */
+	static String percentText(int kills, int target)
+	{
+		if (kills >= target)
+		{
+			return "Done";
+		}
+		return (int) Math.floor(Math.max(0, kills) * 100.0 / target) + "%";
+	}
+
+	/**
+	 * WHAT: The right side of the overlay line: "212/500 (42%)", or "Goal reached!".
+	 * WHY: Kill count goals sit under skill goals on the overlay.
+	 * PRE: target > 0.
+	 * POST: Nothing changes.
+	 * RETURN: the text
+	 * THROWS: Nothing.
+	 */
+	static String overlayText(int kills, int target)
+	{
+		if (kills >= target)
+		{
+			return "Goal reached!";
+		}
+		return Formatting.withCommas(kills) + "/" + Formatting.withCommas(target) + " (" + percentText(kills, target) + ")";
+	}
+
+	/**
 	 * WHAT: Hours left to reach a goal at a kill rate.
 	 * WHY: "~7h 10m" on the goal card.
 	 * PRE: killsPerHour may be zero or negative for unknown.

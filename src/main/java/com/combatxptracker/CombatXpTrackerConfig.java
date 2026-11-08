@@ -699,7 +699,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "showInfobox",
 		name = "Show goal infoboxes",
-		description = "Shows an infobox per goal with its progress.",
+		description = "Shows an infobox per goal with its progress, kill count goals included.",
 		position = 1,
 		section = overlaySection
 	)
@@ -786,7 +786,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "overlayShowGoals",
 		name = "Overlay: goals",
-		description = "Show each goal's XP/hr and progress on the on-screen overlay.",
+		description = "Show each goal's XP/hr and progress on the on-screen overlay, kill count goals included.",
 		position = 7,
 		section = overlaySection
 	)

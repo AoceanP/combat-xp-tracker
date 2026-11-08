@@ -211,6 +211,20 @@ public class CombatXpTrackerOverlay extends OverlayPanel
 				.build());
 		}
 
+		if (config.overlayShowGoals())
+		{
+			// Kill count goals under the skill goals (2.5).
+			for (Map.Entry<String, Integer> goal : plugin.getKillGoals().entrySet())
+			{
+				int kills = plugin.getAllTimeKills(goal.getKey());
+				panelComponent.getChildren().add(LineComponent.builder()
+					.left(goal.getKey() + ":")
+					.right(KillGoals.overlayText(kills, goal.getValue()))
+					.rightColor(kills >= goal.getValue() ? GOAL_REACHED : Color.WHITE)
+					.build());
+			}
+		}
+
 		return super.render(graphics);
 	}
 

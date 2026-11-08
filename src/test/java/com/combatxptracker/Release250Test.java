@@ -157,4 +157,24 @@ public class Release250Test
 			}
 		}
 	}
+
+	@Test
+	public void killGoalsAnnounceOnceOnTheKillThatReachesThem()
+	{
+		assertFalse(KillGoals.justReached(499, 500));
+		assertTrue(KillGoals.justReached(500, 500));
+		// Set below your kills: already done, so no announcement.
+		assertFalse(KillGoals.justReached(612, 500));
+	}
+
+	@Test
+	public void killGoalTextMatchesSkillGoals()
+	{
+		assertEquals("42%", KillGoals.percentText(212, 500));
+		assertEquals("99%", KillGoals.percentText(499, 500));
+		assertEquals("Done", KillGoals.percentText(500, 500));
+		assertEquals("212/500 (42%)", KillGoals.overlayText(212, 500));
+		assertEquals("1,000/2,500 (40%)", KillGoals.overlayText(1_000, 2_500));
+		assertEquals("Goal reached!", KillGoals.overlayText(612, 500));
+	}
 }
