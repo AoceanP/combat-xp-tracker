@@ -116,7 +116,7 @@ A **Slayer** tab with everything about your slayer progress:
 - Task guide: every place your task can be done, with the game's own directions, and what to bring (nose peg, earmuffs, rock hammer, mirror shield and so on), warning you if it isn't in your gear or inventory. Locations are read live from the game, so they stay up to date
 - The guide checks your bank too: once you've opened it, an item you need shows **In bank** if you have one there, or **Missing** if you don't own one. It's saved on your computer only and can be turned off in the settings
 - Your best area: right-click the area you're doing your task in. The plugin remembers the spot and picks it automatically next time (Konar's areas are picked for you). Each area then shows your own Slayer XP/hr and kills/hr there, your best one is marked, and areas you've found to be multi-combat or in the Wilderness are tagged
-- Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels or unlocks don't allow. Right-click a task to mark it as blocked. It's an estimate, since quest requirements aren't in the game data
+- Next task odds: the likeliest tasks from your master and their usual size, from the game's own task weights, leaving out tasks your levels, unlocks or quests don't allow yet (e.g. elves before Regicide). Right-click a task to mark it as blocked
 - Where to get a task: pick any task (or right-click one anywhere in the tab) to see every master's chance of giving it to you, so you know who to go to for the task you want
 - Master tip: if another slayer master would clearly give you more Slayer XP per hour (10% or more), a tip under the next task odds says so. It uses each master's task chances and your own rate on each task from your log
 - Your tasks ranked by your own Slayer XP/hr and GP/hr, with your slowest ones as block or skip ideas
@@ -126,6 +126,7 @@ A **Slayer** tab with everything about your slayer progress:
 - Task forecast: when you get a task you've done before, how long it'll take, the XP, loot and supplies, from your own last runs of it. The task guide also shows this for the rest of the task
 - Is cannon worth it: on a task you've done both with and without a cannon, the Slayer XP/hr it adds and what the cannonballs cost an hour
 - Superiors: how many appeared this task and across your logged tasks, and how often. An optional notification when one spawns
+- Imbued heart and eternal gem luck: how many you've had from the superiors the plugin has seen, or how likely you'd have one by now. Higher level superiors drop them more often, from the OSRS Wiki's formula
 - A task log of every finished task, saved per account: kills, time, Slayer XP, loot, superiors, points earned and biggest hit, with XP/hr and GP/hr on hover. Right-click a task to remove it
 
 ## Supplies & loot

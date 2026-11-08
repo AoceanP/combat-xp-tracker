@@ -62,6 +62,8 @@ class SlayerView extends JPanel
 	private static final double BLOCK_ADVICE_MIN_CHANCE = 0.03;
 	private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("MMM d", Locale.US);
 	private static final Color BAR_GREY = new Color(130, 130, 130);
+	// Past even odds without the drop: the red the Monsters tab uses for dry streaks.
+	private static final Color DRY = new Color(235, 110, 100);
 
 	private final CombatXpTrackerPlugin plugin;
 	private final CombatXpTrackerConfig config;
@@ -169,9 +171,11 @@ class SlayerView extends JPanel
 		{
 			updateSources(sources);
 		}
-		if (changed("superiors", log + "|" + taskSuperiors + "|" + taskKills + "|" + (status.getTask() != null)))
+		SuperiorMonsters.UniqueLuck[] uniques = plugin.getSuperiorLuck();
+		if (changed("superiors", log + "|" + taskSuperiors + "|" + taskKills + "|" + (status.getTask() != null)
+			+ "|" + java.util.Arrays.toString(uniques)))
 		{
-			updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null);
+			updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null, uniques);
 		}
 		if (changed("ranking", log + "|" + rankTab))
 		{
@@ -600,8 +604,8 @@ class SlayerView extends JPanel
 			oddsCard.add(UiKit.sectionHeader("Blocked by you", count));
 			oddsCard.add(blockedList);
 		}
-		oddsCard.add(wrapped("From your master's task weights, leaving out tasks you can't get yet. Quest requirements "
-			+ "aren't in the game data, so it's an estimate. Right-click a task to mark it as blocked."
+		oddsCard.add(wrapped("From your master's task weights, without tasks your levels, rewards or quests "
+			+ "don't allow yet. Right-click a task to block it."
 			+ (odds.isUnlocksKnown() ? "" : " Your Slayer reward unlocks couldn't be read, so tasks that need one are left out."),
 			Theme.SUBTLE));
 	}
@@ -703,8 +707,8 @@ class SlayerView extends JPanel
 				+ "<br>About 1 in " + Math.max(1, Math.round(1 / src.getChance())) + " tasks</html>");
 			sourcesCard.add(row);
 		}
-		sourcesCard.add(wrapped("From each master's task weights with your levels, unlocks and blocked tasks. "
-			+ "Quest requirements aren't in the game data, so it's an estimate.", Theme.SUBTLE));
+		sourcesCard.add(wrapped("From each master's task weights with your levels, quests, unlocks and blocked tasks.",
+			Theme.SUBTLE));
 	}
 
 	/**
@@ -866,7 +870,8 @@ class SlayerView extends JPanel
 		return tasksAway <= 0 ? "This one" : tasksAway == 1 ? "Next task" : "In " + tasksAway + " tasks";
 	}
 
-	private void updateSuperiors(List<SlayerTaskRecord> tasks, int taskSuperiors, int taskKills, boolean onTask)
+	private void updateSuperiors(List<SlayerTaskRecord> tasks, int taskSuperiors, int taskKills, boolean onTask,
+		SuperiorMonsters.UniqueLuck[] uniques)
 	{
 		superiorCard.removeAll();
 		superiorCard.add(title("Superiors"));
@@ -911,8 +916,36 @@ class SlayerView extends JPanel
 		{
 			rates.append("Logged: 1 per ").append(Math.round(rate)).append(" kills. ");
 		}
+		// Heart and gem luck, once you've killed a superior the plugin saw (2.5).
+		if (uniques != null && uniques.length == 2 && uniques[0].kills > 0)
+		{
+			superiorCard.add(uniqueRow(SuperiorMonsters.IMBUED_HEART, uniques[0]));
+			superiorCard.add(uniqueRow(SuperiorMonsters.ETERNAL_GEM, uniques[1]));
+		}
 		superiorCard.add(wrapped(rates + "The chance is 1 in " + SuperiorMonsters.BASE_RATE
 			+ " per task kill with Bigger and Badder (1 in 150 with the elite combat achievements).", Theme.SUBTLE));
+	}
+
+	/**
+	 * WHAT: One superior unique's row: "2 got" in green, or how likely you'd have one by now.
+	 * WHY: Says whether you're lucky or dry on the drops superiors are hunted for.
+	 * PRE: luck.kills > 0.
+	 * POST: Nothing changes.
+	 * RETURN: the row
+	 * THROWS: Nothing.
+	 */
+	private static JPanel uniqueRow(String item, SuperiorMonsters.UniqueLuck luck)
+	{
+		String tip = String.format(Locale.US, "<html>%s from your %s superior kills: %.2f expected, %s got.<br>"
+				+ "%d%% of players would have one by now.<br>Higher level superiors drop it more often "
+				+ "(OSRS Wiki).</html>", item, Formatting.withCommas(luck.kills), luck.expected,
+			Formatting.withCommas(luck.got), Math.round(luck.chanceByNow * 100));
+		if (luck.got > 0)
+		{
+			return row(item, Formatting.withCommas(luck.got) + " got", Theme.readable(Theme.SUCCESS), tip);
+		}
+		return row(item, Math.round(luck.chanceByNow * 100) + "% by now",
+			luck.chanceByNow >= 0.5 ? Theme.readable(DRY) : Theme.TEXT, tip);
 	}
 
 	private void updateLog(List<SlayerTaskRecord> tasks, LootPrice price)

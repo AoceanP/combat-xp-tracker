@@ -789,7 +789,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			// Turning it off forgets what was saved; turning it on saves right away.
 			savedMonsterRevision = -1;
-			clientThread.invokeLater(this::saveMonsters);
+			clientThread.invokeLater(() -> saveMonsters());
 		}
 		refreshPanelNow();
 	}
@@ -876,7 +876,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (++ticksSinceSave >= SAVE_INTERVAL_TICKS)
 		{
 			ticksSinceSave = 0;
-			saveMonsters();
+			saveMonstersInBackground();
 			saveSlayerLog();
 			saveAreaMemory();
 			savePrayerDrain();
@@ -2677,7 +2677,30 @@ public class CombatXpTrackerPlugin extends Plugin
 	 */
 	private void saveMonsters()
 	{
-		if (!canSave(configManager.getRSProfileKey(), loadedProfile))
+		saveMonsters(false);
+	}
+
+	/**
+	 * WHAT: The regular save during play, with the JSON written off the client thread.
+	 * WHY: A big Monsters tab (300 monsters, 1 MB) took about 8 ms to write: a hitch every 30s mid-fight.
+	 * PRE: Client thread.
+	 * POST: The copy is taken now; it's written shortly after on RuneLite's background thread.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void saveMonstersInBackground()
+	{
+		saveMonsters(true);
+	}
+
+	// Each save takes the next number; a background save that finishes after a newer one is dropped.
+	private final Object monsterSaveLock = new Object();
+	private int monsterSaveSeq;
+
+	private void saveMonsters(boolean background)
+	{
+		String profile = configManager.getRSProfileKey();
+		if (!canSave(profile, loadedProfile))
 		{
 			return;
 		}
@@ -2688,13 +2711,41 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		savedMonsterRevision = revision;
 
+		int seq;
+		synchronized (monsterSaveLock)
+		{
+			seq = ++monsterSaveSeq;
+		}
 		if (!config.rememberMonsters() || monsterTracker.isEmpty())
 		{
-			configManager.unsetRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY);
+			synchronized (monsterSaveLock)
+			{
+				configManager.unsetConfiguration(CombatXpTrackerConfig.GROUP, profile, MONSTERS_KEY);
+			}
 			return;
 		}
-		configManager.setRSProfileConfiguration(CombatXpTrackerConfig.GROUP, MONSTERS_KEY,
-			gson.toJson(monsterTracker.exportState()));
+		// A deep copy, cheap to take here; turning it into JSON is the slow part.
+		List<MonsterTracker.Saved> state = monsterTracker.exportState();
+		Runnable write = () ->
+		{
+			String json = gson.toJson(state);
+			synchronized (monsterSaveLock)
+			{
+				if (seq == monsterSaveSeq)
+				{
+					// The account the copy came from, even if another has logged in since.
+					configManager.setConfiguration(CombatXpTrackerConfig.GROUP, profile, MONSTERS_KEY, json);
+				}
+			}
+		};
+		if (background)
+		{
+			executor.execute(write);
+		}
+		else
+		{
+			write.run();
+		}
 	}
 
 	/**
@@ -4201,6 +4252,54 @@ public class CombatXpTrackerPlugin extends Plugin
 		}
 		return dryCalculator.luck(s.getName(), loot, s.getKills());
 	}
+
+	/**
+	 * WHAT: Imbued heart and eternal gem luck from every superior you've killed.
+	 * WHY: The Slayer tab's superiors card (2.5). Recounted only when the monsters change.
+	 * PRE: None.
+	 * POST: The result is cached until the next kill or drop.
+	 * RETURN: {heart, gem}
+	 * THROWS: Nothing.
+	 */
+	public SuperiorMonsters.UniqueLuck[] getSuperiorLuck()
+	{
+		int revision = monsterTracker.getRevision();
+		SuperiorMonsters.UniqueLuck[] cached = superiorLuck;
+		if (cached != null && revision == superiorLuckRevision)
+		{
+			return cached;
+		}
+		Map<String, Integer> kills = new HashMap<>();
+		long hearts = 0;
+		long gems = 0;
+		for (String superior : SuperiorMonsters.names())
+		{
+			MonsterTracker.Snapshot s = monsterTracker.snapshotOf(superior);
+			if (s == null)
+			{
+				continue;
+			}
+			kills.put(superior, s.getKills());
+			for (MonsterTracker.LootLine line : s.getLoot())
+			{
+				if (SuperiorMonsters.IMBUED_HEART.equalsIgnoreCase(line.getName()))
+				{
+					hearts += line.getQuantity();
+				}
+				else if (SuperiorMonsters.ETERNAL_GEM.equalsIgnoreCase(line.getName()))
+				{
+					gems += line.getQuantity();
+				}
+			}
+		}
+		cached = new SuperiorMonsters.UniqueLuck[]{SuperiorMonsters.luck(kills, hearts), SuperiorMonsters.luck(kills, gems)};
+		superiorLuck = cached;
+		superiorLuckRevision = revision;
+		return cached;
+	}
+
+	private volatile SuperiorMonsters.UniqueLuck[] superiorLuck;
+	private volatile int superiorLuckRevision;
 
 	/**
 	 * WHAT: An item's bundled drop rate from a monster.

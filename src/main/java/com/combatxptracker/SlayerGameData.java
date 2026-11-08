@@ -38,9 +38,12 @@ import java.util.function.Function;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
+import net.runelite.api.Quest;
+import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
 import net.runelite.api.gameval.DBTableID;
 import net.runelite.api.gameval.InventoryID;
@@ -77,6 +80,9 @@ class SlayerGameData
 	// The current task's areas, read once per task rather than every tick.
 	private String areasKey;
 	private List<SlayerGuide.Area> areas = Collections.emptyList();
+	// Quest states, read once per game tick: every master's odds ask about the same quests.
+	private final Map<Quest, QuestState> questStates = new EnumMap<>(Quest.class);
+	private int questTick = -1;
 
 	@Inject
 	SlayerGameData(Client client, ItemManager itemManager)
@@ -283,7 +289,7 @@ class SlayerGameData
 			}
 
 			options.add(new TaskOdds.Option(name, weight, min, max,
-				unavailable(row, taskRow, combatLevel, unlocksKnown)));
+				unavailable(name, row, taskRow, combatLevel, unlocksKnown)));
 		}
 		return TaskOdds.compute(master.getDisplayName(), options, blockedLowercase, unlocksKnown);
 	}
@@ -324,7 +330,7 @@ class SlayerGameData
 	/**
 	 * @return why the player can't get this task right now, or null if they can
 	 */
-	private String unavailable(int masterTaskRow, int taskRow, int combatLevel, boolean unlocksKnown)
+	private String unavailable(String task, int masterTaskRow, int taskRow, int combatLevel, boolean unlocksKnown)
 	{
 		int minCombat = intField(taskRow, DBTableID.SlayerTask.COL_MIN_COMLEVEL, 0);
 		if (combatLevel < minCombat)
@@ -363,7 +369,32 @@ class SlayerGameData
 		{
 			return "Turned off by " + unlockName(turnsOff);
 		}
+		// Quest states only read right once the account's data has arrived, which the unlock check
+		// confirms; before then, count the task as before rather than lock everything.
+		if (unlocksKnown && client.getGameState() == GameState.LOGGED_IN)
+		{
+			return QuestLocks.lockedBy(task, this::questState);
+		}
 		return null;
+	}
+
+	/**
+	 * WHAT: A quest's state, from the client, remembered for the rest of this tick.
+	 * WHY: Reading it runs a client script; all masters' odds ask about the same few quests.
+	 * PRE: Client thread, logged in.
+	 * POST: The state is cached until the next tick.
+	 * RETURN: the quest's state
+	 * THROWS: Nothing.
+	 */
+	private QuestState questState(Quest quest)
+	{
+		int tick = client.getTickCount();
+		if (tick != questTick)
+		{
+			questStates.clear();
+			questTick = tick;
+		}
+		return questStates.computeIfAbsent(quest, q -> q.getState(client));
 	}
 
 	// ---- Reward unlocks ---------------------------------------------------------------------

@@ -178,6 +178,49 @@ public class Release250Test
 		assertEquals("Goal reached!", KillGoals.overlayText(612, 500));
 	}
 
+	private static java.util.function.Function<Quest, QuestState> states(Map<Quest, QuestState> known)
+	{
+		return q -> known.getOrDefault(q, QuestState.NOT_STARTED);
+	}
+
+	@Test
+	public void questLockedTasksNeedTheirQuest()
+	{
+		Map<Quest, QuestState> none = Collections.emptyMap();
+		assertEquals("Needs Regicide", QuestLocks.lockedBy("Elves", states(none)));
+		assertEquals("Needs Bone Voyage", QuestLocks.lockedBy("Fossil Island Wyverns", states(none)));
+		assertNull("no quest needed", QuestLocks.lockedBy("Hellhounds", states(none)));
+
+		Map<Quest, QuestState> regicide = new HashMap<>();
+		regicide.put(Quest.REGICIDE, QuestState.FINISHED);
+		assertNull(QuestLocks.lockedBy("Elves", states(regicide)));
+
+		Map<Quest, QuestState> started = new HashMap<>();
+		started.put(Quest.REGICIDE, QuestState.IN_PROGRESS);
+		started.put(Quest.DRAGON_SLAYER_I, QuestState.IN_PROGRESS);
+		assertEquals("only finishing Regicide counts", "Needs Regicide", QuestLocks.lockedBy("Elves", states(started)));
+		assertNull("starting Dragon Slayer I is enough", QuestLocks.lockedBy("Blue dragons", states(started)));
+		assertEquals("Needs Dragon Slayer I (started)", QuestLocks.lockedBy("Black dragons", states(none)));
+	}
+
+	@Test
+	public void eitherQuestUnlocksAbyssalDemons()
+	{
+		Map<Quest, QuestState> fairy = new HashMap<>();
+		fairy.put(Quest.FAIRYTALE_II__CURE_A_QUEEN, QuestState.IN_PROGRESS);
+		assertNull(QuestLocks.lockedBy("Abyssal demons", states(fairy)));
+		assertEquals("Needs Priest in Peril", QuestLocks.lockedBy("Abyssal demons", states(Collections.emptyMap())));
+	}
+
+	@Test
+	public void questLocksMatchExactNamesOnly()
+	{
+		// "Spiders" isn't Fever spiders, so Rum Deal doesn't lock it.
+		assertNull(QuestLocks.lockedBy("Spiders", states(Collections.emptyMap())));
+		assertTrue(QuestLocks.forTask("Fever spiders").size() == 1);
+		assertTrue(QuestLocks.forTask(null).isEmpty());
+	}
+
 	@Test
 	public void dropTooltipsTellTheDropsStory()
 	{
@@ -201,6 +244,32 @@ public class Release250Test
 		assertEquals(5_000, dry.oneIn("vorkath", "draconic visage"), 0);
 		assertEquals(-1, dry.oneIn("Vorkath", "Dragon bones"), 0);
 		assertEquals(-1, dry.oneIn("Zulrah", "Tanzanite fang"), 0);
+	}
+
+	@Test
+	public void superiorUniqueChancesFollowTheWikiFormula()
+	{
+		// 1 in (200 - (level + 55)^2 / 125) for the table, then 1/8 for the item.
+		assertEquals(8 * 171.2, SuperiorMonsters.uniqueOneIn("Crushing hand"), 0.001);
+		assertEquals(8 * 54.2, SuperiorMonsters.uniqueOneIn("Nechryarch"), 0.001);
+		assertEquals(8 * 20.0, SuperiorMonsters.uniqueOneIn("colossal hydra"), 0.001);
+		assertEquals(-1, SuperiorMonsters.uniqueOneIn("Vorkath"), 0);
+		assertEquals(38, SuperiorMonsters.names().size());
+	}
+
+	@Test
+	public void superiorLuckAddsUpEverySuperior()
+	{
+		Map<String, Integer> kills = new HashMap<>();
+		kills.put("nechryarch", 200);
+		kills.put("colossal hydra", 80);
+		kills.put("vorkath", 500);
+		SuperiorMonsters.UniqueLuck luck = SuperiorMonsters.luck(kills, 0);
+		assertEquals("Vorkath isn't a superior", 280, luck.kills);
+		assertEquals(200 / 433.6 + 80 / 160.0, luck.expected, 1e-9);
+		double none = Math.pow(1 - 1 / 433.6, 200) * Math.pow(1 - 1 / 160.0, 80);
+		assertEquals(1 - none, luck.chanceByNow, 1e-9);
+		assertEquals(0, SuperiorMonsters.luck(Collections.emptyMap(), 0).kills);
 	}
 
 	@Test
