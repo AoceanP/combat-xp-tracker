@@ -80,6 +80,7 @@ class SlayerView extends JPanel
 	private final JLabel emptyLog = new JLabel();
 	private final JLabel clearLog;
 	private String viewKey;
+	private final java.util.Map<String, String> cardKeys = new java.util.HashMap<>();
 	// Which list "Your tasks" shows: 0 fastest XP, 1 most GP, 2 slowest.
 	private int rankTab;
 	private List<TaskStats> lastHistory = new ArrayList<>();
@@ -143,16 +144,64 @@ class SlayerView extends JPanel
 		List<SlayerTaskRecord> tasks = plugin.getSlayerTasks();
 		List<TaskStats> history = TaskStats.group(tasks, price);
 		TaskForecast forecast = plugin.getTaskRunForecast();
-		updateStatus(status, forecast, taskSuperiors);
-		updateGuide(guide, tasks, price, taskArea, potions, status.getRemaining(), forecast);
-		updatePoints(status);
-		updateOdds(odds, history, status.getMaster(), status.getTask());
-		updateSources(sources);
-		updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null);
-		updateRanking(history);
-		updateLog(tasks, price);
+		// Each card is rebuilt only when what it shows changed: a kill used to rebuild the whole
+		// tab every few seconds, closing any tooltip or menu open on the log or the odds.
+		String log = plugin.getSlayerLogRevision() + "|" + price + "|" + plugin.getConfigRevision();
+		String run = forecastKey(forecast);
+		if (changed("status", status + "|" + run + "|" + taskSuperiors + "|" + plugin.getRateTick()))
+		{
+			updateStatus(status, forecast, taskSuperiors);
+		}
+		if (changed("guide", guide + "|" + log + "|" + taskArea + "|" + plugin.getAreaRevision() + "|" + potions
+			+ "|" + status.getRemaining() + "|" + run))
+		{
+			updateGuide(guide, tasks, price, taskArea, potions, status.getRemaining(), forecast);
+		}
+		if (changed("points", String.valueOf(status)))
+		{
+			updatePoints(status);
+		}
+		if (changed("odds", odds + "|" + log + "|" + status.getMaster() + "|" + status.getTask()))
+		{
+			updateOdds(odds, history, status.getMaster(), status.getTask());
+		}
+		if (changed("sources", sources + "|" + plugin.getMasterOddsKey()))
+		{
+			updateSources(sources);
+		}
+		if (changed("superiors", log + "|" + taskSuperiors + "|" + taskKills + "|" + (status.getTask() != null)))
+		{
+			updateSuperiors(tasks, taskSuperiors, taskKills, status.getTask() != null);
+		}
+		if (changed("ranking", log + "|" + rankTab))
+		{
+			updateRanking(history);
+		}
+		if (changed("log", log))
+		{
+			updateLog(tasks, price);
+		}
 		revalidate();
 		repaint();
+	}
+
+	/**
+	 * WHAT: Whether a card's inputs changed since it was last built, remembering the new ones.
+	 * WHY: Rebuild only the cards that need it.
+	 * PRE: Swing thread.
+	 * POST: The card's key is stored.
+	 * RETURN: true if the card should be rebuilt
+	 * THROWS: Nothing.
+	 */
+	private boolean changed(String card, String key)
+	{
+		return !key.equals(cardKeys.put(card, key));
+	}
+
+	private static String forecastKey(TaskForecast forecast)
+	{
+		return forecast == null ? "-" : forecast.getRuns() + "/" + forecast.getMillis() / 60_000 + "/" + forecast.getSlayerXp()
+			+ "/" + forecast.getLoot() + "/" + forecast.getSupplies();
 	}
 
 	// ---- Sections ----------------------------------------------------------------------

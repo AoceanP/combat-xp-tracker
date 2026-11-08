@@ -26,6 +26,7 @@ package com.combatxptracker;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -111,7 +112,7 @@ class CombatXpTrackerPanel extends PluginPanel
 	// Goals tab
 	private final DragReorder.ListPanel goalsList = new DragReorder.ListPanel(new DynamicGridLayout(0, 1, 0, 0));
 	private final JPanel goalsEmpty;
-	// "Today" at the top of the Goals tab: goals, XP and levels gained this session.
+	// "This session" at the top of the Goals tab: goals, XP and levels gained this session.
 	private final JLabel goalCountValue = tileValue();
 	private final JLabel sessionXpValue = tileValue();
 	private final JLabel levelsValue = tileValue();
@@ -141,15 +142,19 @@ class CombatXpTrackerPanel extends PluginPanel
 	// The sort order, as a small pill next to the search box that opens a menu.
 	private final JLabel sortPill = new UiKit.RoundLabel("", UiKit.BOX_RADIUS + 2);
 	private final JLabel hiddenLabel = Theme.label("", Theme.SUBTLE);
-	private final JLabel monstersCaption = UiKit.caption("monsters");
+	private final JLabel monstersCaption = UiKit.caption("Monsters");
 	private final Map<MonsterRange, JLabel> rangeTabs = new EnumMap<>(MonsterRange.class);
 	private final IconTextField searchField = new IconTextField();
 	private final JLabel noMatchLabel = Theme.label("No monsters match your search", Theme.SUBTLE);
 	// Revision + sort + hidden list last shown, so the list is only rebuilt on changes.
 	private String monsterViewKey = "";
+	// The part of the key that changes every card, and each card's own key, to skip unchanged cards.
+	private String monsterEveryCardKey = "";
+	private final Map<String, String> monsterCardKeys = new HashMap<>();
 	// The main tabs, and where the selected tab's content goes.
 	private final List<JLabel> mainTabs = new ArrayList<>();
 	private final JPanel tabContent = new JPanel(new BorderLayout());
+	private JComponent monstersView;
 
 	CombatXpTrackerPanel(CombatXpTrackerPlugin plugin, CombatXpTrackerConfig config,
 		SkillIconManager skillIconManager, ItemManager itemManager)
@@ -176,6 +181,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		stack.add(buildHeader());
 		stack.add(buildCombatCard());
 		stack.add(buildTabs());
+		stack.add(buildFeedback());
 
 		JPanel north = new WidthTrackingPanel();
 		north.setBackground(Theme.BACKGROUND);
@@ -205,12 +211,16 @@ class CombatXpTrackerPanel extends PluginPanel
 
 		JPanel titles = new JPanel(new GridLayout(2, 1, 0, 1));
 		titles.setOpaque(false);
-		titles.add(Theme.boldLabel("Combat & XP Tracker", Theme.TEXT));
+		// Centred over the buttons and tiles below, which span the full width.
+		JLabel title = Theme.boldLabel("Combat & XP Tracker", Theme.TEXT);
+		title.setHorizontalAlignment(SwingConstants.CENTER);
+		sessionLine.setHorizontalAlignment(SwingConstants.CENTER);
+		titles.add(title);
 		titles.add(sessionLine);
 		header.add(titles, BorderLayout.NORTH);
 
-		// Grouped by what they do: sharing, your data, feedback.
-		JPanel buttons = new JPanel(new GridLayout(3, 2, 4, 4));
+		// One compact row, so a new player sees stats before buttons. Feedback is at the bottom.
+		JPanel buttons = new JPanel(new GridLayout(1, 4, 3, 0));
 		buttons.setOpaque(false);
 		buttons.add(Theme.flatButton("Copy", "Copy a session summary to paste into Discord or a forum post", this::copySummary));
 		buttons.add(Theme.flatButton("Wrapped", "Gielinor Wrapped: your lifetime stats, to look back on or share",
@@ -220,12 +230,31 @@ class CombatXpTrackerPanel extends PluginPanel
 		restore[0] = Theme.flatButton("Restore", "Bring back kills and drops from RuneLite's Loot Tracker",
 			() -> restoreMenu(restore[0]));
 		buttons.add(restore[0]);
-		buttons.add(Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
-			() -> LinkBrowser.browse(ISSUES + "?labels=bug")));
-		buttons.add(Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
-			() -> LinkBrowser.browse(ISSUES + "?labels=enhancement")));
+		for (Component button : buttons.getComponents())
+		{
+			((JComponent) button).setBorder(BorderFactory.createEmptyBorder(5, 1, 5, 1));
+		}
 		header.add(buttons, BorderLayout.CENTER);
 		return header;
+	}
+
+	/**
+	 * WHAT: The Report bug and Suggest buttons, under the tabs.
+	 * WHY: Feedback matters, but not more than your stats; at the top they pushed the tabs down a row.
+	 * PRE: Swing thread.
+	 * POST: Nothing changes until a button is clicked.
+	 * RETURN: the row
+	 * THROWS: Nothing.
+	 */
+	private JPanel buildFeedback()
+	{
+		JPanel row = new JPanel(new GridLayout(1, 2, 4, 0));
+		row.setOpaque(false);
+		row.add(Theme.flatButton("Report bug", "Opens the plugin's GitHub page to report a bug",
+			() -> LinkBrowser.browse(ISSUES + "?labels=bug")));
+		row.add(Theme.flatButton("Suggest", "Opens the plugin's GitHub page to suggest a feature",
+			() -> LinkBrowser.browse(ISSUES + "?labels=enhancement")));
+		return row;
 	}
 
 	private JPanel buildCombatCard()
@@ -254,6 +283,7 @@ class CombatXpTrackerPanel extends PluginPanel
 		row.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
 		JPanel goals = buildGoalsView();
 		JPanel monsters = buildMonstersView();
+		monstersView = monsters;
 		slayerView = new SlayerView(plugin, config);
 		String[] names = {"Goals", "Monsters", "Slayer"};
 		JComponent[] views = {goals, monsters, slayerView};
@@ -276,12 +306,14 @@ class CombatXpTrackerPanel extends PluginPanel
 	}
 
 	private static final String TAB_VIEW = "cxt.tabView";
+	// Space between the rows of a tab.
+	private static final int ROW_GAP = 6;
 
 	/**
 	 * WHAT: Shows one tab's content and marks its tab as selected.
 	 * WHY: Only the open tab is laid out, so a long Slayer tab doesn't leave empty space under Goals.
 	 * PRE: view is one of the three tab views.
-	 * POST: The content area holds the view; the tabs are restyled.
+	 * POST: The content area holds the view, brought up to date; the tabs are restyled.
 	 * RETURN: Nothing.
 	 * THROWS: Nothing.
 	 */
@@ -293,6 +325,8 @@ class CombatXpTrackerPanel extends PluginPanel
 		{
 			UiKit.select(tab, tab.getClientProperty(TAB_VIEW) == view);
 		}
+		// Closed tabs aren't kept up to date, so this one catches up now.
+		updateOpenTab();
 		tabContent.revalidate();
 		tabContent.repaint();
 	}
@@ -302,12 +336,12 @@ class CombatXpTrackerPanel extends PluginPanel
 		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
 		view.setOpaque(false);
 
-		// Today at a glance: how many goals, and what this session has brought.
+		// This session at a glance: how many goals, and what this session has brought.
 		JPanel today = UiKit.card(new BorderLayout());
 		today.setBorder(BorderFactory.createEmptyBorder(5, 4, 5, 4));
 		sessionXpValue.setForeground(Theme.SUCCESS);
 		today.add(UiKit.stackedStrip(new JLabel[]{goalCountValue, sessionXpValue, levelsValue},
-			new JLabel[]{UiKit.caption("Goals"), UiKit.caption("XP today"), UiKit.caption("Levels up")}), BorderLayout.CENTER);
+			new JLabel[]{UiKit.caption("Goals"), UiKit.caption("Session XP"), UiKit.caption("Levels up")}), BorderLayout.CENTER);
 		today.setToolTipText("This session: since the client started or your last Reset");
 		view.add(today);
 
@@ -326,8 +360,8 @@ class CombatXpTrackerPanel extends PluginPanel
 
 	private JPanel buildMonstersView()
 	{
-		JPanel summary = UiKit.strip(new JLabel[]{killsValue, lootValue, monsterCountValue},
-			new JLabel[]{UiKit.caption("kills"), UiKit.caption("loot"), monstersCaption});
+		JPanel summary = UiKit.stackedStrip(new JLabel[]{killsValue, lootValue, monsterCountValue},
+			new JLabel[]{UiKit.caption("Kills"), UiKit.caption("Loot"), monstersCaption});
 		lootValue.setForeground(Theme.GOLD);
 
 		sortPill.setFont(FontManager.getRunescapeSmallFont());
@@ -362,7 +396,8 @@ class CombatXpTrackerPanel extends PluginPanel
 			}
 		});
 
-		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+		// No layout gap: each row brings its own, so hidden rows leave no space.
+		JPanel view = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
 		view.setOpaque(false);
 		JPanel rangeRow = new JPanel(new GridLayout(1, 2, 4, 0));
 		rangeRow.setOpaque(false);
@@ -380,6 +415,8 @@ class CombatXpTrackerPanel extends PluginPanel
 		// Same look as the search boxes in RuneLite's own panels.
 		searchField.setBackground(Theme.CARD);
 		searchField.setHoverBackgroundColor(Theme.CARD_HOVER);
+		// RuneLite's text field keeps its white text, which vanished on the light theme.
+		themeTextFields(searchField);
 		searchField.setToolTipText("Search monsters by name");
 		searchField.getDocument().addDocumentListener(new DocumentListener()
 		{
@@ -410,23 +447,18 @@ class CombatXpTrackerPanel extends PluginPanel
 		targetCard.setVisible(false);
 		view.add(rangeRow);
 		revealCard = new DropRevealCard(itemManager);
-		view.add(collapsible(revealCard));
-		view.add(collapsible(targetCard));
-		view.add(collapsible(restoreCard));
-		view.add(summary);
-		view.add(findRow);
-		view.add(collapsible(monstersEmpty));
+		view.add(spaced(revealCard, ROW_GAP));
+		view.add(spaced(targetCard, ROW_GAP));
+		view.add(spaced(restoreCard, ROW_GAP));
+		view.add(spaced(summary, ROW_GAP));
+		view.add(spaced(findRow, ROW_GAP));
+		view.add(spaced(monstersEmpty, ROW_GAP));
 		noMatchLabel.setHorizontalAlignment(SwingConstants.CENTER);
 		noMatchLabel.setVisible(false);
-		JPanel noMatchHolder = new JPanel(new BorderLayout());
-		noMatchHolder.setOpaque(false);
-		noMatchHolder.add(noMatchLabel, BorderLayout.CENTER);
-		view.add(noMatchHolder);
-		view.add(monstersList);
-		JPanel hiddenHolder = new JPanel(new BorderLayout());
-		hiddenHolder.setOpaque(false);
-		hiddenHolder.add(hiddenLabel, BorderLayout.CENTER);
-		view.add(hiddenHolder);
+		view.add(spaced(noMatchLabel, ROW_GAP));
+		view.add(spaced(monstersList, ROW_GAP));
+		hiddenLabel.setVisible(false);
+		view.add(spaced(hiddenLabel, ROW_GAP));
 		return view;
 	}
 
@@ -465,8 +497,54 @@ class CombatXpTrackerPanel extends PluginPanel
 	 */
 	private static JPanel collapsible(JPanel child)
 	{
-		JPanel holder = new JPanel(new BorderLayout());
+		return spaced(child, 0);
+	}
+
+	/**
+	 * WHAT: Gives every text field inside a component the theme's text colour.
+	 * WHY: IconTextField nests its JTextField a level down and has no setter for its text colour.
+	 * PRE: Swing thread.
+	 * POST: Typed text and the caret use Theme.TEXT.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private static void themeTextFields(Container parent)
+	{
+		for (Component c : parent.getComponents())
+		{
+			if (c instanceof JTextField)
+			{
+				c.setForeground(Theme.TEXT);
+				((JTextField) c).setCaretColor(Theme.TEXT);
+			}
+			else if (c instanceof Container)
+			{
+				themeTextFields((Container) c);
+			}
+		}
+	}
+
+	/**
+	 * WHAT: Holds a row with a gap above it, and takes no space at all while the row is hidden.
+	 * WHY: DynamicGridLayout keeps the gap for hidden rows, so a new player's Monsters tab had an empty band
+	 *      where the hidden target, reveal and restore cards sit.
+	 * PRE: gap >= 0.
+	 * POST: Returns a new holder containing child.
+	 * RETURN: the holder
+	 * THROWS: Nothing.
+	 */
+	private static JPanel spaced(JComponent child, int gap)
+	{
+		JPanel holder = new JPanel(new BorderLayout())
+		{
+			@Override
+			public Dimension getPreferredSize()
+			{
+				return child.isVisible() ? super.getPreferredSize() : new Dimension(0, 0);
+			}
+		};
 		holder.setOpaque(false);
+		holder.setBorder(BorderFactory.createEmptyBorder(gap, 0, 0, 0));
 		holder.add(child, BorderLayout.CENTER);
 		return holder;
 	}
@@ -513,10 +591,13 @@ class CombatXpTrackerPanel extends PluginPanel
 		}
 	}
 
+	// Wrap width of the empty-state text: the card's inside, with the scrollbar showing.
+	private static final int EMPTY_WIDTH = 140;
+
 	private static JPanel emptyState(String title, String body)
 	{
 		// Fixed wrap width: HTML labels otherwise report their whole text as one line.
-		JLabel label = new JLabel("<html><div style='text-align:center;width:150px'><b>" + title + "</b><br><br>" + body + "</div></html>");
+		JLabel label = new JLabel("<html><div style='text-align:center;width:" + EMPTY_WIDTH + "px'><b>" + title + "</b><br><br>" + body + "</div></html>");
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setForeground(Theme.MUTED);
 		label.setHorizontalAlignment(SwingConstants.CENTER);
@@ -662,13 +743,36 @@ class CombatXpTrackerPanel extends PluginPanel
 			revealCard.play(plugin.getDropReveal());
 		}
 		updateRestoreCard();
-		updateMonsters();
-		if (slayerView != null)
+		updateOpenTab();
+		revalidate();
+		repaint();
+	}
+
+	/**
+	 * WHAT: Updates the Monsters list or the Slayer tab, whichever is open.
+	 * WHY: Rebuilding every monster card while you look at Goals cost about 11 ms per tick with 300
+	 *      remembered monsters. A closed tab catches up when it is opened.
+	 * PRE: Swing thread.
+	 * POST: The open tab shows the latest numbers.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updateOpenTab()
+	{
+		JComponent open = openTab();
+		if (open == monstersView)
+		{
+			updateMonsters();
+		}
+		else if (open == slayerView && slayerView != null)
 		{
 			slayerView.update();
 		}
-		revalidate();
-		repaint();
+	}
+
+	private JComponent openTab()
+	{
+		return tabContent.getComponentCount() == 0 ? null : (JComponent) tabContent.getComponent(0);
 	}
 
 	private void updateCombatCard()
@@ -677,85 +781,93 @@ class CombatXpTrackerPanel extends PluginPanel
 		int count = hits.getHitCount();
 		avgValue.setText(count > 0 ? String.format(java.util.Locale.US, "%.1f", hits.getAverageDamage()) : "-");
 		biggestValue.setText(count > 0 ? String.valueOf(hits.getMaxHit()) : "-");
-		hitsValue.setText(Formatting.withCommas(count));
+		hitsValue.setText(count > 0 ? Formatting.withCommas(count) : "-");
 
-		maxHitDetails.removeAll();
-		MaxHitCalculator.Result max = plugin.getMaxHitResult();
-		if (!config.showMeleeMaxHit())
+		JPanel details = new JPanel();
+		try
 		{
-			fourthCaption.setText("Session XP");
-			fourthValue.setText(Formatting.compactXp(totalSessionXp()));
-			fourthValue.setForeground(Theme.TEXT);
-			fourthValue.setToolTipText(null);
-			return;
-		}
+			MaxHitCalculator.Result max = plugin.getMaxHitResult();
+			if (!config.showMeleeMaxHit())
+			{
+				fourthCaption.setText("Session XP");
+				fourthValue.setText(Formatting.compactXp(totalSessionXp()));
+				fourthValue.setForeground(Theme.TEXT);
+				fourthValue.setToolTipText(null);
+				return;
+			}
 
-		if (max == null)
-		{
-			fourthCaption.setText("Max hit");
-			fourthValue.setForeground(Theme.TEXT);
-			fourthValue.setText("-");
-			fourthValue.setToolTipText("Log in to calculate");
-			return;
-		}
+			if (max == null)
+			{
+				fourthCaption.setText("Max hit");
+				fourthValue.setForeground(Theme.TEXT);
+				fourthValue.setText("-");
+				fourthValue.setToolTipText("Log in to calculate");
+				return;
+			}
 
-		CombatStyle style = max.getStyle();
-		int change = plugin.getMaxHitChange();
-		fourthCaption.setText(style.getDisplayName() + " max" + (change == 0 ? "" : " " + MaxHitFlash.label(change)));
-		fourthValue.setForeground(change > 0 ? MaxHitFlash.UP : change < 0 ? MaxHitFlash.DOWN : style.getColor());
-		fourthValue.setText(max.getMaxHit() >= 0 ? String.valueOf(max.getMaxHit()) : "-");
-		fourthValue.setToolTipText("<html>" + style.getDisplayName() + " max hit for your current attack style, gear, "
-			+ "levels and prayers.<br>Special attacks and bonuses against certain monsters are shown below.</html>");
+			CombatStyle style = max.getStyle();
+			int change = plugin.getMaxHitChange();
+			// The style shows in the value's colour and the tooltip; "Ranged max (+3)" didn't fit the tile.
+			fourthCaption.setText(change == 0 ? "Max hit" : "Max " + MaxHitFlash.label(change));
+			fourthValue.setForeground(change > 0 ? MaxHitFlash.UP : change < 0 ? MaxHitFlash.DOWN : Theme.style(style));
+			fourthValue.setText(max.getMaxHit() >= 0 ? String.valueOf(max.getMaxHit()) : "-");
+			fourthValue.setToolTipText("<html>" + style.getDisplayName() + " max hit for your current attack style, gear, "
+				+ "levels and prayers.<br>Special attacks and bonuses against certain monsters are shown below.</html>");
 
-		String text = max.getNote() != null ? max.getNote() : max.getSetup();
-		if (text != null && !text.isEmpty())
-		{
-			// Wraps onto a second line rather than being cut off.
-			JLabel setupLabel = Theme.label("<html><div style='width:135px'>" + text + "</div></html>", Theme.SUBTLE);
-			setupLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
-			setupLabel.setToolTipText(text);
-			maxHitDetails.add(setupLabel);
-		}
+			String text = max.getNote() != null ? max.getNote() : max.getSetup();
+			if (text != null && !text.isEmpty())
+			{
+				// Wraps onto a second line rather than being cut off.
+				JLabel setupLabel = Theme.label("<html><div style='width:135px'>" + text + "</div></html>", Theme.SUBTLE);
+				setupLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
+				setupLabel.setToolTipText(text);
+				details.add(setupLabel);
+			}
 
-		if (config.showEffectiveLevels() && max.getEffectiveLevels() != null)
-		{
-			maxHitDetails.add(detailRow("Effective", max.getEffectiveLevels(), false,
-				"<html>Effective levels: your levels with prayer, attack style, the hidden +8 and Void included.<br>"
-					+ "Accuracy and max hit are worked out from these. Atk = Attack, Str = Strength, Rng = Ranged, Mag = Magic.</html>"));
+			if (config.showEffectiveLevels() && max.getEffectiveLevels() != null)
+			{
+				details.add(detailRow("Effective", max.getEffectiveLevels(), false,
+					"<html>Effective levels: your levels with prayer, attack style, the hidden +8 and Void included.<br>"
+						+ "Accuracy and max hit are worked out from these. Atk = Attack, Str = Strength, Rng = Ranged, Mag = Magic.</html>"));
+			}
+			HitLuck.Result luck = plugin.getLuck();
+			if (luck != null)
+			{
+				details.add(detailRow("Luck", luck.label(), false, String.format(java.util.Locale.US,
+					"<html>Your hits this session against your max hit, compared with what's expected from %s hits.<br>"
+						+ "Average hit %d%% of your max (about 50%% is normal), %d max %s (about %.1f expected).<br>"
+						+ "Special attacks and weapons that don't roll evenly aren't counted.</html>",
+					Formatting.withCommas(luck.getHits()), Math.round(luck.getAverageShare() * 100), luck.getMaxHits(),
+					luck.getMaxHits() == 1 ? "hit" : "hits", luck.getExpectedMaxHits())));
+			}
+			if (max.getSpecMaxHit() >= 0)
+			{
+				SpecialAttack spec = max.getSpec();
+				String label = "Spec (" + spec.getDisplayName() + ")";
+				String value = spec.getHits() > 1 ? spec.getHits() + " x " + max.getSpecMaxHit() : String.valueOf(max.getSpecMaxHit());
+				details.add(detailRow(label, value, false,
+					"Special attack max hit, before Slayer helm or Salve bonuses"));
+			}
+			if (max.getOnTaskMaxHit() >= 0)
+			{
+				String task = "On task (" + max.getSlayerTask() + ")";
+				details.add(detailRow(task, max.getOnTaskMaxHit(),
+					max.isTargetOnTask(),
+					max.isTargetOnTask() ? "Your current target is part of your task" : "Black mask / Slayer helm bonus on task monsters"));
+			}
+			if (max.getVsUndeadMaxHit() >= 0)
+			{
+				details.add(detailRow("Vs undead (" + max.getUndeadSource() + ")", max.getVsUndeadMaxHit(),
+					false, "Salve amulet bonus against undead. It doesn't stack with the Slayer helm."));
+			}
+			for (MaxHitCalculator.Extra extra : max.getExtras())
+			{
+				details.add(detailRow(extra.getLabel(), extra.getMaxHit(), extra.isHighlight(), extra.getTooltip()));
+			}
 		}
-		HitLuck.Result luck = plugin.getLuck();
-		if (luck != null)
+		finally
 		{
-			maxHitDetails.add(detailRow("Luck", luck.label(), false, String.format(java.util.Locale.US,
-				"<html>Your hits this session against your max hit, compared with what's expected from %s hits.<br>"
-					+ "Average hit %d%% of your max (about 50%% is normal), %d max %s (about %.1f expected).<br>"
-					+ "Special attacks and weapons that don't roll evenly aren't counted.</html>",
-				Formatting.withCommas(luck.getHits()), Math.round(luck.getAverageShare() * 100), luck.getMaxHits(),
-				luck.getMaxHits() == 1 ? "hit" : "hits", luck.getExpectedMaxHits())));
-		}
-		if (max.getSpecMaxHit() >= 0)
-		{
-			SpecialAttack spec = max.getSpec();
-			String label = "Spec (" + spec.getDisplayName() + ")";
-			String value = spec.getHits() > 1 ? spec.getHits() + " x " + max.getSpecMaxHit() : String.valueOf(max.getSpecMaxHit());
-			maxHitDetails.add(detailRow(label, value, false,
-				"Special attack max hit, before Slayer helm or Salve bonuses"));
-		}
-		if (max.getOnTaskMaxHit() >= 0)
-		{
-			String task = "On task (" + max.getSlayerTask() + ")";
-			maxHitDetails.add(detailRow(task, max.getOnTaskMaxHit(),
-				max.isTargetOnTask(),
-				max.isTargetOnTask() ? "Your current target is part of your task" : "Black mask / Slayer helm bonus on task monsters"));
-		}
-		if (max.getVsUndeadMaxHit() >= 0)
-		{
-			maxHitDetails.add(detailRow("Vs undead (" + max.getUndeadSource() + ")", max.getVsUndeadMaxHit(),
-				false, "Salve amulet bonus against undead. It doesn't stack with the Slayer helm."));
-		}
-		for (MaxHitCalculator.Extra extra : max.getExtras())
-		{
-			maxHitDetails.add(detailRow(extra.getLabel(), extra.getMaxHit(), extra.isHighlight(), extra.getTooltip()));
+			swapIfChanged(maxHitDetails, details);
 		}
 	}
 
@@ -765,68 +877,121 @@ class CombatXpTrackerPanel extends PluginPanel
 	 */
 	private void updateLevelDetails()
 	{
-		levelDetails.removeAll();
-		String target = plugin.getLastTargetName();
-		if (!config.killsToLevel() || target == null)
+		JPanel details = new JPanel();
+		try
 		{
-			levelDetails.setVisible(false);
-			return;
-		}
-
-		List<LevelForecast.Row> rows = plugin.getKillsToLevel();
-		if (!rows.isEmpty())
-		{
-			JLabel header = Theme.label("<html><div style='width:175px'>Kills to level: " + target + "</div></html>", Theme.SUBTLE);
-			header.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
-			levelDetails.add(header);
-			for (LevelForecast.Row row : rows)
+			String target = plugin.getLastTargetName();
+			if (!config.killsToLevel() || target == null)
 			{
-				String skillName = Formatting.capitalize(row.getSkill().getName());
-				String source = row.getMeasuredKills() > 0
-					? "measured over your last " + row.getMeasuredKills() + (row.getMeasuredKills() == 1 ? " kill" : " kills")
-					: "estimated from its hitpoints until you kill one";
-				levelDetails.add(detailRow(skillName + " " + row.getNextLevel(),
-					Formatting.withCommas(row.getKills()) + (row.getKills() == 1 ? " kill" : " kills"), false,
-					"<html>About " + Formatting.withCommas(Math.round(row.getXpPerKill())) + " " + skillName + " xp per kill,<br>"
-						+ source + "</html>"));
+				levelDetails.setVisible(false);
+				return;
 			}
-		}
 
-		LevelForecast.CombatRow combat = plugin.getKillsToCombatLevel();
-		if (combat != null)
-		{
-			if (rows.isEmpty())
+			List<LevelForecast.Row> rows = plugin.getKillsToLevel();
+			if (!rows.isEmpty())
 			{
 				JLabel header = Theme.label("<html><div style='width:175px'>Kills to level: " + target + "</div></html>", Theme.SUBTLE);
 				header.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
-				levelDetails.add(header);
-			}
-			levelDetails.add(detailRow("Combat " + combat.getNextLevel(),
-				Formatting.withCommas(combat.getKills()) + (combat.getKills() == 1 ? " kill" : " kills"), false,
-				"Kills until your combat level goes up, with every combat skill gaining its XP per kill"));
-		}
-
-		List<LevelForecast.TaskGain> gains = plugin.getTaskForecast();
-		if (!gains.isEmpty())
-		{
-			int left = plugin.getSlayerTaskRemaining();
-			StringBuilder text = new StringBuilder("<html><div style='width:175px'>Rest of task (")
-				.append(Formatting.withCommas(left)).append(left == 1 ? " kill" : " kills").append("):");
-			for (LevelForecast.TaskGain gain : gains)
-			{
-				text.append("<br>").append(Formatting.capitalize(gain.getSkill().getName()))
-					.append(" +").append(Formatting.compactXp(gain.getXp())).append(" xp");
-				if (gain.getLevelAfter() > gain.getLevelNow())
+				details.add(header);
+				for (LevelForecast.Row row : rows)
 				{
-					text.append(" &rarr; ").append(gain.getLevelAfter());
+					String skillName = Formatting.capitalize(row.getSkill().getName());
+					String source = row.getMeasuredKills() > 0
+						? "measured over your last " + row.getMeasuredKills() + (row.getMeasuredKills() == 1 ? " kill" : " kills")
+						: "estimated from its hitpoints until you kill one";
+					details.add(detailRow(skillName + " " + row.getNextLevel(),
+						Formatting.withCommas(row.getKills()) + (row.getKills() == 1 ? " kill" : " kills"), false,
+						"<html>About " + Formatting.withCommas(Math.round(row.getXpPerKill())) + " " + skillName + " XP per kill,<br>"
+							+ source + "</html>"));
 				}
 			}
-			JLabel label = Theme.label(text.append("</div></html>").toString(), Theme.MUTED);
-			label.setBorder(BorderFactory.createEmptyBorder(2, 2, 0, 2));
-			label.setToolTipText("What finishing your slayer task at this monster will give, at your current XP per kill");
-			levelDetails.add(label);
+
+			LevelForecast.CombatRow combat = plugin.getKillsToCombatLevel();
+			if (combat != null)
+			{
+				if (rows.isEmpty())
+				{
+					JLabel header = Theme.label("<html><div style='width:175px'>Kills to level: " + target + "</div></html>", Theme.SUBTLE);
+					header.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
+					details.add(header);
+				}
+				details.add(detailRow("Combat " + combat.getNextLevel(),
+					Formatting.withCommas(combat.getKills()) + (combat.getKills() == 1 ? " kill" : " kills"), false,
+					"Kills until your combat level goes up, with every combat skill gaining its XP per kill"));
+			}
+
+			List<LevelForecast.TaskGain> gains = plugin.getTaskForecast();
+			if (!gains.isEmpty())
+			{
+				int left = plugin.getSlayerTaskRemaining();
+				StringBuilder text = new StringBuilder("<html><div style='width:175px'>Rest of task (")
+					.append(Formatting.withCommas(left)).append(left == 1 ? " kill" : " kills").append("):");
+				for (LevelForecast.TaskGain gain : gains)
+				{
+					text.append("<br>").append(Formatting.capitalize(gain.getSkill().getName()))
+						.append(" +").append(Formatting.compactXp(gain.getXp())).append(" XP");
+					if (gain.getLevelAfter() > gain.getLevelNow())
+					{
+						text.append(" &rarr; ").append(gain.getLevelAfter());
+					}
+				}
+				JLabel label = Theme.label(text.append("</div></html>").toString(), Theme.MUTED);
+				label.setBorder(BorderFactory.createEmptyBorder(2, 2, 0, 2));
+				label.setToolTipText("What finishing your slayer task at this monster will give, at your current XP per kill");
+				details.add(label);
+			}
+			levelDetails.setVisible(details.getComponentCount() > 0);
 		}
-		levelDetails.setVisible(levelDetails.getComponentCount() > 0);
+		finally
+		{
+			swapIfChanged(levelDetails, details);
+		}
+	}
+
+	/**
+	 * WHAT: Moves freshly built rows into a panel, unless they show exactly what's there already.
+	 * WHY: These rows were rebuilt every tick in combat, which closed any tooltip you were reading.
+	 * PRE: Swing thread. fresh holds the new rows and isn't shown.
+	 * POST: target holds the new rows if anything differs; otherwise it's untouched.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private static void swapIfChanged(JPanel target, JPanel fresh)
+	{
+		if (signature(target).equals(signature(fresh)))
+		{
+			return;
+		}
+		target.removeAll();
+		for (Component c : fresh.getComponents())
+		{
+			target.add(c);
+		}
+		target.revalidate();
+		target.repaint();
+	}
+
+	private static String signature(Container c)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Component k : c.getComponents())
+		{
+			sb.append(k.getClass().getSimpleName()).append('[').append(k.isVisible());
+			if (k instanceof JLabel)
+			{
+				sb.append(((JLabel) k).getText()).append('|').append(k.getForeground());
+			}
+			if (k instanceof JComponent)
+			{
+				sb.append('|').append(((JComponent) k).getToolTipText()).append('|').append(k.getBackground());
+			}
+			if (k instanceof Container)
+			{
+				sb.append(signature((Container) k));
+			}
+			sb.append(']');
+		}
+		return sb.toString();
 	}
 
 	private static JPanel detailRow(String label, int value, boolean highlight, String tooltip)
@@ -899,14 +1064,14 @@ class CombatXpTrackerPanel extends PluginPanel
 		int session = totalSessionXp();
 		goalCountValue.setText(String.valueOf(active.size() + killGoals));
 		sessionXpValue.setText(session > 0 ? "+" + Formatting.compactXp(session) : "0");
-		sessionXpValue.setToolTipText(Formatting.withCommas(session) + " xp this session");
+		sessionXpValue.setToolTipText(Formatting.withCommas(session) + " XP this session");
 		levelsValue.setText(String.valueOf(levelsGained()));
 		updateSessionLine(session);
 	}
 
 	/**
 	 * WHAT: Levels gained this session, across every skill.
-	 * WHY: Shown in the Goals tab's Today card.
+	 * WHY: Shown in the Goals tab's session card.
 	 * PRE: Swing thread.
 	 * POST: Nothing changes.
 	 * RETURN: the number of levels gained since the session started
@@ -944,7 +1109,7 @@ class CombatXpTrackerPanel extends PluginPanel
 			return;
 		}
 		sessionLine.setForeground(Theme.SUBTLE);
-		sessionLine.setText(session > 0 ? "+" + Formatting.withCommas(session) + " xp this session" : "No XP yet this session");
+		sessionLine.setText(session > 0 ? "+" + Formatting.withCommas(session) + " XP this session" : "No XP yet this session");
 	}
 
 	/**
@@ -981,7 +1146,17 @@ class CombatXpTrackerPanel extends PluginPanel
 	{
 		Map<String, Integer> goals = plugin.getKillGoals();
 		MonsterTracker tracker = plugin.getMonsterTracker(MonsterRange.ALL_TIME);
-		String key = goals + "|" + tracker.getRevision() + "|" + plugin.getRateTick();
+		// Keyed on what the cards show, not on every hit: rebuilding closed a tooltip you were reading.
+		StringBuilder shown = new StringBuilder();
+		for (Map.Entry<String, Integer> goal : goals.entrySet())
+		{
+			MonsterTracker.Snapshot s = tracker.snapshotOf(goal.getKey());
+			int kills = s == null ? 0 : s.getKills();
+			double hours = KillGoals.hoursLeft(kills, goal.getValue(), s == null ? -1 : s.getKillsPerHour());
+			shown.append(goal.getKey()).append('=').append(kills).append('/').append(goal.getValue())
+				.append('~').append(hours > 0 ? Formatting.duration(hours) : "").append(';');
+		}
+		String key = shown.toString();
 		if (key.equals(killGoalsKey))
 		{
 			return goals.size();
@@ -1189,6 +1364,21 @@ class CombatXpTrackerPanel extends PluginPanel
 		targetCard.setVisible(true);
 	}
 
+	/**
+	 * WHAT: What one monster card shows, as text: its kills, hits, damage, loot and fight time.
+	 * WHY: With the Monsters tab open, a hit changes one card; the other 299 keep their key and are skipped.
+	 * PRE: s is not null; today is this session's stats, or null.
+	 * POST: Nothing changes.
+	 * RETURN: the key
+	 * THROWS: Nothing.
+	 */
+	private static String cardKey(MonsterTracker.Snapshot s, MonsterTracker.Snapshot today, boolean fighting)
+	{
+		return s.getKills() + "|" + s.getHits() + "|" + s.getTotalDamage() + "|" + s.getLootValue() + "|" + s.getLoot().size()
+			+ "|" + s.getActiveMillis() + "|" + s.getLastActivityMillis() + "|" + s.getBiggestHit()
+			+ "|" + (today == null ? 0 : today.getKills()) + "|" + fighting;
+	}
+
 	private void updateMonsters()
 	{
 		MonsterRange range = config.monsterRange();
@@ -1200,21 +1390,30 @@ class CombatXpTrackerPanel extends PluginPanel
 		String search = searchField.getText() == null ? "" : searchField.getText().trim().toLowerCase();
 		String task = plugin.getSlayerTaskName();
 		int taskRemaining = plugin.getSlayerTaskRemaining();
-		String key = range + "|" + tracker.getRevision() + "|" + sort + "|" + hiddenSetting + "|" + price
+		// Changes that touch every card. The rest (a hit, a kill, a potion) touch one or two.
+		String everyCard = range + "|" + sort + "|" + hiddenSetting + "|" + price
 			+ "|" + ignoredSetting + "|" + search + "|" + task + "|" + taskRemaining
-			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters() + "|" + plugin.getPrayerDrainRevision()
-			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision()
-			+ "|" + plugin.getCombatAchievementsRevision() + "|" + plugin.getRateTick();
-		// The card you're fighting gets a green outline; the session tracker gives "+12 today".
+			+ "|" + config.rareDropValue() + "|" + config.pinnedMonsters()
+			+ "|" + plugin.getCollectionRevision() + "|" + plugin.getCombatAchievementsRevision() + "|" + plugin.getConfigRevision()
+			// "2h ago" on every card moves on once a minute.
+			+ "|" + System.currentTimeMillis() / 60_000;
+		// The card you're fighting gets a green outline; the session tracker gives "+12 this session".
 		TargetInfo target = plugin.getTargetInfo();
 		String fightingName = target == null ? null : BossGroups.trackedName(target.getName());
 		MonsterTracker session = plugin.getMonsterTracker(MonsterRange.SESSION);
-		key += "|" + fightingName + "|" + session.getRevision();
+		String key = everyCard + "|" + tracker.getRevision() + "|" + plugin.getPrayerDrainRevision()
+			+ "|" + plugin.getSuppliesRevision() + "|" + plugin.getFightStatsRevision() + "|" + plugin.getRateTick()
+			+ "|" + fightingName + "|" + session.getRevision();
 		if (key.equals(monsterViewKey))
 		{
 			return;
 		}
 		monsterViewKey = key;
+		if (!everyCard.equals(monsterEveryCardKey))
+		{
+			monsterEveryCardKey = everyCard;
+			monsterCardKeys.clear();
+		}
 
 		for (Map.Entry<MonsterRange, JLabel> tab : rangeTabs.entrySet())
 		{
@@ -1241,16 +1440,54 @@ class CombatXpTrackerPanel extends PluginPanel
 			}
 		}
 		Map<String, MonsterCard> keep = new HashMap<>();
-		monstersList.removeAll();
+		List<String> order = new ArrayList<>();
+		for (MonsterTracker.Snapshot s : shown)
+		{
+			order.add(s.getName());
+		}
+		// Re-adding 300 cards relays them all out; only do it when the order changes.
+		boolean reorder = !order.equals(shownMonsterNames) || monstersList.getComponentCount() != order.size();
+		if (reorder)
+		{
+			monstersList.removeAll();
+		}
+		// Potions, prayer, fight stats and live rates belong to the monster you're fighting, or the last one.
+		String latest = fightingName;
+		long latestMillis = Long.MIN_VALUE;
+		for (MonsterTracker.Snapshot s : shown)
+		{
+			if (latest == null && s.getLastActivityMillis() > latestMillis)
+			{
+				latestMillis = s.getLastActivityMillis();
+				latest = s.getName();
+			}
+		}
 
 		int kills = 0;
 		long loot = 0;
+		Map<String, String> cardKeys = new HashMap<>();
 		for (MonsterTracker.Snapshot s : shown)
 		{
 			MonsterCard card = monsterCards.get(s.getName());
 			if (card == null)
 			{
 				card = newMonsterCard(s.getName());
+			}
+			MonsterTracker.Snapshot today = range == MonsterRange.SESSION ? null : session.snapshotOf(s.getName());
+			boolean fighting = s.getName().equals(fightingName);
+			String cardKey = cardKey(s, today, fighting);
+			cardKeys.put(s.getName(), cardKey);
+			kills += s.getKills();
+			loot += s.getLootValue();
+			keep.put(s.getName(), card);
+			if (reorder)
+			{
+				monstersList.add(card);
+			}
+			// Nothing about this monster changed: skip its card, unless it's the one being fought.
+			if (cardKey.equals(monsterCardKeys.get(s.getName())) && !s.getName().equals(latest))
+			{
+				continue;
 			}
 			card.update(s, isTaskMonster(task, s.getName()) ? taskRemaining : -1, rareValue,
 				pinned.contains(s.getName().toLowerCase()));
@@ -1261,20 +1498,20 @@ class CombatXpTrackerPanel extends PluginPanel
 			card.updateBoss(plugin.getBossTimes(s.getName()), plugin.getDryItems(s.getName()),
 				plugin.getCombatAchievements(s.getName()));
 			card.updateDropLuck(plugin.getDropLuck(s));
-			MonsterTracker.Snapshot today = range == MonsterRange.SESSION ? null : session.snapshotOf(s.getName());
-			card.setStatus(s.getName().equals(fightingName), today == null ? 0 : today.getKills(), range != MonsterRange.SESSION);
-			keep.put(s.getName(), card);
-			monstersList.add(card);
-			kills += s.getKills();
-			loot += s.getLootValue();
+			card.setStatus(fighting, today == null ? 0 : today.getKills(), range != MonsterRange.SESSION);
+		}
+		if (reorder)
+		{
+			monstersList.revalidate();
 		}
 		monsterCards.clear();
 		monsterCards.putAll(keep);
-		shownMonsterNames = new ArrayList<>();
+		monsterCardKeys.clear();
+		monsterCardKeys.putAll(cardKeys);
+		shownMonsterNames = order;
 		pinnedShown = 0;
 		for (MonsterTracker.Snapshot s : shown)
 		{
-			shownMonsterNames.add(s.getName());
 			if (pinned.contains(s.getName().toLowerCase()))
 			{
 				pinnedShown++;
@@ -1486,7 +1723,7 @@ class CombatXpTrackerPanel extends PluginPanel
 				if (progress != null && progress.isXpKnown() && goal.getTargetXp() <= progress.getCurrentXp())
 				{
 					throw new IllegalArgumentException("You already have " + Formatting.withCommas(progress.getCurrentXp())
-						+ " " + Formatting.capitalize(skill.getName()) + " xp. Pick a higher goal.");
+						+ " " + Formatting.capitalize(skill.getName()) + " XP. Pick a higher goal.");
 				}
 				plugin.setGoal(skill, goal);
 				return;

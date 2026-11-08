@@ -747,6 +747,11 @@ public class CombatXpTrackerPlugin extends Plugin
 		{
 			return;
 		}
+		if (event.getProfile() == null)
+		{
+			// A setting, not account data saved under the same group (monsters, goals, bank).
+			configRevision++;
+		}
 		if ("showInfobox".equals(event.getKey()))
 		{
 			syncInfoBoxes();
@@ -4801,6 +4806,21 @@ public class CombatXpTrackerPlugin extends Plugin
 	/**
 	 * @return increases every 5 ticks while gold per hour is changing, for the panel to redraw
 	 */
+	/**
+	 * WHAT: Goes up whenever a plugin setting changes.
+	 * WHY: The Monsters tab skips unchanged cards; a setting can change what every card shows.
+	 * PRE: None.
+	 * POST: Nothing changes.
+	 * RETURN: the revision
+	 * THROWS: Nothing.
+	 */
+	public int getConfigRevision()
+	{
+		return configRevision;
+	}
+
+	private volatile int configRevision;
+
 	public int getRateTick()
 	{
 		return rateTick;
