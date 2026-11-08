@@ -122,9 +122,12 @@ class MonsterCard extends JPanel
 	private final InfoRow rareRow = new InfoRow("Rare drop");
 	private final InfoRow prayerRow = new InfoRow("Prayer");
 	private final InfoRow driestRow = new InfoRow("Driest");
+	private final InfoRow petRow = new InfoRow("Pet chance");
 	private final InfoRow sinceUniqueRow = new InfoRow("Since last unique");
 	private final InfoRow dropLuckRow = new InfoRow("Luck vs average");
 	private final InfoRow achievementsRow = new InfoRow("Combat Achievements");
+	private final InfoRow trendRow = new InfoRow("Trend");
+	private final KillTimesChart timesChart = new KillTimesChart();
 	private final InfoRow suppliesRow = new InfoRow("Supplies");
 	private final InfoRow deathsRow = new InfoRow("Deaths");
 	private final InfoRow netRow = new InfoRow("Net profit");
@@ -149,6 +152,8 @@ class MonsterCard extends JPanel
 	private final JLabel showAllLabel = Theme.label("", Theme.MUTED);
 	private boolean showAllLoot;
 	private List<MonsterTracker.LootLine> lastLoot;
+	// What the drops grid was built from, for each drop's first kill.
+	private MonsterTracker.Snapshot lootSnapshot;
 
 	private boolean collapsed;
 	// null until the first update, so an empty loot list still shows its message.
@@ -253,7 +258,7 @@ class MonsterCard extends JPanel
 		lootGrid.setOpaque(false);
 		lootGrid.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
 		overview.with(killsRateRow).with(gpRateRow).with(fightRateRow).with(prayerRow).with(taskRow);
-		collectionSection.with(dropLuckRow).with(sinceUniqueRow).with(rareRow).with(driestRow).with(collectionGrid);
+		collectionSection.with(dropLuckRow).with(sinceUniqueRow).with(rareRow).with(driestRow).with(petRow).with(collectionGrid);
 		showAllLabel.setHorizontalAlignment(JLabel.RIGHT);
 		showAllLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		showAllLabel.setVisible(false);
@@ -267,7 +272,8 @@ class MonsterCard extends JPanel
 		});
 		dropsSection.with(lootGrid).with(showAllLabel);
 		fightSection.with(spaced(statsRow)).with(styleRow).with(fightRow).with(damageTakenRow).with(flawlessRow).with(idleRow);
-		bossSection.with(timesRow).with(achievementsRow);
+		timesChart.setVisible(false);
+		bossSection.with(timesRow).with(timesChart).with(trendRow).with(achievementsRow);
 		costsSection.with(suppliesRow).with(netRow).with(netRateRow).with(deathsRow);
 		for (InfoRow.Section section : new InfoRow.Section[]{overview, collectionSection, dropsSection, fightSection, bossSection,
 			costsSection})
@@ -571,6 +577,7 @@ class MonsterCard extends JPanel
 			// Green when the last kill was the best.
 			lastValue.setForeground(times.last > 0 && Math.abs(times.last - times.best) < 0.001 ? Theme.SUCCESS : Theme.TEXT);
 		}
+		updateTrend(recent, times == null ? 0 : times.best);
 
 		updateCollectionGrid(plugin.getCollectionItems(monsterName), dry);
 		if (!dry.isEmpty())
@@ -590,6 +597,7 @@ class MonsterCard extends JPanel
 		{
 			driestRow.set(null);
 		}
+		updatePet(plugin.getCollectionItems(monsterName), dry);
 		collectionSection.refresh();
 
 		if (achievements.isEmpty())
@@ -613,6 +621,64 @@ class MonsterCard extends JPanel
 	 * The boss's collection log as item icons, obtained ones bright, missing ones faded, and
 	 * the driest missing item outlined in red.
 	 */
+	/**
+	 * WHAT: The kill times chart and the Trend row: "8.0s faster" in green, "3.1s slower" in red.
+	 * WHY: Says whether you're improving, which PB and Avg alone don't (2.5).
+	 * PRE: Swing thread. recent is oldest first.
+	 * POST: Both are shown once there are enough kills, hidden before.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updateTrend(List<Double> recent, double best)
+	{
+		timesChart.setVisible(best > 0 && recent.size() >= 3);
+		timesChart.setTimes(recent, best);
+		double trend = BossTimes.trend(recent);
+		if (best <= 0 || Double.isNaN(trend))
+		{
+			trendRow.set(null);
+			return;
+		}
+		int half = recent.size() / 2;
+		double newer = 0;
+		for (int i = recent.size() - half; i < recent.size(); i++)
+		{
+			newer += recent.get(i);
+		}
+		String text = BossTimes.trendText(trend);
+		java.awt.Color colour = text.endsWith("faster") ? Theme.readable(Theme.SUCCESS)
+			: text.endsWith("slower") ? Theme.readable(DEATHS) : Theme.TEXT;
+		trendRow.set(text, colour, "<html>Your last " + half + " kills average " + KillTimerOverlay.clock(newer / half)
+			+ ",<br>against " + KillTimerOverlay.clock(newer / half - trend) + " for the " + half + " before them.</html>");
+	}
+
+	/**
+	 * WHAT: The pet row: "Owned", or how likely you'd have the pet by now at your kill count.
+	 * WHY: The stat players share most (2.5). Only shown once the collection log page has been seen.
+	 * PRE: Swing thread. items may be null; dry is not null.
+	 * POST: The row is set or hidden.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void updatePet(List<CollectionLog.Item> items, List<DryCalculator.Dry> dry)
+	{
+		if (Pets.owned(items))
+		{
+			petRow.set("Owned", Theme.readable(Theme.SUCCESS), "You have this boss's pet, from your collection log");
+			return;
+		}
+		DryCalculator.Dry pet = Pets.missing(dry);
+		if (pet == null)
+		{
+			petRow.set(null);
+			return;
+		}
+		long percent = Math.round(pet.getChanceByNow() * 100);
+		petRow.set(percent + "% by now", pet.getRatio() >= 1 ? Theme.readable(DEATHS) : Theme.TEXT,
+			"<html>" + pet.getItem() + ": 1 in " + Formatting.withCommas(Math.round(pet.getOneIn())) + " per kill.<br>"
+				+ percent + "% of players would have it by your kill count.<br>Drop rate from the OSRS Wiki.</html>");
+	}
+
 	private void updateCollectionGrid(List<CollectionLog.Item> items, List<DryCalculator.Dry> dry)
 	{
 		StringBuilder key = new StringBuilder();
@@ -905,6 +971,7 @@ class MonsterCard extends JPanel
 		overview.refresh();
 		collectionSection.refresh();
 
+		lootSnapshot = s;
 		updateLoot(s.getLoot());
 		dropsSection.setDetail(s.getLoot().isEmpty() ? "" : s.getLoot().size() + (s.getLoot().size() == 1 ? " kind" : " kinds"),
 			Theme.MUTED, "Right-click an item to ignore it, or to remove it from this monster's loot");
@@ -998,7 +1065,12 @@ class MonsterCard extends JPanel
 			// Rare drops get a gold border and are sorted first.
 			slot.setOutline(Theme.GOLD);
 		}
-		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value
+		// Bundled uniques say how rare they are and how your first one compares (2.5).
+		double oneIn = plugin == null ? -1 : plugin.getDropRate(monsterName, line.getName());
+		String story = oneIn > 1
+			? "<br>" + DryCalculator.dropStory(oneIn, lootSnapshot == null ? -1 : lootSnapshot.getFirstDropKill(line.getItemId()))
+			: "";
+		slot.setToolTipText("<html>" + line.getName() + " x " + Formatting.withCommas(line.getQuantity()) + value + story
 			+ "<br><font color='#888888'>Right-click to ignore or remove</font></html>");
 
 		JPopupMenu menu = new JPopupMenu();

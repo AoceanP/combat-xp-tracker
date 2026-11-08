@@ -177,4 +177,61 @@ public class Release250Test
 		assertEquals("1,000/2,500 (40%)", KillGoals.overlayText(1_000, 2_500));
 		assertEquals("Goal reached!", KillGoals.overlayText(612, 500));
 	}
+
+	@Test
+	public void dropTooltipsTellTheDropsStory()
+	{
+		assertEquals("1 in 5,000 drop", DryCalculator.dropStory(5_000, -1));
+		assertEquals("1 in 5,000 drop<br>First at kill 212. Lucky: 4% of players get one that early.",
+			DryCalculator.dropStory(5_000, 212));
+		assertEquals("1 in 3,000 drop<br>First at kill 9,800. Dry: 96% of players get one sooner.",
+			DryCalculator.dropStory(3_000, 9_800));
+		assertEquals("1 in 5,000 drop<br>First at kill 1. Lucky: under 1% of players get one that early.",
+			DryCalculator.dropStory(5_000, 1));
+	}
+
+	@Test
+	public void dropRatesComeFromTheBundledTable()
+	{
+		Map<String, Map<String, Double>> table = new HashMap<>();
+		Map<String, Double> vorkath = new HashMap<>();
+		vorkath.put("Draconic visage", 5_000.0);
+		table.put("Vorkath", vorkath);
+		DryCalculator dry = new DryCalculator(table);
+		assertEquals(5_000, dry.oneIn("vorkath", "draconic visage"), 0);
+		assertEquals(-1, dry.oneIn("Vorkath", "Dragon bones"), 0);
+		assertEquals(-1, dry.oneIn("Zulrah", "Tanzanite fang"), 0);
+	}
+
+	@Test
+	public void petsAreFoundByName()
+	{
+		assertTrue(Pets.isPet("Vorki"));
+		assertTrue(Pets.isPet("pet zilyana"));
+		assertFalse(Pets.isPet("Draconic visage"));
+		assertFalse(Pets.isPet(null));
+
+		List<DryCalculator.Dry> dry = Arrays.asList(new DryCalculator.Dry("Draconic visage", 5_000, 2_912),
+			new DryCalculator.Dry("Vorki", 3_000, 2_912));
+		assertEquals("Vorki", Pets.missing(dry).getItem());
+		assertNull(Pets.missing(dry.subList(0, 1)));
+
+		assertTrue(Pets.owned(Arrays.asList(new CollectionLog.Item(1, "Vorki", true))));
+		assertFalse(Pets.owned(Arrays.asList(new CollectionLog.Item(1, "Vorki", false))));
+		assertFalse(Pets.owned(null));
+	}
+
+	@Test
+	public void bossTrendComparesNewerKillsWithOlder()
+	{
+		// Older three average 120s, newer three 112s: 8s faster.
+		List<Double> faster = Arrays.asList(121.0, 120.0, 119.0, 113.0, 112.0, 111.0);
+		assertEquals(-8, BossTimes.trend(faster), 1e-9);
+		assertEquals("8.0s faster", BossTimes.trendText(BossTimes.trend(faster)));
+		// An odd count leaves the middle kill out.
+		assertEquals(10, BossTimes.trend(Arrays.asList(100.0, 100.0, 100.0, 999.0, 110.0, 110.0, 110.0)), 1e-9);
+		assertEquals("Steady", BossTimes.trendText(0.3));
+		assertEquals("1:05.0 slower", BossTimes.trendText(65));
+		assertTrue(Double.isNaN(BossTimes.trend(Arrays.asList(100.0, 90.0, 80.0, 70.0, 60.0))));
+	}
 }

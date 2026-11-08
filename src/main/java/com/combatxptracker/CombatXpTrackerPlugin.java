@@ -4202,6 +4202,19 @@ public class CombatXpTrackerPlugin extends Plugin
 		return dryCalculator.luck(s.getName(), loot, s.getKills());
 	}
 
+	/**
+	 * WHAT: An item's bundled drop rate from a monster.
+	 * WHY: Drop tooltips on the Monsters tab (2.5).
+	 * PRE: Either may be null.
+	 * POST: Nothing changes.
+	 * RETURN: N in "1 in N", or -1 if not bundled
+	 * THROWS: Nothing.
+	 */
+	public double getDropRate(String monster, String item)
+	{
+		return dryCalculator.oneIn(monster, item);
+	}
+
 	public List<DryCalculator.Dry> getDryItems(String monster)
 	{
 		CollectionLog.Status log = getCollectionStatus(monster);
