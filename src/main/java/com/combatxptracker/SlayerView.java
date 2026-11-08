@@ -396,11 +396,12 @@ class SlayerView extends JPanel
 
 		JPanel top = new JPanel(new BorderLayout(6, 0));
 		top.setOpaque(false);
-		top.add(Theme.label(area.getName(), green ? Theme.SUCCESS : Theme.TEXT), BorderLayout.CENTER);
+		// Readable: green text on the green highlight washed out on the light theme.
+		top.add(Theme.label(area.getName(), green ? Theme.readable(Theme.SUCCESS) : Theme.TEXT), BorderLayout.CENTER);
 		String badge = area.isAssigned() ? "Konar" : here ? "you're here" : isBest ? "your best" : null;
 		if (badge != null)
 		{
-			top.add(Theme.label(badge, isBest && !here && !area.isAssigned() ? Theme.GOLD : Theme.SUCCESS), BorderLayout.EAST);
+			top.add(Theme.label(badge, isBest && !here && !area.isAssigned() ? Theme.GOLD : Theme.readable(Theme.SUCCESS)), BorderLayout.EAST);
 		}
 		row.add(top);
 
@@ -419,7 +420,7 @@ class SlayerView extends JPanel
 		}
 		if (rate != null && rate.getActiveMillis() > 0)
 		{
-			row.add(Theme.label("You: " + Formatting.compactXp(Math.round(rate.getXpPerHour())) + " xp/hr, "
+			row.add(Theme.label("You: " + Formatting.compactXp(Math.round(rate.getXpPerHour())) + " XP/hr, "
 				+ Math.round(rate.getKillsPerHour()) + " kills/hr", isBest ? Theme.GOLD : Theme.MUTED));
 		}
 		if (area.getHint() != null)
@@ -431,9 +432,9 @@ class SlayerView extends JPanel
 		if (rate != null && rate.getActiveMillis() > 0)
 		{
 			tip.append("<br>Your rates here, from ").append(rate.getTimes()).append(rate.getTimes() == 1 ? " task" : " tasks")
-				.append(":<br>").append(Formatting.compactXp(Math.round(rate.getXpPerHour()))).append(" Slayer xp/hr, ")
+				.append(":<br>").append(Formatting.compactXp(Math.round(rate.getXpPerHour()))).append(" Slayer XP/hr, ")
 				.append(Math.round(rate.getKillsPerHour())).append(" kills/hr, ")
-				.append(Formatting.compactXp(Math.round(rate.getGpPerHour()))).append(" gp/hr");
+				.append(Formatting.compactXp(Math.round(rate.getGpPerHour()))).append(" GP/hr");
 		}
 		if (canPick && !area.isAssigned())
 		{
@@ -527,7 +528,7 @@ class SlayerView extends JPanel
 			TaskOdds.Option o = odds.find(advice.getTask());
 			oddsCard.add(note("<font color='" + hex(Theme.GOLD) + "'>Block or skip idea:</font> " + advice.getTask()
 				+ " (" + String.format(Locale.US, "%.1f%%", o.getChance() * 100) + " chance) is your slowest task at "
-				+ Formatting.compactXp(Math.round(advice.getXpPerHour())) + " Slayer xp/hr.", Theme.GOLD, null));
+				+ Formatting.compactXp(Math.round(advice.getXpPerHour())) + " Slayer XP/hr.", Theme.GOLD, null));
 		}
 		MasterAdvice.Entry better = MasterAdvice.betterThan(plugin.getMasterAdvice(history, MasterAdvice.Goal.XP), current,
 			MasterAdvice.MIN_TIP_GAIN);
@@ -538,8 +539,8 @@ class SlayerView extends JPanel
 			oddsCard.add(note("<font color='" + hex(Theme.SUCCESS) + "'>Tip:</font> " + better.getMaster().getDisplayName()
 					+ " would be about " + gain + "% more Slayer XP/hr for you, from your task log.", Theme.SUCCESS,
 				"<html>Your expected Slayer XP/hr, from each master's task chances and your own rate on each task:<br>"
-					+ better.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(better.getXpPerHour())) + " xp/hr<br>"
-					+ yours.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(yours.getXpPerHour())) + " xp/hr<br>"
+					+ better.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(better.getXpPerHour())) + " XP/hr<br>"
+					+ yours.getMaster().getDisplayName() + ": " + Formatting.compactXp(Math.round(yours.getXpPerHour())) + " XP/hr<br>"
 					+ "Tasks you haven't logged count at your average rate.</html>"));
 		}
 		oddsCard.add(holder(Theme.cardButton("Where to get a task...", "See which master is likeliest to give you a task",
@@ -740,8 +741,8 @@ class SlayerView extends JPanel
 		JPanel row = UiKit.barRow(place + ". " + s.getTask(), fill, value, first ? colour : BAR_GREY, first);
 		row.setToolTipText("<html>" + s.getTask() + ": done " + s.getTimes() + (s.getTimes() == 1 ? " time" : " times")
 			+ "<br>Average " + s.getAverageKills() + " kills<br>"
-			+ Formatting.compactXp(Math.round(s.getXpPerHour())) + " Slayer xp/hr, "
-			+ Formatting.compactXp(Math.round(s.getGpPerHour())) + " gp/hr</html>");
+			+ Formatting.compactXp(Math.round(s.getXpPerHour())) + " Slayer XP/hr, "
+			+ Formatting.compactXp(Math.round(s.getGpPerHour())) + " GP/hr</html>");
 		row.setComponentPopupMenu(findMenu(s.getTask()));
 		return row;
 	}
@@ -879,7 +880,7 @@ class SlayerView extends JPanel
 			kills += r.kills;
 		}
 		logTotals.setText(tasks.isEmpty() ? "" : "<html><div style='width:148px'>" + Formatting.withCommas(kills) + " kills, "
-			+ Formatting.compactXp(xp) + " Slayer xp, " + Formatting.compactXp(loot) + " gp</div></html>");
+			+ Formatting.compactXp(xp) + " Slayer XP, " + Formatting.compactXp(loot) + " gp</div></html>");
 
 		int shown = 0;
 		for (SlayerTaskRecord r : tasks)
@@ -915,7 +916,7 @@ class SlayerView extends JPanel
 		JPanel middle = new JPanel(new BorderLayout(6, 0));
 		middle.setOpaque(false);
 		middle.add(Theme.label(Formatting.withCommas(r.kills) + (r.kills == 1 ? " kill" : " kills") + time
-			+ (r.slayerXp > 0 ? "  ·  +" + Formatting.compactXp(r.slayerXp) + " xp" : ""), Theme.MUTED), BorderLayout.CENTER);
+			+ (r.slayerXp > 0 ? "  ·  +" + Formatting.compactXp(r.slayerXp) + " XP" : ""), Theme.MUTED), BorderLayout.CENTER);
 		middle.add(Theme.label(DATE.format(Instant.ofEpochMilli(r.endMillis).atZone(ZoneId.systemDefault())), Theme.SUBTLE),
 			BorderLayout.EAST);
 		card.add(middle);

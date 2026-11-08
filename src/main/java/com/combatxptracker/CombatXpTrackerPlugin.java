@@ -2337,7 +2337,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		String skillName = Formatting.capitalize(skill.getName());
 		String what = goal.getType() == Goal.Type.LEVEL
 			? "level " + goal.getTargetLevel() + " " + skillName
-			: goal.getShortLabel() + " " + skillName + " xp";
+			: goal.getShortLabel() + " " + skillName + " XP";
 
 		notifier.notify(config.goalNotification(), "Goal reached: " + what + "!");
 

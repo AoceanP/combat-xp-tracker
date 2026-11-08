@@ -415,7 +415,7 @@ final class UiKit
 	{
 		RoundLabel pill = new RoundLabel(text, BOX_RADIUS);
 		pill.setFont(Theme.label("", colour).getFont());
-		pill.setForeground(colour);
+		pill.setForeground(Theme.readable(colour));
 		pill.setBackground(Theme.highlight(colour, 0.72f));
 		pill.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 5));
 		return pill;

@@ -269,7 +269,7 @@ final class SlayerTaskSession
 			double gpPerHour = ActivityTimer.perHour(loot, active);
 			if (gpPerHour > 0)
 			{
-				sb.append(" (").append(Formatting.compactXp(Math.round(gpPerHour))).append(" gp/hr)");
+				sb.append(" (").append(Formatting.compactXp(Math.round(gpPerHour))).append(" GP/hr)");
 			}
 		}
 		if (biggestHit >= 0)

@@ -107,7 +107,7 @@ final class SessionSummaryText
 			int rate = e.getValue().getXpPerHour(rateMode);
 			if (rate > 0)
 			{
-				sb.append(" (").append(Formatting.compactXp(rate)).append(" xp/hr)");
+				sb.append(" (").append(Formatting.compactXp(rate)).append(" XP/hr)");
 			}
 			sb.append('\n');
 		}

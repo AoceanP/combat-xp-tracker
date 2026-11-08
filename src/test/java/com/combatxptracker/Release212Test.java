@@ -323,7 +323,8 @@ public class Release212Test
 		{
 		};
 		assertTrue(config.attackTimerStyleColours());
-		assertTrue(config.attackTimer());
+		// 2.5: the timer itself is off for new players, like the main overlay.
+		assertFalse(config.attackTimer());
 	}
 
 	// ---- kills since last unique ----

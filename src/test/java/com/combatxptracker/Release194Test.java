@@ -75,7 +75,7 @@ public class Release194Test
 		assertTrue(text, text.contains("Most loot: Vorkath"));
 		assertTrue(text, text.contains("Longest dry streak: 120 kills (on Gargoyle)"));
 		assertTrue(text, text.contains("Tasks done: 1"));
-		assertTrue(text, text.contains("Fastest task: Gargoyles (24K xp/hr)"));
+		assertTrue(text, text.contains("Fastest task: Gargoyles (24K XP/hr)"));
 		assertTrue(WrappedStats.of(Collections.emptyList(), Collections.emptyList(), LootPrice.GRAND_EXCHANGE).isEmpty());
 	}
 

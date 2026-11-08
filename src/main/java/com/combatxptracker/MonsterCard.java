@@ -54,7 +54,7 @@ import net.runelite.client.util.QuantityFormatter;
  *
  * <pre>
  * Vorkath  [task]                         6.10M
- * 212 kills  +12 today                ● fighting
+ * 212 kills  +12 this session               ● fighting
  * Rates       Kills/hr, GP/hr, Prayer, Task
  * Luck        Since unique, Rare drop, collection log, Driest
  * Drops       every item
@@ -96,7 +96,7 @@ class MonsterCard extends JPanel
 	private final JLabel hitsLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel avgLabel = Theme.boldLabel("", Theme.TEXT);
 	private final JLabel maxLabel = Theme.boldLabel("", Theme.TEXT);
-	private final JLabel maxCaption = UiKit.caption("max");
+	private final JLabel maxCaption = UiKit.caption("Biggest");
 	// Biggest hit per style, always Melee, Ranged, Magic so the columns line up across cards.
 	// The three strips below sit in holders, which add the gap between strips and are what
 	// gets shown or hidden.
@@ -208,9 +208,9 @@ class MonsterCard extends JPanel
 		header.add(left, BorderLayout.CENTER);
 		header.add(right, BorderLayout.EAST);
 
-		// Hits: three slim strips instead of rows of tiles.
-		JPanel statsRow = UiKit.strip(new JLabel[]{hitsLabel, avgLabel, maxLabel},
-			new JLabel[]{UiKit.caption("hits"), UiKit.caption("avg"), maxCaption});
+		// Hits: value above caption, so a wide number never pushes its caption out of sight.
+		JPanel statsRow = UiKit.stackedStrip(new JLabel[]{hitsLabel, avgLabel, maxLabel},
+			new JLabel[]{UiKit.caption("Hits"), UiKit.caption("Avg hit"), maxCaption});
 		hitsLabel.setToolTipText("Hits on " + monsterName + ", 0s included");
 		avgLabel.setToolTipText("Your average hit on " + monsterName + ", 0s included");
 
@@ -225,22 +225,22 @@ class MonsterCard extends JPanel
 			styleLabels[i] = value;
 			styleCaptions[i] = UiKit.caption(styleCaption(style));
 		}
-		styleRow = spaced(UiKit.strip(styleLabels, styleCaptions));
+		styleRow = spaced(UiKit.stackedStrip(styleLabels, styleCaptions));
 
 		accuracyValue.setToolTipText("<html>The share of your hits on " + monsterName + " that did damage.<br>"
 			+ "A 0 counts as a miss, though a hit can also roll 0.</html>");
 		dpsValue.setToolTipText("Your damage per second while fighting " + monsterName);
 		uptimeValue.setToolTipText("<html>How much of each fight you spent attacking. Ticks past your weapon's attack speed "
 			+ "before the next attack<br>(eating, moving, a late click) count against it. Breaks over 10 seconds aren't counted.</html>");
-		fightRow = spaced(UiKit.strip(new JLabel[]{accuracyValue, dpsValue, uptimeValue},
-			new JLabel[]{UiKit.caption("acc"), UiKit.caption("dps"), UiKit.caption("uptime")}));
+		fightRow = spaced(UiKit.stackedStrip(new JLabel[]{accuracyValue, dpsValue, uptimeValue},
+			new JLabel[]{UiKit.caption("Accuracy"), UiKit.caption("DPS"), UiKit.caption("Uptime")}));
 		fightRow.setVisible(false);
 
 		pbValue.setToolTipText("Your fastest kill, from the game's own fight duration message");
 		lastValue.setToolTipText("Your most recent kill");
 		avgValue.setToolTipText("Your average over your recent kills (up to " + BossTimes.RECENT_KILLS + ")");
-		timesRow = spaced(UiKit.strip(new JLabel[]{pbValue, lastValue, avgValue},
-			new JLabel[]{UiKit.caption("pb"), UiKit.caption("last"), UiKit.caption("avg")}));
+		timesRow = spaced(UiKit.stackedStrip(new JLabel[]{pbValue, lastValue, avgValue},
+			new JLabel[]{UiKit.caption("PB"), UiKit.caption("Last"), UiKit.caption("Avg")}));
 		timesRow.setVisible(false);
 
 		// BoxLayout skips hidden rows; a grid would leave blank space for them.
@@ -395,7 +395,7 @@ class MonsterCard extends JPanel
 	/**
 	 * WHAT: Marks the card as the monster you're fighting now, and shows this session's kills.
 	 * WHY: The card you're fighting gets a green outline and "fighting", so it's easy to find;
-	 * "+12 today" shows progress even on the all time view.
+	 * "+12 this session" shows progress even on the all time view.
 	 * PRE: Swing thread. sessionKills is this session's kills, or 0.
 	 * POST: The header and outline are updated.
 	 * RETURN: Nothing.
@@ -470,9 +470,9 @@ class MonsterCard extends JPanel
 	 */
 	private void refreshHeader()
 	{
-		todayLabel.setText(todayKills > 0 ? "+" + Formatting.withCommas(todayKills) + " today" : "");
+		todayLabel.setText(todayKills > 0 ? "+" + Formatting.withCommas(todayKills) + " this session" : "");
 		todayLabel.setVisible(!todayLabel.getText().isEmpty());
-		// The "2h ago" goes when there's a "+12 today" or the fight is now.
+		// The "2h ago" goes when there's a "+12 this session" or the fight is now.
 		killsLabel.setText(killsText + (todayLabel.isVisible() || fighting || sinceText.isEmpty() ? "" : "  ·  " + sinceText));
 		if (fighting)
 		{
@@ -520,11 +520,11 @@ class MonsterCard extends JPanel
 		switch (style)
 		{
 			case RANGED:
-				return "range";
+				return "Ranged";
 			case MAGIC:
-				return "mage";
+				return "Magic";
 			default:
-				return "melee";
+				return "Melee";
 		}
 	}
 
@@ -542,7 +542,7 @@ class MonsterCard extends JPanel
 		netRow.set(show ? (net < 0 ? "-" : "") + Formatting.compactXp(Math.abs(net)) + " gp" : null, net >= 0 ? Theme.GOLD : BAD, netTip);
 		double netPerHour = show ? ActivityTimer.perHour(net, activeMillis) : -1;
 		netRateRow.set(show && activeMillis > 0 && Math.abs(netPerHour) > 0 ? (netPerHour < 0 ? "-" : "")
-			+ Formatting.compactXp(Math.round(Math.abs(netPerHour))) + " gp/hr" : null, netPerHour >= 0 ? Theme.GOLD : BAD, netTip);
+			+ Formatting.compactXp(Math.round(Math.abs(netPerHour))) + " GP/hr" : null, netPerHour >= 0 ? Theme.GOLD : BAD, netTip);
 		costsSection.setDetail(show ? (net < 0 ? "-" : "+") + Formatting.compactXp(Math.abs(net)) + " net" : "",
 			net >= 0 ? Theme.GOLD : BAD, show ? netTip : null);
 		costsSection.refresh();
@@ -866,15 +866,15 @@ class MonsterCard extends JPanel
 		{
 			maxLabel.setText(String.valueOf(s.getBiggestHit()));
 			CombatStyle style = s.getBiggestHitStyle();
-			maxLabel.setForeground(style != null ? style.getColor() : Theme.TEXT);
+			maxLabel.setForeground(style != null ? Theme.style(style) : Theme.TEXT);
 			maxLabel.setToolTipText(style != null ? "Biggest hit, dealt with " + style.getDisplayName() : "Biggest hit");
-			maxCaption.setText(style != null ? "max " + shortName(style) : "max");
+			maxCaption.setText("Biggest");
 		}
 		else
 		{
 			maxLabel.setText("-");
 			maxLabel.setForeground(Theme.SUBTLE);
-			maxCaption.setText("max");
+			maxCaption.setText("Biggest");
 		}
 
 		for (CombatStyle style : STYLES)
@@ -882,7 +882,7 @@ class MonsterCard extends JPanel
 			Integer biggest = s.getBiggestByStyle().get(style);
 			JLabel value = styleValues.get(style);
 			value.setText(biggest == null ? "-" : String.valueOf(biggest));
-			value.setForeground(biggest == null ? Theme.SUBTLE : style.getColor());
+			value.setForeground(biggest == null ? Theme.SUBTLE : Theme.style(style));
 		}
 		// One style used: the Max tile already says which.
 		styleRow.setVisible(s.getBiggestByStyle().size() > 1);
@@ -1070,22 +1070,6 @@ class MonsterCard extends JPanel
 			}
 			g2.dispose();
 			super.paintComponent(g);
-		}
-	}
-
-	/**
-	 * "mel", "rng" or "mag", to fit a tile caption.
-	 */
-	static String shortName(CombatStyle style)
-	{
-		switch (style)
-		{
-			case RANGED:
-				return "rng";
-			case MAGIC:
-				return "mag";
-			default:
-				return "mel";
 		}
 	}
 

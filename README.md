@@ -32,6 +32,9 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 > **Lost your stats after updating to 2.0?** See the [2.0 data loss FAQ](RECOVERY.md).
 
 # All features
+
+Chat messages and screenshots are all off for new players, so your chatbox stays yours. Turn on the ones you like under **Chat & screenshots** in the settings.
+
 ## Goals
 - Set a goal from the panel (**+ Add goal**) or by right-clicking a skill in the stats tab and choosing **Set goal**
 - Goals can be a level from 2 to 126 (virtual levels past 99 work) or an XP amount up to 200M: `99`, `126`, `13.03m`, `200m`, `500k`
@@ -39,7 +42,7 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 - XP/hr, time left, time to your next level, XP left and XP gained this session for every goal
 - Kills left for combat goals, at your real XP per kill of the monster you're fighting (a rough hits/actions estimate otherwise)
 - XP/hr can be the last few seconds (reacts fast) or the whole session with breaks left out (steadier)
-- A notification and a chat message when you reach a goal
+- A notification when you reach a goal, and a chat message too if you turn it on
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
 - Drag goals up or down to put them in your own order
 - Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate
@@ -72,12 +75,12 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 - Raids and reward chests get their own card too: Chambers of Xeric, Theatre of Blood, Tombs of Amascut, Barrows, Fortis Colosseum and Moons of Peril, with completions, loot and the collection log, read from each reward chest when you open it
 - Kills per hour and GP per hour, counting only time spent fighting
 - Your slayer task on the matching card: kills left and roughly how long at your kill rate
-- A chat summary when you finish a slayer task: kills, time, loot, GP/hr and biggest hit
-- A chat summary when you kill a boss: fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
+- A chat summary when you finish a slayer task (off by default): kills, time, loot, GP/hr and biggest hit
+- A chat summary when you kill a boss (off by default): fight time, your damage and its share of the boss's hitpoints, hits and biggest hit, e.g. *Vorkath kill 124 in 1:32.4: you dealt 740 damage (99%) in 18 hits, biggest hit 60.*
 - Accuracy, DPS and attack uptime tiles on each monster: the share of your hits that did damage, your damage per second while fighting, and how much of each fight you spent attacking (ticks past your weapon's attack speed before your next attack, from eating, moving or a late click, count against it)
 - Target card: the monster you're fighting right now at the top of the tab, with its health bar, hits left to kill it at your average hit, your time per kill and your DPS
 - Boss personal bests: your fastest kill and your last kill on each boss card, from the game's own fight duration message, with a milestone message when you beat it
-- Deaths: how many times you've died to each monster and what you were carrying, on its card and in the slayer task log, with an optional chat message
+- Deaths: how many times you've died to each monster and what you were carrying, on its card and in the slayer task log, with an optional chat message (off by default)
 - Profit: loot minus supplies, and net GP/hr, on each monster
 - Supplies used: food eaten, potion doses, runes cast, ammo fired and cannonballs, with what they cost at Grand Exchange prices, for each monster (this session or all time) and each slayer task. Hover for the breakdown
 - Collection log: open a boss's page in the in-game Collection Log and its monster card shows how many of its items you have, which ones you're still missing and your kill count. It stays up to date as new items are added. Bosses and raids only, since slayer monsters share one page
@@ -95,7 +98,7 @@ Install it from the RuneLite **Plugin Hub**: search for *Combat & XP Tracker*.
 - Luck vs average: how many uniques you've had from a boss against how many your kills should have given at the wiki's drop rates, e.g. *+18%*. Hover it for each item
 - Combat Achievements: how many of each boss's tasks you've done, read from the game's own Combat Achievements data. Hover for every task, with whether your PB is fast enough for its speed tasks
 - Damage taken per kill and flawless kills (no damage taken) on each boss
-- Big drop reveal: a new collection log item or a big drop (1M or your rare drop value) spins in at the top of the Monsters tab like opening a case, and a screenshot is saved in RuneLite's screenshots folder under Uniques. It can also show on the game screen for a few seconds (off by default)
+- Big drop reveal: a new collection log item or a big drop (1M or your rare drop value) spins in at the top of the Monsters tab like opening a case. It can also save a screenshot in RuneLite's screenshots folder under Uniques (off by default). It can also show on the game screen for a few seconds (off by default)
 
 ## Fighting
 - Target card: the monster you're fighting at the top of the Monsters tab, with its health bar, hits left, your time per kill and DPS
@@ -134,15 +137,15 @@ Twelve colour themes for the sidebar in the settings: Dark (the original, and th
 - **Wrapped** opens Gielinor Wrapped: your lifetime stats (kills, damage, loot, biggest hit, most killed, longest dry streak, slayer tasks, fastest and richest task). Copy it as an image in your panel theme, or as text
 - **Copy as image**: right-click any monster card to copy a picture of it, ready to paste into Discord
 - **Copy share card**: right-click any monster card for a picture made for posting: its name and kill count large, PB, kills/hr, loot, GP/hr, drop luck and best drops
-- Milestones: a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
+- Milestones (off by default): a chat message for 100, 500, 1,000 (and more) kills of a monster, total kills, your 10th, 50th, 100th (and more) slayer task, a new biggest hit ever, and a new boss personal best. Optionally a screenshot of each one
 
 ## Overlays
 - Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)
 - One infobox per goal with its progress
-- Attack timer: while fighting, the ticks until your next attack show above your character, turning green when you can attack. It uses your weapon's attack speed (Rapid, spells and powered staves included), works for melee, ranged and magic, and isn't thrown off by your block animation when you take a hit. It can be turned off
+- Attack timer: while fighting, the ticks until your next attack show above your character, turning green when you can attack. It uses your weapon's attack speed (Rapid, spells and powered staves included), works for melee, ranged and magic, and isn't thrown off by your block animation when you take a hit. Off by default; turn it on under Overlays
 
 ## Feedback
-- **Report bug** and **Suggest** buttons at the top of the panel open this repository's issues page
+- **Report bug** and **Suggest** buttons at the bottom of the panel open this repository's issues page
 
 ## Credits
 - Drop rates and elemental weaknesses are from the [Old School RuneScape Wiki](https://oldschool.runescape.wiki/), under CC BY-NC-SA 3.0

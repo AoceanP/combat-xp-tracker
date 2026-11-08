@@ -192,7 +192,7 @@ final class TaskForecast
 		 */
 		String cost()
 		{
-			return Formatting.compactXp(Math.round(ballCostPerHour)) + " gp/hr";
+			return Formatting.compactXp(Math.round(ballCostPerHour)) + " GP/hr";
 		}
 
 		String tooltip()

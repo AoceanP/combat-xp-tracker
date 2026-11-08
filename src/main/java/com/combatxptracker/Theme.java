@@ -105,6 +105,32 @@ final class Theme
 	}
 
 	/**
+	 * WHAT: A combat style's colour, darkened on light themes.
+	 * WHY: The style colours are made for dark cards; Ranged green and Magic blue were faint on Armadyl's white.
+	 * PRE: style is not null.
+	 * POST: Nothing changes.
+	 * RETURN: the colour to draw the style's numbers in on the panel
+	 * THROWS: Nothing.
+	 */
+	static Color style(CombatStyle style)
+	{
+		return readable(style.getColor());
+	}
+
+	/**
+	 * WHAT: A bright colour as text: unchanged on dark themes, darkened on light ones.
+	 * WHY: Colours picked for dark cards wash out on Armadyl's white, e.g. a green "Have it" on its pale green pill.
+	 * PRE: c is not null.
+	 * POST: Nothing changes.
+	 * RETURN: the colour to draw text in
+	 * THROWS: Nothing.
+	 */
+	static Color readable(Color c)
+	{
+		return current.isLight() ? darken(c, 0.35f) : c;
+	}
+
+	/**
 	 * The colour for goal bars, tabs and highlights: the player's goal bar colour if they
 	 * changed it from the default, otherwise the theme's accent.
 	 */

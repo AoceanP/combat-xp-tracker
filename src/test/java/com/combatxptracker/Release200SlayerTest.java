@@ -98,7 +98,7 @@ public class Release200SlayerTest
 		assertEquals(24_000, c.getXpPerHourWithout(), 0.5);
 		assertEquals(400_000, c.getBallCostPerHour(), 0.5);
 		assertEquals("+14K/hr", c.gain());
-		assertEquals("400K gp/hr", c.cost());
+		assertEquals("400K GP/hr", c.cost());
 		// Never without a cannon: nothing to compare.
 		assertNull(TaskForecast.cannon(Collections.singletonList(log.get(0)), "Dust devils", 200));
 		// Too little fighting on one side.
