@@ -146,6 +146,7 @@ Twelve colour themes for the sidebar in the settings: Dark (the original, and th
 - Optional on-screen overlay: choose which lines it shows (damage, max hit and spec, slayer task, kills to level, goals)
 - One infobox per goal with its progress
 - Attack timer: while fighting, the ticks until your next attack show above your character, turning green when you can attack. It uses your weapon's attack speed (Rapid, spells and powered staves included), works for melee, ranged and magic, and isn't thrown off by your block animation when you take a hit. Off by default; turn it on under Overlays
+- Action pops: a short popup over your character for what you just did, such as *+ Scythe of Vitur* when you equip it, *Prayer potion (4 → 3)* when you drink a dose, or *+18 HP* when your food heals you. It only shows your own actions after the fact: no prayers, timers, counters or suggestions. Off by default; turn it on under Overlays
 
 ## Feedback
 - **Report bug** and **Suggest** buttons at the bottom of the panel open this repository's issues page

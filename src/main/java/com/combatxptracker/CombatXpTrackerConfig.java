@@ -858,4 +858,17 @@ public interface CombatXpTrackerConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "actionPops",
+		name = "Action pops",
+		description = "A short popup over your character for what you just did: the item you equipped, the potion dose"
+			+ " you drank, or the HP your food healed. It only shows your own actions after the fact.",
+		position = 11,
+		section = overlaySection
+	)
+	default boolean actionPops()
+	{
+		return false;
+	}
 }

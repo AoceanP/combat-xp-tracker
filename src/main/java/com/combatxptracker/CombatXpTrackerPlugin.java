@@ -262,6 +262,9 @@ public class CombatXpTrackerPlugin extends Plugin
 	private AttackTimerOverlay attackTimerOverlay;
 
 	@Inject
+	private ActionPopOverlay actionPopOverlay;
+
+	@Inject
 	private KillTimerOverlay killTimerOverlay;
 
 	@Inject
@@ -431,6 +434,12 @@ public class CombatXpTrackerPlugin extends Plugin
 	private int lastCannonShotTick = -1;
 	private volatile int maxHitChange;
 	private Map<Integer, Long> lastInventory;
+	// Action pops: what you wear, your current HP, and the last tick something left your inventory.
+	private final ActionPops actionPops = new ActionPops();
+	private java.util.Set<Integer> lastWorn;
+	private int lastHitpoints = -1;
+	private int lastUsedTick = -10;
+	private int lastUsedItem = -1;
 	private SupplyLedger.Category pendingConsume;
 	private int pendingConsumeTick;
 	private Map<Integer, Long> lastRunes;
@@ -518,6 +527,7 @@ public class CombatXpTrackerPlugin extends Plugin
 		buildPanel();
 		overlayManager.add(overlay);
 		overlayManager.add(attackTimerOverlay);
+		overlayManager.add(actionPopOverlay);
 		overlayManager.add(killTimerOverlay);
 		overlayManager.add(dropRevealOverlay);
 		overlayManager.add(lootDespawnOverlay);
@@ -555,6 +565,8 @@ public class CombatXpTrackerPlugin extends Plugin
 		saveAreaMemory();
 		savePrayerDrain();
 		overlayManager.remove(attackTimerOverlay);
+		overlayManager.remove(actionPopOverlay);
+		actionPops.clear();
 		overlayManager.remove(killTimerOverlay);
 		overlayManager.remove(dropRevealOverlay);
 		killTimer.reset();
@@ -914,6 +926,20 @@ public class CombatXpTrackerPlugin extends Plugin
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
+		}
+		if (skill == Skill.HITPOINTS)
+		{
+			// Action pops: HP that rose right after you ate something, not natural regeneration.
+			int hp = event.getBoostedLevel();
+			if (config.actionPops() && lastHitpoints >= 0 && client.getTickCount() - lastUsedTick <= 1)
+			{
+				String text = ActionPops.heal(lastHitpoints, hp);
+				if (text != null)
+				{
+					actionPops.add(text, lastUsedItem, System.currentTimeMillis());
+				}
+			}
+			lastHitpoints = hp;
 		}
 
 		SkillProgress progress = skillProgress.get(skill);
@@ -1672,10 +1698,24 @@ public class CombatXpTrackerPlugin extends Plugin
 			rememberBank();
 			return;
 		}
+		if (event.getContainerId() == InventoryID.WORN)
+		{
+			// Action pops: each item you just put on.
+			java.util.Set<Integer> worn = inventoryCounts(event.getItemContainer()).keySet();
+			if (config.actionPops())
+			{
+				for (int id : ActionPops.newlyWorn(lastWorn, worn))
+				{
+					actionPops.add("+ " + itemManager.getItemComposition(id).getName(), id, System.currentTimeMillis());
+				}
+			}
+			lastWorn = new java.util.HashSet<>(worn);
+		}
 		if (event.getContainerId() == InventoryID.INV)
 		{
 			countCarriedSupplies(event.getItemContainer());
 			Map<Integer, Long> now = inventoryCounts(event.getItemContainer());
+			noteActionPops(lastInventory, now);
 			if (pendingConsume != null && lastInventory != null && client.getTickCount() - pendingConsumeTick <= 2)
 			{
 				long gp = SupplyLedger.consumedValue(lastInventory, now, itemManager::getItemPrice);
@@ -3781,6 +3821,54 @@ public class CombatXpTrackerPlugin extends Plugin
 			}
 		}
 		return runes;
+	}
+
+	/**
+	 * WHAT: Action pops from an inventory change: a potion dose drunk, and the item that left, for
+	 * a heal that follows.
+	 * WHY: Players wanted a reactive confirmation of their own actions; this only reads your own
+	 * inventory after the change, never anything about NPCs or what to do next.
+	 * PRE: Client thread; before may be null at login.
+	 * POST: A sip pop may be added; the last used item and tick are noted.
+	 * RETURN: Nothing.
+	 * THROWS: Nothing.
+	 */
+	private void noteActionPops(Map<Integer, Long> before, Map<Integer, Long> now)
+	{
+		if (before == null || isBankOpen())
+		{
+			return;
+		}
+		for (Map.Entry<Integer, Long> e : before.entrySet())
+		{
+			if (now.getOrDefault(e.getKey(), 0L) < e.getValue())
+			{
+				lastUsedTick = client.getTickCount();
+				lastUsedItem = e.getKey();
+			}
+		}
+		if (!config.actionPops())
+		{
+			return;
+		}
+		Object[] sip = ActionPops.sip(before, now, id -> itemManager.getItemComposition(id).getName());
+		if (sip != null)
+		{
+			actionPops.add((String) sip[0], (Integer) sip[1], System.currentTimeMillis());
+		}
+	}
+
+	/**
+	 * WHAT: The action pops showing now, for the overlay.
+	 * WHY: The overlay draws them over your character.
+	 * PRE: Client thread.
+	 * POST: Nothing changes.
+	 * RETURN: the pops
+	 * THROWS: Nothing.
+	 */
+	ActionPops getActionPops()
+	{
+		return actionPops;
 	}
 
 	private boolean isBankOpen()
