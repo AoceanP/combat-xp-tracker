@@ -72,6 +72,54 @@ final class BossTimes
 	 */
 	static final int RECENT_KILLS = 20;
 
+	/** Kills needed before a trend means anything: three against three. */
+	static final int TREND_MIN_KILLS = 6;
+
+	/**
+	 * WHAT: How your recent kills compare with the ones before them: the newer half's average
+	 * minus the older half's, in seconds.
+	 * WHY: PB and Avg don't say whether you're improving; "8.0s faster" does (2.5).
+	 * PRE: recent is oldest first.
+	 * POST: Nothing changes.
+	 * RETURN: seconds, negative when faster, or NaN with fewer than TREND_MIN_KILLS times
+	 * THROWS: Nothing.
+	 */
+	static double trend(List<Double> recent)
+	{
+		if (recent == null || recent.size() < TREND_MIN_KILLS)
+		{
+			return Double.NaN;
+		}
+		int half = recent.size() / 2;
+		double older = 0;
+		double newer = 0;
+		for (int i = 0; i < half; i++)
+		{
+			older += recent.get(i);
+			newer += recent.get(recent.size() - 1 - i);
+		}
+		return (newer - older) / half;
+	}
+
+	/**
+	 * WHAT: A trend as words: "8.0s faster", "1:02.0 slower" or "Steady".
+	 * WHY: The boss card's Trend row.
+	 * PRE: seconds is from trend() and not NaN.
+	 * POST: Nothing changes.
+	 * RETURN: the text
+	 * THROWS: Nothing.
+	 */
+	static String trendText(double seconds)
+	{
+		double size = Math.abs(seconds);
+		if (size < 0.5)
+		{
+			return "Steady";
+		}
+		String amount = size < 60 ? String.format(Locale.US, "%.1fs", size) : KillTimerOverlay.clock(size);
+		return amount + (seconds < 0 ? " faster" : " slower");
+	}
+
 	/**
 	 * A parsed duration message.
 	 */

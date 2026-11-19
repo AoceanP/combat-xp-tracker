@@ -228,6 +228,8 @@ public class MonsterTracker
 		private final int killsSinceRare;
 		private final boolean everHadRare;
 		private final boolean rareSinceRestore;
+		// Item id -> the kill it first dropped on, for valuable drops seen since 2.1.2.
+		private final Map<Integer, Integer> firstDropKill;
 		private final long tripMillis;
 		private final long fightMillis;
 		private final boolean away;
@@ -303,6 +305,12 @@ public class MonsterTracker
 			// counts from then instead of claiming the whole kill count.
 			rareSinceRestore = lastRareKill < 0 && e.restoredAt > 0;
 			everHadRare = lastRareKill >= 0;
+			Map<Integer, Integer> first = new HashMap<>();
+			for (RareDrop r : e.rareDrops)
+			{
+				first.merge(r.itemId, r.kill, Math::min);
+			}
+			firstDropKill = first;
 			killsSinceRare = everHadRare ? e.kills - lastRareKill : e.kills - e.restoredAt;
 		}
 
@@ -316,6 +324,20 @@ public class MonsterTracker
 		 * Kills since the last drop worth at least the rare drop value, or all kills if
 		 * there hasn't been one.
 		 */
+		/**
+		 * WHAT: The kill an item first dropped on.
+		 * WHY: The drop's tooltip compares it with the item's drop rate (2.5).
+		 * PRE: None.
+		 * POST: Nothing changes.
+		 * RETURN: the kill number, or -1 if not recorded (cheap items, or restored from the Loot Tracker)
+		 * THROWS: Nothing.
+		 */
+		public int getFirstDropKill(int itemId)
+		{
+			Integer kill = firstDropKill.get(itemId);
+			return kill == null ? -1 : kill;
+		}
+
 		public int getKillsSinceRare()
 		{
 			return killsSinceRare;

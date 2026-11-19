@@ -93,9 +93,12 @@ Chat messages and screenshots are all off for new players, so your chatbox stays
 
 ## Bosses
 - Kill times: **PB**, **Last** and **Avg** tiles on each boss card, from the game's own fight duration message, with a milestone message when you set a new personal best
+- Kill trend: a small chart of your last 20 kill times under the PB tiles, and a **Trend** row comparing your newer kills with the older ones, e.g. *11.1s faster*
 - Live kill timer: an on-screen timer during boss fights next to your PB, gold while you're on pace for a new best and red once it's out of reach. It shows the game's exact time when the kill lands
 - Dry calculator: the boss's collection log as item icons (owned bright, missing faded), with the driest missing item outlined in red and how dry you are, e.g. *Vorkath's head 2.4x the rate (91% would have it by now)*. Drop rates are bundled from the OSRS Wiki, nothing is looked up online
+- Pet chance: once you've opened the boss's collection log page, how likely you'd have its pet by now at your kill count, e.g. *63% by now*, or **Owned**
 - Luck vs average: how many uniques you've had from a boss against how many your kills should have given at the wiki's drop rates, e.g. *+18%*. Hover it for each item
+- Hover a boss unique in the drops grid for its drop rate and how your first one compares, e.g. *1 in 5,000 drop. First at kill 212. Lucky: 4% of players get one that early.*
 - Combat Achievements: how many of each boss's tasks you've done, read from the game's own Combat Achievements data. Hover for every task, with whether your PB is fast enough for its speed tasks
 - Damage taken per kill and flawless kills (no damage taken) on each boss
 - Big drop reveal: a new collection log item or a big drop (1M or your rare drop value) spins in at the top of the Monsters tab like opening a case. It can also save a screenshot in RuneLite's screenshots folder under Uniques (off by default). It can also show on the game screen for a few seconds (off by default)
