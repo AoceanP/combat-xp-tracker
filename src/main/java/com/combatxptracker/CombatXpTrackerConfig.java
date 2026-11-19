@@ -574,19 +574,6 @@ public interface CombatXpTrackerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "boostReminder",
-		name = "Boost reminder",
-		description = "At the start of a boss fight, a chat message if you have no potion boost, no offensive prayer, or "
-			+ "(on the Arceuus spellbook) no thrall for the style you're attacking with.",
-		position = 8,
-		section = chatSection
-	)
-	default boolean boostReminder()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "milestoneMessages",
 		name = "Milestone messages",
 		description = "A chat message for milestones: 100, 500, 1,000 (and more) kills of a monster, total kills, "
@@ -699,7 +686,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "showInfobox",
 		name = "Show goal infoboxes",
-		description = "Shows an infobox per goal with its progress.",
+		description = "Shows an infobox per goal with its progress, kill count goals included.",
 		position = 1,
 		section = overlaySection
 	)
@@ -786,7 +773,7 @@ public interface CombatXpTrackerConfig extends Config
 	@ConfigItem(
 		keyName = "overlayShowGoals",
 		name = "Overlay: goals",
-		description = "Show each goal's XP/hr and progress on the on-screen overlay.",
+		description = "Show each goal's XP/hr and progress on the on-screen overlay, kill count goals included.",
 		position = 7,
 		section = overlaySection
 	)

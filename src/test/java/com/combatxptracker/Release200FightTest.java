@@ -37,7 +37,7 @@ import java.util.Map;
 import org.junit.Test;
 
 /**
- * 2.0.0, round 3: damage taken and flawless kills, idle time, boost reminder, elemental
+ * 2.0.0, round 3: damage taken and flawless kills, idle time, elemental
  * weakness.
  */
 public class Release200FightTest
@@ -115,7 +115,7 @@ public class Release200FightTest
 		assertNull(loaded.get("Zulrah"));
 	}
 
-	// ---- Idle time and the boost reminder ------------------------------------------------------
+	// ---- Idle time --------------------- ------------------------------------------------------
 
 	@Test
 	public void idleTimeReadsAsMinutes()
@@ -130,17 +130,6 @@ public class Release200FightTest
 		// 20 gaps of 5 ticks with a 4-tick weapon: 20 ticks lost.
 		assertEquals(20, uptime.idleTicks("Gargoyle"));
 		assertEquals(-1, uptime.idleTicks("Kraken"));
-	}
-
-	@Test
-	public void boostReminderSaysWhatsMissing()
-	{
-		assertEquals("Vorkath: no Ranged boost, no offensive prayer.",
-			BoostReminder.message("Vorkath", CombatStyle.RANGED, false, false, false));
-		assertEquals("Zulrah: no thrall.", BoostReminder.message("Zulrah", CombatStyle.MAGIC, true, true, true));
-		assertNull(BoostReminder.message("Zulrah", CombatStyle.MAGIC, true, true, false));
-		assertTrue(BoostReminder.offensivePrayers(CombatStyle.RANGED).contains(net.runelite.api.Prayer.RIGOUR));
-		assertEquals(net.runelite.api.Skill.STRENGTH, BoostReminder.boostedSkill(CombatStyle.MELEE));
 	}
 
 	@Test

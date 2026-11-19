@@ -52,7 +52,7 @@ public class Release250Test
 	};
 
 	private static final List<String> CHAT = Arrays.asList("goalChatMessage", "taskSummary", "killSummary",
-		"deathMessage", "milestoneMessages", "milestoneScreenshot", "uniqueScreenshot", "boostReminder");
+		"deathMessage", "milestoneMessages", "milestoneScreenshot", "uniqueScreenshot");
 
 	@Test
 	public void chatMessagesAndScreenshotsAreOffForNewPlayers()
@@ -64,7 +64,6 @@ public class Release250Test
 		assertFalse(DEFAULTS.milestoneMessages());
 		assertFalse(DEFAULTS.milestoneScreenshot());
 		assertFalse(DEFAULTS.uniqueScreenshot());
-		assertFalse(DEFAULTS.boostReminder());
 		assertFalse("the attack timer overlay is off like the main overlay", DEFAULTS.attackTimer());
 	}
 
@@ -156,5 +155,25 @@ public class Release250Test
 				}
 			}
 		}
+	}
+
+	@Test
+	public void killGoalsAnnounceOnceOnTheKillThatReachesThem()
+	{
+		assertFalse(KillGoals.justReached(499, 500));
+		assertTrue(KillGoals.justReached(500, 500));
+		// Set below your kills: already done, so no announcement.
+		assertFalse(KillGoals.justReached(612, 500));
+	}
+
+	@Test
+	public void killGoalTextMatchesSkillGoals()
+	{
+		assertEquals("42%", KillGoals.percentText(212, 500));
+		assertEquals("99%", KillGoals.percentText(499, 500));
+		assertEquals("Done", KillGoals.percentText(500, 500));
+		assertEquals("212/500 (42%)", KillGoals.overlayText(212, 500));
+		assertEquals("1,000/2,500 (40%)", KillGoals.overlayText(1_000, 2_500));
+		assertEquals("Goal reached!", KillGoals.overlayText(612, 500));
 	}
 }

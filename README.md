@@ -45,7 +45,7 @@ Chat messages and screenshots are all off for new players, so your chatbox stays
 - A notification when you reach a goal, and a chat message too if you turn it on
 - Right-click a goal to change it, give it its own bar colour, hide it from the overlay or remove it
 - Drag goals up or down to put them in your own order
-- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate
+- Kill count goals: **+ Add goal** > **Kill count goal**, or right-click a monster card > **Set kill goal**, e.g. 500 Vorkath kills, with kills left and time left at your kill rate. Like skill goals, they get a notification and chat message when reached, an infobox and an overlay line
 
 ## Kills to level
 - Under the max hit: how many more kills of the monster you're fighting each combat skill needs for its next level, and your next combat level
@@ -105,7 +105,6 @@ Chat messages and screenshots are all off for new players, so your chatbox stays
 - Elemental weakness on the target card, e.g. *Weak to Fire 40%*, turning green when your autocast spell matches. From the OSRS Wiki, bundled with the plugin
 - Supply forecast on the target card: how many kills your food lasts and how many minutes your prayer lasts, from your own food per kill and prayer drain on that monster
 - Idle time on each monster: time lost between attacks (eating, moving, late clicks)
-- Boost reminder (off by default): at the start of a boss fight, a chat message if you have no potion boost, no offensive prayer, or (on the Arceuus spellbook) no thrall
 
 ## Slayer
 A **Slayer** tab with everything about your slayer progress:
